@@ -11,6 +11,26 @@ python orchestrate.py <TICKET-ID> <repo-path> [--base-branch <branch>]
 python orchestrate.py ENG-123 ~/dev/edge-fmt --base-branch develop
 ```
 
+## Error recovery
+
+The orchestrator checkpoints after every completed step to
+`~/.local/share/code-orchestrator/<TICKET>.json`. If anything fails mid-run,
+re-run the same command and it resumes automatically from where it left off.
+
+```bash
+# Resume automatically (reads checkpoint)
+python orchestrate.py ENG-123 ~/dev/edge-fmt
+
+# Force a specific step (e.g. retry step 4 after a token expiry)
+python orchestrate.py ENG-123 ~/dev/edge-fmt --start-from 4
+
+# Discard checkpoint and start over
+python orchestrate.py ENG-123 ~/dev/edge-fmt --reset
+```
+
+Copilot API calls retry 3× with exponential backoff on timeouts, connection
+errors, and 5xx responses. Rate-limit (429) responses wait 5× longer.
+
 ## Requirements
 
 ```bash
