@@ -225,10 +225,23 @@ def changed_files_branch(cwd: str, base: str) -> dict[str, str]:
         if not path.exists():
             continue
         lines = path.read_text(errors="replace").splitlines()
-        contents[name] = (
-            "\n".join(lines) if len(lines) <= MAX_FILE_LINES
-            else f"[file too large ({len(lines)} lines) — see diff]"
-        )
+        if len(lines) <= MAX_FILE_LINES:
+            contents[name] = "\n".join(lines)
+        elif Path(name).suffix.lower() in {
+            ".json", ".yaml", ".yml", ".toml", ".xml",   # config / data
+            ".md", ".txt", ".rst", ".adoc",               # docs / specs
+            ".props", ".targets", ".csproj", ".sln",      # MSBuild
+            ".proto", ".graphql", ".sql",                 # schemas
+        }:
+            contents[name] = (
+                f"[{len(lines)}-line {Path(name).suffix} file — "
+                f"large size expected for this type; see diff for changes]"
+            )
+        else:
+            contents[name] = (
+                f"[{len(lines)}-line file — NOTE: this may itself be a finding. "
+                f"Files this large often violate SRP. See diff for changes.]"
+            )
     return contents
 
 
