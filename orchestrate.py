@@ -331,7 +331,7 @@ def prompt_claude_review(base: str, instructions_path: str) -> str:
     )
 
 
-def prompt_fix(summary: str, base: str, review: str,
+def prompt_fix(summary: str, base: str, review: str, ticket_id: str,
                is_final: bool = False) -> str:
     save_note = (
         "\n\nAfter making fixes, use your mem0 MCP tools to save any non-obvious "
@@ -351,6 +351,12 @@ def prompt_fix(summary: str, base: str, review: str,
         "If you choose not to apply a finding (because it conflicts with established patterns, "
         "would break something, or is genuinely wrong for this codebase), explain your "
         "reasoning clearly in your response. Your response is captured and shown to the human.\n\n"
+        f"If a finding requires effort too large to address inline (a significant refactor, "
+        f"a new service, a cross-cutting change), use your Linear MCP tools to create a new "
+        f"story for it, linked to {ticket_id}. Include the created story ID in your response.\n\n"
+        f"If you discover something during fixes that materially changes the scope or approach "
+        f"of the current story (a pivot, a learned constraint, a design correction), update "
+        f"ticket {ticket_id} via your Linear MCP tools to reflect it.\n\n"
         f"Do NOT commit — the orchestrator will commit after this step.{save_note}"
     )
 
@@ -440,7 +446,7 @@ def main() -> None:
     # ── Step 3: Apply Claude findings ────────────────────────────────────────
     if start_from <= 3:
         step(3, "Claude Code: apply Claude review findings")
-        fix_out = run_claude(prompt_fix(summary, base, claude_review), cwd=repo)
+        fix_out = run_claude(prompt_fix(summary, base, claude_review, tid), cwd=repo)
         fix_notes.append(("Step 3 — Claude review fixes", fix_out))
         git_commit_all(repo, f"fix: apply Claude agent review [{tid}]")
         mark_done(tid, 3, fix_note_3=fix_out)
@@ -466,7 +472,7 @@ def main() -> None:
     # ── Step 5: Apply GPT findings ───────────────────────────────────────────
     if start_from <= 5:
         step(5, f"Claude Code: apply {MODELS[0]} findings")
-        fix_out = run_claude(prompt_fix(summary, base, gpt_review), cwd=repo)
+        fix_out = run_claude(prompt_fix(summary, base, gpt_review, tid), cwd=repo)
         fix_notes.append((f"Step 5 — {MODELS[0]} fixes", fix_out))
         git_commit_all(repo, f"fix: apply {MODELS[0]} review [{tid}]")
         mark_done(tid, 5, fix_note_5=fix_out)
@@ -492,7 +498,7 @@ def main() -> None:
     # ── Step 7: Apply Gemini findings + save to mem0 ─────────────────────────
     if start_from <= 7:
         step(7, f"Claude Code: apply {MODELS[1]} findings + save to mem0")
-        fix_out = run_claude(prompt_fix(summary, base, gemini_review, is_final=True), cwd=repo)
+        fix_out = run_claude(prompt_fix(summary, base, gemini_review, tid, is_final=True), cwd=repo)
         fix_notes.append((f"Step 7 — {MODELS[1]} fixes", fix_out))
         git_commit_all(repo, f"fix: apply {MODELS[1]} review [{tid}]")
         mark_done(tid, 7, fix_note_7=fix_out)
