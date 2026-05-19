@@ -38,6 +38,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
@@ -51,6 +52,7 @@ MAX_FILE_LINES = 500
 TOTAL_STEPS    = 7
 STATE_DIR      = Path.home() / ".local/share/code-orchestrator"
 _OPENCODE_AUTH = Path.home() / ".local/share/opencode/auth.json"
+_DEFAULT_CHAR_BUDGET = 192_000  # fallback if /models fetch fails
 
 REVIEW_SYSTEM = """\
 You are a senior code reviewer. For each issue output exactly:
@@ -71,6 +73,88 @@ def _copilot_token() -> str:
             f"Cannot read opencode Copilot token from {_OPENCODE_AUTH}: {e}\n"
             "  → Run opencode and authenticate with GitHub Copilot first."
         )
+
+# ── Startup checks ───────────────────────────────────────────────────────────
+
+def startup_checks(models: list[str]) -> int:
+    """
+    1. Fetch /models from Copilot API.
+    2. Verify each model in `models` is listed.
+    3. Test each model with a 1-token call to confirm /chat/completions works.
+    4. Return a char budget derived from the minimum max_prompt_tokens across models.
+    Fails fast with a clear message if any model is misconfigured.
+    """
+    token = _copilot_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "x-initiator": "user",
+        "Openai-Intent": "conversation-edits",
+        "User-Agent": "opencode/0.1.0",
+    }
+
+    print("Validating review models…")
+    try:
+        req = urllib.request.Request(f"{COPILOT_BASE}/models", headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            model_list = json.loads(r.read()).get("data", [])
+    except Exception as e:
+        print(f"  ⚠ Could not fetch model list ({e}) — skipping limit detection")
+        model_list = []
+
+    model_map = {m["id"]: m for m in model_list}
+
+    client = OpenAI(
+        base_url=COPILOT_BASE,
+        api_key=token,
+        default_headers={k: v for k, v in headers.items()
+                         if k != "Authorization"},
+    )
+
+    min_prompt_tokens = 48_000  # conservative fallback
+    for model in models:
+        if model_map and model not in model_map:
+            available = ", ".join(
+                m for m in sorted(model_map)
+                if not m.startswith("text-embedding")
+            )
+            fail(
+                f"Model '{model}' not found in your Copilot account.\n"
+                f"  Available: {available}\n"
+                f"  → Update MODELS in orchestrate.py"
+            )
+        try:
+            client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "ok"}],
+                max_tokens=1,
+            )
+        except APIStatusError as e:
+            if e.status_code == 400 and "not accessible" in str(e):
+                fail(
+                    f"Model '{model}' does not support /chat/completions.\n"
+                    f"  → gpt-5.x and codex models use a different endpoint.\n"
+                    f"  → Working alternatives: gpt-4.1, gpt-4o, "
+                    f"gemini-3.1-pro-preview, claude-sonnet-4.6"
+                )
+            raise
+
+        limit = (
+            model_map.get(model, {})
+            .get("capabilities", {})
+            .get("limits", {})
+            .get("max_prompt_tokens")
+        )
+        if limit:
+            min_prompt_tokens = min(min_prompt_tokens, limit)
+            print(f"  ✓ {model}  ({limit:,} token limit)")
+        else:
+            print(f"  ✓ {model}  (limit unknown — using default)")
+
+    # Reserve 8k tokens for response, take 90% of remainder, 4 chars/token
+    budget = int((min_prompt_tokens - 8_000) * 0.9) * 4
+    print(f"  Char budget: {budget:,} chars (~{budget // 4:,} tokens)")
+    return budget
+
 
 # ── Checkpoint ────────────────────────────────────────────────────────────────
 
@@ -205,6 +289,7 @@ def _budget_files(files: dict[str, str], budget_chars: int) -> tuple[str, int]:
 
 def copilot_review(model: str, instructions: str,
                    story: str, diff: str, files: dict[str, str],
+                   char_budget: int = _DEFAULT_CHAR_BUDGET,
                    max_attempts: int = 3) -> str:
     client = OpenAI(
         base_url=COPILOT_BASE,
@@ -226,13 +311,8 @@ def copilot_review(model: str, instructions: str,
         else REVIEW_SYSTEM
     )
 
-    # Rough token estimate: 1 token ≈ 4 chars. Reserve 8k tokens for the
-    # response. Use 90% of remainder for content to stay safely under limit.
-    # We don't know the model's exact limit so we cap at 48k tokens (192k chars)
-    # which fits comfortably within the lowest limit we've seen (64k tokens).
-    CHAR_BUDGET = 192_000
     fixed_chars = len(system) + len(story) + len(diff) + 500  # headers + overhead
-    file_budget  = max(0, CHAR_BUDGET - fixed_chars)
+    file_budget  = max(0, char_budget - fixed_chars)
 
     file_block, n_included = _budget_files(files, file_budget)
     if n_included < len(files):
@@ -404,6 +484,10 @@ def main() -> None:
                         help="Force resume from step N (auto-detected from checkpoint if omitted)")
     parser.add_argument("--reset", action="store_true",
                         help="Delete checkpoint and start from scratch")
+    parser.add_argument("--seed-only", action="store_true",
+                        help="Seed checkpoint from existing branch commits and exit. "
+                             "Use when implementation is already done — then re-run "
+                             "with --start-from 2 to begin reviews.")
     args = parser.parse_args()
 
     tid  = args.ticket_id
@@ -415,6 +499,26 @@ def main() -> None:
 
     if args.reset:
         clear_state(tid)
+
+    # ── --seed-only: checkpoint an existing branch and exit ──────────────────
+    if args.seed_only:
+        commits = subprocess.check_output(
+            ["git", "log", f"{base}..HEAD", "--oneline"], cwd=repo, text=True
+        ).strip()
+        if not commits:
+            fail(f"No commits found on branch vs {base}. Is the branch checked out?")
+        summary = f"Implementation already complete on branch. Commits:\n{commits}"
+        mark_done(tid, 1, summary=summary, base=base, repo=repo)
+        branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo, text=True
+        ).strip()
+        print(f"Seeded checkpoint for {tid}")
+        print(f"Branch:  {branch}")
+        print(f"Commits: {len(commits.splitlines())} commits vs {base}")
+        print(f"Run:     python orchestrate.py {tid} {repo} --start-from 2 --base-branch {base}")
+        return
+
+    char_budget = startup_checks(MODELS)
 
     state = load_state(tid)
     completed = set(state.get("completed", []))
@@ -490,7 +594,7 @@ def main() -> None:
         diff  = git_diff_branch(repo, base)
         files = changed_files_branch(repo, base)
         print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {MODELS[0]}")
-        gpt_review = copilot_review(MODELS[0], instructions, summary, diff, files)
+        gpt_review = copilot_review(MODELS[0], instructions, summary, diff, files, char_budget)
         print(f"  {gpt_review[:300]}…")
         mark_done(tid, 4, gpt_review=gpt_review)
     else:
@@ -516,7 +620,7 @@ def main() -> None:
         diff  = git_diff_branch(repo, base)
         files = changed_files_branch(repo, base)
         print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {MODELS[1]}")
-        gemini_review = copilot_review(MODELS[1], instructions, summary, diff, files)
+        gemini_review = copilot_review(MODELS[1], instructions, summary, diff, files, char_budget)
         print(f"  {gemini_review[:300]}…")
         mark_done(tid, 6, gemini_review=gemini_review)
     else:

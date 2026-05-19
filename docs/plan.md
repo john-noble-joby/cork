@@ -168,3 +168,39 @@ Claude Code CLI auth comes from existing `~/.claude/` config — no `ANTHROPIC_A
 3. After step 2: review_1 contains `FILE:` and `LINE:` references
 4. After step 5: `git diff HEAD` reflects all three rounds of fixes; mem0 has new entries
 5. Re-run on a second ticket to confirm AGENT.md loads, token refreshes cleanly
+
+---
+
+## Learnings from first real run (MXE-204, 2026-05-19)
+
+### Bugs hit and fixed in-flight
+
+**1. Codex/gpt-5.x models don't support `/chat/completions`**
+`gpt-5.3-codex` returned HTTP 400 "not accessible via /chat/completions". These models
+use a different responses API endpoint. Switched to `gpt-4.1`. Working models confirmed
+on this Copilot account: `gpt-4.1`, `gpt-4o`, `gemini-3.1-pro-preview`, `gemini-3-flash-preview`,
+`claude-sonnet-4.6`. Fixed: startup validation now tests each model before the pipeline starts.
+
+**2. Token budget overflow on large PRs**
+MXE-204 had 33 files; full contents hit 84k tokens against a 64k limit. Fixed via `_budget_files()`.
+Hardcoded 192k char cap replaced by fetching the real `max_prompt_tokens` from `/models` at startup.
+
+### What worked well
+
+- **Blind review design validated** — each model found genuinely different things with no meaningful
+  overlap. Claude caught critical correctness bugs; GPT-4.1 caught doc/contract clarity; Gemini
+  caught heap allocations and LINQ closure costs.
+- **Checkpoint resume was essential** — failed twice (wrong model, token overflow), resumed from
+  step 4 both times without losing the step 3 commit.
+- **Human-attention summary was signal, not noise** — both uncertain items were real judgment calls.
+- **Claude updated CLAUDE.md autonomously** — added transport naming convention learned during fixes.
+  This is desirable; the convention doc update was included in the review-fix commit (acceptable).
+
+### Improvements implemented after the run
+
+1. **Startup validation** — `startup_checks()` fetches `/models`, verifies each configured model is
+   listed and callable on `/chat/completions`, and returns the char budget from the real token limit.
+2. **Dynamic token budget** — uses `min(max_prompt_tokens)` across review models from the API,
+   not a hardcoded constant.
+3. **`--seed-only` flag** — creates a checkpoint from an existing branch's commit log without
+   running step 1, enabling the pipeline to start at step 2 for in-flight PRs.
