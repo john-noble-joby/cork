@@ -432,7 +432,10 @@ def prompt_initial(ticket_id: str) -> str:
         f"Use your Linear MCP tools to fetch ticket {ticket_id}. "
         "Search mem0 for relevant context about this codebase — architecture, "
         "patterns, past decisions. "
-        f"Create a git branch named feature/{ticket_id.lower()}. "
+        f"Create a git branch following the repo's branch naming convention in CLAUDE.md. "
+        f"The branch must start with 'feature/{ticket_id}' and include a short kebab-case "
+        f"slug derived from the ticket title "
+        f"(e.g. feature/{ticket_id.lower()}-per-station-backdoor-routing). "
         "Implement the story fully. Write or update tests if the codebase has them. "
         "When done, output a concise paragraph summarising what you changed and why. "
         "Do NOT commit — the orchestrator will commit after this step."
@@ -482,6 +485,23 @@ def prompt_fix(summary: str, base: str, review: str, ticket_id: str,
         f"ticket {ticket_id} via your Linear MCP tools to reflect it.\n\n"
         f"Do NOT commit — the orchestrator will commit after this step.{save_note}"
     )
+
+def prompt_push_pr(ticket_id: str, base: str, summary: str) -> str:
+    return (
+        f"The implementation and all review passes for {ticket_id} are complete. "
+        f"Do the following in order:\n\n"
+        f"1. Push the branch to origin: `git push -u origin HEAD`\n\n"
+        f"2. Create a GitHub PR using `gh pr create` with:\n"
+        f"   - Title: the Linear ticket title (fetch it from Linear MCP if needed)\n"
+        f"   - Body: a summary of what was implemented, followed by a brief "
+        f"     bullet list of the most significant findings each review pass caught. "
+        f"     Include the Linear ticket URL at the bottom.\n"
+        f"   - Base branch: {base}\n"
+        f"   - Do NOT mark as draft — this is ready for human review.\n\n"
+        f"3. Output the PR URL.\n\n"
+        f"## Implementation summary\n{summary}"
+    )
+
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -656,8 +676,17 @@ def main() -> None:
     final_diff = git_diff_branch(repo, base)
     clear_state(tid)
 
+    # ── Push + open PR ───────────────────────────────────────────────────────
+    print(f"\n── Push & PR ─────────────────────────────────────────────")
+    pr_output = run_claude(prompt_push_pr(tid, base, summary), cwd=repo)
+    print(f"  {pr_output[:300]}…" if len(pr_output) > 300 else f"  {pr_output}")
+
+    branch = subprocess.check_output(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo, text=True
+    ).strip()
+
     print(f"\n── Done ──────────────────────────────────────────────────")
-    print(f"Branch:     feature/{tid.lower()}")
+    print(f"Branch:     {branch}")
     print(f"Base:       {base}")
     print(f"Total diff: {len(final_diff.splitlines())} lines vs {base}")
     print(f"Commits:    git log --oneline {base}..HEAD")
