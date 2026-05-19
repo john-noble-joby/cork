@@ -16,7 +16,7 @@ pip install openai
 ```
 
 - **Claude Code CLI** — authenticated via `~/.claude/` (no extra setup)
-- **GitHub CLI** — `gh auth login` with a Copilot-enabled account
+- **opencode** — must be authenticated with GitHub Copilot (`opencode auth login`); the script reads the token from `~/.local/share/opencode/auth.json`. This token unlocks Gemini and newer GPT models not available via the `gh` CLI token.
 - **mem0** running locally at `http://localhost:8888` (for Claude's MCP context)
 
 ## How it works

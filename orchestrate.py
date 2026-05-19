@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-orchestrate.py — Linear story → Claude Code → GPT-4o review → Claude fix →
-                 Gemini review → Claude final fix + mem0 save
+orchestrate.py — Linear story → Claude Code → GPT-5.3-Codex review → Claude fix →
+                 Gemini 3.1 Pro review → Claude final fix + mem0 save
 
 Usage:
     python orchestrate.py <TICKET-ID> <repo-path>
@@ -9,10 +9,12 @@ Usage:
 
 Requirements:
     pip install openai
-    gh auth login  (GitHub CLI, authenticated with Copilot access)
+    opencode must be authenticated with GitHub Copilot (token read from
+    ~/.local/share/opencode/auth.json)
 """
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -22,10 +24,22 @@ from openai import OpenAI
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-CLAUDE       = os.environ.get("CLAUDE_BIN", str(Path.home() / ".local/bin/claude"))
-COPILOT_BASE = "https://api.githubcopilot.com"
-MODELS       = ["gpt-4o", "gemini-2.0-flash"]   # review pass 1, pass 2
+CLAUDE         = os.environ.get("CLAUDE_BIN", str(Path.home() / ".local/bin/claude"))
+COPILOT_BASE   = "https://api.githubcopilot.com"
+MODELS         = ["gpt-5.3-codex", "gemini-3.1-pro-preview"]  # review pass 1, pass 2
 MAX_FILE_LINES = 500  # files larger than this are included as diff-only
+
+# opencode's Copilot token unlocks Gemini + newer GPT models not available
+# via the gh CLI token. Read from opencode's auth store at runtime.
+_OPENCODE_AUTH = Path.home() / ".local/share/opencode/auth.json"
+
+def _copilot_token() -> str:
+    try:
+        data = json.loads(_OPENCODE_AUTH.read_text())
+        return data["github-copilot"]["refresh"]
+    except (KeyError, FileNotFoundError) as e:
+        fail(f"Cannot read opencode Copilot token from {_OPENCODE_AUTH}: {e}\n"
+             "  → Run opencode and authenticate with GitHub Copilot first.")
 
 REVIEW_SYSTEM = """\
 You are a senior code reviewer. For each issue output exactly:
@@ -93,10 +107,15 @@ def load_agent_instructions(repo: str) -> str:
 
 def copilot_review(model: str, instructions: str,
                    story: str, diff: str, files: dict) -> str:
-    gh_token = subprocess.check_output(
-        ["gh", "auth", "token"], text=True
-    ).strip()
-    client = OpenAI(base_url=COPILOT_BASE, api_key=gh_token)
+    client = OpenAI(
+        base_url=COPILOT_BASE,
+        api_key=_copilot_token(),
+        default_headers={
+            "x-initiator": "user",
+            "Openai-Intent": "conversation-edits",
+            "User-Agent": "opencode/0.1.0",
+        },
+    )
 
     file_block = "\n\n".join(
         f"### {name}\n```\n{content}\n```"
