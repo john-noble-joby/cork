@@ -34,6 +34,7 @@ Requirements:
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -245,6 +246,62 @@ def _retry_wait(attempt: int, max_attempts: int, reason: str, long: bool = False
     print(f"  → {reason}, retrying in {wait}s (attempt {attempt + 1}/{max_attempts})")
     time.sleep(wait)
 
+
+def extract_uncertain(review: str) -> str:
+    """
+    Pull out the 'Uncertain / needs human judgment' section from a review.
+    Returns the section body, or "" if not present.
+    """
+    match = re.search(
+        r"#+\s*(?:Uncertain|needs human|human judgment)[^\n]*\n(.*?)(?=\n#+\s|\Z)",
+        review, re.IGNORECASE | re.DOTALL
+    )
+    if not match:
+        return ""
+    body = match.group(1).strip()
+    # Skip if the section is empty or just says "none" / "n/a"
+    if not body or re.match(r"^(none|n/?a|—|-)\s*$", body, re.IGNORECASE):
+        return ""
+    return body
+
+
+def print_human_summary(
+    uncertain: list[tuple[str, str]],
+    notes: list[tuple[str, str]],
+) -> None:
+    """
+    Print items needing human attention after the pipeline completes.
+    uncertain: [(reviewer_label, uncertain_section_text), ...]
+    notes:     [(step_label, claude_fix_response), ...]
+    """
+    has_uncertain = any(text for _, text in uncertain)
+    has_notes = any(text for _, text in notes)
+    if not has_uncertain and not has_notes:
+        return
+
+    print("\n── Human attention needed ────────────────────────────────")
+
+    if has_uncertain:
+        print("\nUncertain items requiring your judgment:")
+        for label, text in uncertain:
+            if text:
+                print(f"\n  [{label}]")
+                for line in text.splitlines():
+                    print(f"    {line}")
+
+    if has_notes:
+        print("\nClaude Code notes from fix steps (pushbacks / partial applies):")
+        for label, text in notes:
+            if text:
+                # Show first 600 chars — enough to see reasoning without flooding terminal
+                preview = text[:600].strip()
+                if len(text) > 600:
+                    preview += "\n    … (truncated — full text in checkpoint)"
+                print(f"\n  [{label}]")
+                for line in preview.splitlines():
+                    print(f"    {line}")
+
+
 # ── Prompt builders ───────────────────────────────────────────────────────────
 
 def prompt_initial(ticket_id: str) -> str:
@@ -286,8 +343,14 @@ def prompt_fix(summary: str, base: str, review: str,
         "## Current Branch State\n"
         f"Run `git diff {base}..HEAD` to see all changes on this branch.\n\n"
         f"## Code Review Findings\n{review}\n\n"
-        "Address each finding. Make targeted fixes — don't rewrite what works. "
-        "Search mem0 if you need context about patterns or past decisions. "
+        "Address findings in the Critical, Important, Minor, Cross-cutting, and "
+        "Promotion candidates sections. Make targeted fixes — don't rewrite what works. "
+        "Search mem0 if you need context about patterns or past decisions.\n\n"
+        "DO NOT attempt to resolve items in 'Uncertain', 'needs human judgment', or "
+        "'Out of scope' sections — those are flagged for human review, not automated fixing.\n\n"
+        "If you choose not to apply a finding (because it conflicts with established patterns, "
+        "would break something, or is genuinely wrong for this codebase), explain your "
+        "reasoning clearly in your response. Your response is captured and shown to the human.\n\n"
         f"Do NOT commit — the orchestrator will commit after this step.{save_note}"
     )
 
@@ -342,6 +405,10 @@ def main() -> None:
     else:
         print("No AGENTS.md found — using default review format")
 
+    # Accumulators for human-attention summary printed at the end
+    uncertain_items: list[tuple[str, str]] = []
+    fix_notes: list[tuple[str, str]] = []
+
     # ── Step 1: Implement ────────────────────────────────────────────────────
     if start_from <= 1:
         step(1, f"Claude Code: implement {tid}")
@@ -368,14 +435,18 @@ def main() -> None:
         skip(2, "Claude Code: multi-agent review")
         claude_review = state.get("claude_review", "")
 
+    uncertain_items.append(("Claude agent review", extract_uncertain(claude_review)))
+
     # ── Step 3: Apply Claude findings ────────────────────────────────────────
     if start_from <= 3:
         step(3, "Claude Code: apply Claude review findings")
-        run_claude(prompt_fix(summary, base, claude_review), cwd=repo)
+        fix_out = run_claude(prompt_fix(summary, base, claude_review), cwd=repo)
+        fix_notes.append(("Step 3 — Claude review fixes", fix_out))
         git_commit_all(repo, f"fix: apply Claude agent review [{tid}]")
-        mark_done(tid, 3)
+        mark_done(tid, 3, fix_note_3=fix_out)
     else:
         skip(3, "Claude Code: apply Claude review findings")
+        fix_notes.append(("Step 3 — Claude review fixes", state.get("fix_note_3", "")))
 
     # ── Step 4: GPT blind review ─────────────────────────────────────────────
     if start_from <= 4:
@@ -390,14 +461,18 @@ def main() -> None:
         skip(4, f"Blind review: {MODELS[0]}")
         gpt_review = state.get("gpt_review", "")
 
+    uncertain_items.append((MODELS[0], extract_uncertain(gpt_review)))
+
     # ── Step 5: Apply GPT findings ───────────────────────────────────────────
     if start_from <= 5:
         step(5, f"Claude Code: apply {MODELS[0]} findings")
-        run_claude(prompt_fix(summary, base, gpt_review), cwd=repo)
+        fix_out = run_claude(prompt_fix(summary, base, gpt_review), cwd=repo)
+        fix_notes.append((f"Step 5 — {MODELS[0]} fixes", fix_out))
         git_commit_all(repo, f"fix: apply {MODELS[0]} review [{tid}]")
-        mark_done(tid, 5)
+        mark_done(tid, 5, fix_note_5=fix_out)
     else:
         skip(5, f"Claude Code: apply {MODELS[0]} findings")
+        fix_notes.append((f"Step 5 — {MODELS[0]} fixes", state.get("fix_note_5", "")))
 
     # ── Step 6: Gemini blind review ──────────────────────────────────────────
     if start_from <= 6:
@@ -412,14 +487,18 @@ def main() -> None:
         skip(6, f"Blind review: {MODELS[1]}")
         gemini_review = state.get("gemini_review", "")
 
+    uncertain_items.append((MODELS[1], extract_uncertain(gemini_review)))
+
     # ── Step 7: Apply Gemini findings + save to mem0 ─────────────────────────
     if start_from <= 7:
         step(7, f"Claude Code: apply {MODELS[1]} findings + save to mem0")
-        run_claude(prompt_fix(summary, base, gemini_review, is_final=True), cwd=repo)
+        fix_out = run_claude(prompt_fix(summary, base, gemini_review, is_final=True), cwd=repo)
+        fix_notes.append((f"Step 7 — {MODELS[1]} fixes", fix_out))
         git_commit_all(repo, f"fix: apply {MODELS[1]} review [{tid}]")
-        mark_done(tid, 7)
+        mark_done(tid, 7, fix_note_7=fix_out)
     else:
         skip(7, f"Claude Code: apply {MODELS[1]} findings")
+        fix_notes.append((f"Step 7 — {MODELS[1]} fixes", state.get("fix_note_7", "")))
 
     final_diff = git_diff_branch(repo, base)
     clear_state(tid)
@@ -429,6 +508,8 @@ def main() -> None:
     print(f"Base:       {base}")
     print(f"Total diff: {len(final_diff.splitlines())} lines vs {base}")
     print(f"Commits:    git log --oneline {base}..HEAD")
+
+    print_human_summary(uncertain_items, fix_notes)
 
 
 if __name__ == "__main__":
