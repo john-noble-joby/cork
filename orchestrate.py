@@ -1,16 +1,27 @@
 #!/usr/bin/env python3
 """
-orchestrate.py — Linear story → Claude Code → GPT-5.3-Codex review → Claude fix →
-                 Gemini 3.1 Pro review → Claude final fix + mem0 save
+orchestrate.py — Multi-model coding pipeline with independent sequential reviews.
+
+Pipeline (7 steps):
+  1. Claude Code: implement story (branch + commit)
+  2. Claude Code: parallel multi-agent review of own work → findings
+  3. Claude Code: apply Claude findings → commit
+  4. GPT-5.3-Codex: blind review of current branch state → findings
+  5. Claude Code: apply GPT findings → commit
+  6. Gemini 3.1 Pro: blind review of current branch state → findings
+  7. Claude Code: apply Gemini findings → commit + save to mem0
+
+Each Copilot reviewer sees only the current code state, never prior review text.
+Commits after each fix step create a clear audit trail of what each model caught.
 
 Usage:
-    python orchestrate.py <TICKET-ID> <repo-path>
-    python orchestrate.py ENG-123 ~/dev/my-repo
+    python orchestrate.py <TICKET-ID> <repo-path> [--base-branch <branch>]
+    python orchestrate.py ENG-123 ~/dev/edge-fmt --base-branch develop
 
 Requirements:
     pip install openai
-    opencode must be authenticated with GitHub Copilot (token read from
-    ~/.local/share/opencode/auth.json)
+    opencode authenticated with GitHub Copilot
+    (token read from ~/.local/share/opencode/auth.json)
 """
 
 import argparse
@@ -29,30 +40,35 @@ COPILOT_BASE   = "https://api.githubcopilot.com"
 MODELS         = ["gpt-5.3-codex", "gemini-3.1-pro-preview"]  # review pass 1, pass 2
 MAX_FILE_LINES = 500  # files larger than this are included as diff-only
 
-# opencode's Copilot token unlocks Gemini + newer GPT models not available
-# via the gh CLI token. Read from opencode's auth store at runtime.
 _OPENCODE_AUTH = Path.home() / ".local/share/opencode/auth.json"
+
+TOTAL_STEPS = 7
+
+# Fallback review format when no repo AGENTS.md is found
+REVIEW_SYSTEM = """\
+You are a senior code reviewer. For each issue output exactly:
+FILE: <path> | LINE: <n> | ISSUE: <description> | FIX: <suggestion>
+Be specific. Reference exact file paths and line numbers.
+Cover: correctness, error handling, edge cases,
+style consistency with surrounding code, test coverage.\
+"""
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
 
 def _copilot_token() -> str:
     try:
         data = json.loads(_OPENCODE_AUTH.read_text())
         return data["github-copilot"]["refresh"]
     except (KeyError, FileNotFoundError) as e:
-        fail(f"Cannot read opencode Copilot token from {_OPENCODE_AUTH}: {e}\n"
-             "  → Run opencode and authenticate with GitHub Copilot first.")
-
-REVIEW_SYSTEM = """\
-You are a senior code reviewer. For each issue output exactly:
-FILE: <path> | LINE: <n> | ISSUE: <description> | FIX: <suggestion>
-Be specific. Reference exact file paths and line numbers.
-Cover: correctness, error handling, edge cases, \
-style consistency with surrounding code, test coverage.\
-"""
+        fail(
+            f"Cannot read opencode Copilot token from {_OPENCODE_AUTH}: {e}\n"
+            "  → Run opencode and authenticate with GitHub Copilot first."
+        )
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def step(n: int, msg: str) -> None:
-    print(f"\n── Step {n}/5 — {msg}", flush=True)
+    print(f"\n── Step {n}/{TOTAL_STEPS} — {msg}", flush=True)
 
 
 def fail(msg: str) -> None:
@@ -70,17 +86,19 @@ def run_claude(prompt: str, cwd: str) -> str:
     return result.stdout.strip()
 
 
-def git_diff(cwd: str) -> str:
+def git_diff_branch(cwd: str, base: str) -> str:
+    """Full diff from base branch to HEAD — what all reviewers see."""
     return subprocess.check_output(
-        ["git", "diff", "HEAD"], cwd=cwd, text=True
+        ["git", "diff", f"{base}..HEAD"], cwd=cwd, text=True
     )
 
 
-def changed_files(cwd: str) -> dict:
+def changed_files_branch(cwd: str, base: str) -> dict[str, str]:
+    """Current content of every file changed since base branch."""
     names = subprocess.check_output(
-        ["git", "diff", "HEAD", "--name-only"], cwd=cwd, text=True
+        ["git", "diff", f"{base}..HEAD", "--name-only"], cwd=cwd, text=True
     ).strip().splitlines()
-    contents = {}
+    contents: dict[str, str] = {}
     for name in names:
         path = Path(cwd) / name
         if not path.exists():
@@ -93,14 +111,33 @@ def changed_files(cwd: str) -> dict:
     return contents
 
 
-def load_agent_instructions(repo: str) -> str:
+def git_commit_all(cwd: str, message: str) -> bool:
+    """Stage everything and commit. Returns False if nothing to commit."""
+    subprocess.run(["git", "add", "-A"], cwd=cwd, check=True)
+    result = subprocess.run(
+        ["git", "commit", "-m", message],
+        cwd=cwd, capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=cwd, text=True
+        ).strip()
+        print(f"  → committed {sha}: {message}")
+        return True
+    if "nothing to commit" in (result.stdout + result.stderr):
+        print("  → nothing to commit")
+        return False
+    fail(f"git commit failed:\n{result.stderr}")
+    return False  # unreachable
+
+
+def load_agent_instructions(repo: str) -> tuple[str, str]:
     """
-    Precedence: dedicated code-review dir first (richest instructions),
-    then repo root, then .github. Returns (content, path) so callers
-    know whether a structured output format is already embedded.
+    Return (content, path) for the best review instructions found.
+    Precedence: code-review/AGENTS.md > repo-root AGENTS.md > .github/AGENTS.md
     """
     candidates = [
-        Path(repo) / "code-review" / "AGENTS.md",   # richest — repo-specific review spec
+        Path(repo) / "code-review" / "AGENTS.md",
         Path(repo) / "code-review" / "agent.md",
         Path(repo) / "AGENTS.md",
         Path(repo) / "agent.md",
@@ -113,7 +150,7 @@ def load_agent_instructions(repo: str) -> str:
 
 
 def copilot_review(model: str, instructions: str,
-                   story: str, diff: str, files: dict) -> str:
+                   story: str, diff: str, files: dict[str, str]) -> str:
     client = OpenAI(
         base_url=COPILOT_BASE,
         api_key=_copilot_token(),
@@ -127,24 +164,21 @@ def copilot_review(model: str, instructions: str,
     file_block = "\n\n".join(
         f"### {name}\n```\n{content}\n```"
         for name, content in files.items()
-    ) if files else "(no changed files read)"
+    ) or "(no changed files)"
 
     user_msg = (
         f"## Story / Task\n{story}\n\n"
-        f"## Changed Files\n{file_block}\n\n"
-        f"## Git Diff\n```diff\n{diff}\n```"
+        f"## Changed Files (current state)\n{file_block}\n\n"
+        f"## Branch Diff\n```diff\n{diff}\n```"
     )
 
-    # If the repo ships detailed review instructions (with their own output
-    # format in §8), let those govern. Only append our terse fallback format
-    # when there are no repo-specific instructions.
     if instructions:
         system = (
             instructions
             + "\n\n---\n"
-            + "Note: you are operating as a single-pass reviewer via API — "
-            + "you cannot spawn sub-agents or invoke skills. Apply §3–§7 "
-            + "directly in your single pass and produce the §8 output format."
+            "Note: you are a single-pass API reviewer — you cannot spawn "
+            "sub-agents or invoke skills. Apply §3–§7 in one pass and produce "
+            "the §8 output format. Do NOT apply fixes; report findings only."
         )
     else:
         system = REVIEW_SYSTEM
@@ -168,11 +202,28 @@ def prompt_initial(ticket_id: str) -> str:
         "patterns, past decisions. "
         f"Create a git branch named feature/{ticket_id.lower()}. "
         "Implement the story fully. Write or update tests if the codebase has them. "
-        "When done, output a concise paragraph summarising what you changed and why."
+        "When done, output a concise paragraph summarising what you changed and why. "
+        "Do NOT commit — the orchestrator will commit after this step."
     )
 
 
-def prompt_fix(summary: str, diff: str, review: str,
+def prompt_claude_review(base: str, instructions_path: str) -> str:
+    review_src = (
+        f"Read and follow the review instructions in {instructions_path}."
+        if instructions_path
+        else "Perform a thorough multi-agent code review."
+    )
+    return (
+        f"Review the current feature branch against {base}. "
+        f"The full branch diff is available via: git diff {base}..HEAD\n\n"
+        f"{review_src}\n\n"
+        "Output ONLY a structured findings report. "
+        "Do NOT apply any fixes. Do NOT edit any files. "
+        "Your sole job in this step is to review and report."
+    )
+
+
+def prompt_fix(summary: str, base: str, review: str,
                is_final: bool = False) -> str:
     save_note = (
         "\n\nAfter making fixes, use your mem0 MCP tools to save any non-obvious "
@@ -181,11 +232,12 @@ def prompt_fix(summary: str, diff: str, review: str,
     )
     return (
         f"## Story Summary\n{summary}\n\n"
-        f"## Changes Already Made (git diff)\n```diff\n{diff}\n```\n\n"
+        "## Current Branch State\n"
+        f"Run `git diff {base}..HEAD` to see all changes on this branch.\n\n"
         f"## Code Review Findings\n{review}\n\n"
-        "Address each finding from the code review. Make targeted fixes — "
-        "don't rewrite what works. Search mem0 if you need context about "
-        f"patterns or past decisions.{save_note}"
+        "Address each finding. Make targeted fixes — don't rewrite what works. "
+        "Search mem0 if you need context about patterns or past decisions. "
+        f"Do NOT commit — the orchestrator will commit after this step.{save_note}"
     )
 
 
@@ -193,60 +245,85 @@ def prompt_fix(summary: str, diff: str, review: str,
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Linear story → Claude Code → dual review loop"
+        description="Linear story → Claude multi-agent review → GPT review → Gemini review"
     )
-    parser.add_argument("ticket_id",  help="Linear ticket ID, e.g. ENG-123")
-    parser.add_argument("repo_path",  help="Absolute path to target git repo")
+    parser.add_argument("ticket_id",   help="Linear ticket ID, e.g. ENG-123")
+    parser.add_argument("repo_path",   help="Absolute path to target git repo")
+    parser.add_argument(
+        "--base-branch", default="develop",
+        help="Branch to diff against for reviews (default: develop)"
+    )
     args = parser.parse_args()
 
     tid  = args.ticket_id
     repo = str(Path(args.repo_path).expanduser().resolve())
+    base = args.base_branch
 
     if not Path(repo).is_dir():
         fail(f"repo_path does not exist: {repo}")
 
     instructions, instructions_path = load_agent_instructions(repo)
-    if instructions:
-        print(f"Loaded review instructions: {instructions_path} ({len(instructions)} chars)")
+    if instructions_path:
+        print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
+    else:
+        print("No AGENTS.md found — using default review format")
 
-    # Step 1 — implement
+    # ── Step 1: Implement ────────────────────────────────────────────────────
     step(1, f"Claude Code: implement {tid}")
-    summary_1 = run_claude(prompt_initial(tid), cwd=repo)
-    diff_1    = git_diff(repo)
-    files_1   = changed_files(repo)
-    if not diff_1.strip():
-        fail("Claude made no file changes.")
-    print(f"  {len(files_1)} files changed, {len(diff_1.splitlines())} diff lines")
-    print(f"  Summary: {summary_1[:200]}…")
+    summary = run_claude(prompt_initial(tid), cwd=repo)
+    print(f"  Summary: {summary[:200]}…")
+    git_commit_all(repo, f"feat: implement {tid}")
 
-    # Step 2 — review 1
-    step(2, f"Review 1: {MODELS[0]} via Copilot")
-    review_1 = copilot_review(MODELS[0], instructions, summary_1, diff_1, files_1)
-    print(f"  {review_1[:300]}…")
+    diff = git_diff_branch(repo, base)
+    if not diff.strip():
+        fail("No diff vs base branch after implementation.")
+    files = changed_files_branch(repo, base)
+    print(f"  {len(files)} files changed, {len(diff.splitlines())} diff lines vs {base}")
 
-    # Step 3 — fix review 1
-    step(3, "Claude Code: apply review 1 fixes")
-    summary_2 = run_claude(prompt_fix(summary_1, diff_1, review_1), cwd=repo)
-    diff_2    = git_diff(repo)
-    files_2   = changed_files(repo)
-    print(f"  {len(files_2)} files changed, {len(diff_2.splitlines())} diff lines")
-
-    # Step 4 — review 2
-    step(4, f"Review 2: {MODELS[1]} via Copilot")
-    review_2 = copilot_review(MODELS[1], instructions, summary_1, diff_2, files_2)
-    print(f"  {review_2[:300]}…")
-
-    # Step 5 — fix review 2 + save to mem0
-    step(5, "Claude Code: apply review 2 fixes + save to mem0")
-    summary_3 = run_claude(
-        prompt_fix(summary_1, diff_2, review_2, is_final=True), cwd=repo
+    # ── Step 2: Claude parallel agent review ────────────────────────────────
+    step(2, "Claude Code: multi-agent review")
+    claude_review = run_claude(
+        prompt_claude_review(base, instructions_path), cwd=repo
     )
-    diff_3 = git_diff(repo)
+    print(f"  {claude_review[:300]}…")
 
-    print(f"\n── Done ─────────────────────────────────────────────")
-    print(f"Branch:      feature/{tid.lower()}")
-    print(f"Total diff:  {len(diff_3.splitlines())} lines")
-    print(f"Summary:     {summary_3[:400]}")
+    # ── Step 3: Apply Claude findings ────────────────────────────────────────
+    step(3, "Claude Code: apply Claude review findings")
+    run_claude(prompt_fix(summary, base, claude_review), cwd=repo)
+    git_commit_all(repo, f"fix: apply Claude agent review [{tid}]")
+
+    # ── Step 4: GPT-5.3 blind review ────────────────────────────────────────
+    step(4, f"Blind review: {MODELS[0]} via Copilot")
+    diff   = git_diff_branch(repo, base)
+    files  = changed_files_branch(repo, base)
+    print(f"  Sending {len(files)} files, {len(diff.splitlines())} diff lines to {MODELS[0]}")
+    gpt_review = copilot_review(MODELS[0], instructions, summary, diff, files)
+    print(f"  {gpt_review[:300]}…")
+
+    # ── Step 5: Apply GPT findings ───────────────────────────────────────────
+    step(5, f"Claude Code: apply {MODELS[0]} findings")
+    run_claude(prompt_fix(summary, base, gpt_review), cwd=repo)
+    git_commit_all(repo, f"fix: apply {MODELS[0]} review [{tid}]")
+
+    # ── Step 6: Gemini blind review ──────────────────────────────────────────
+    step(6, f"Blind review: {MODELS[1]} via Copilot")
+    diff  = git_diff_branch(repo, base)
+    files = changed_files_branch(repo, base)
+    print(f"  Sending {len(files)} files, {len(diff.splitlines())} diff lines to {MODELS[1]}")
+    gemini_review = copilot_review(MODELS[1], instructions, summary, diff, files)
+    print(f"  {gemini_review[:300]}…")
+
+    # ── Step 7: Apply Gemini findings + save to mem0 ─────────────────────────
+    step(7, f"Claude Code: apply {MODELS[1]} findings + save to mem0")
+    run_claude(prompt_fix(summary, base, gemini_review, is_final=True), cwd=repo)
+    git_commit_all(repo, f"fix: apply {MODELS[1]} review [{tid}]")
+
+    final_diff = git_diff_branch(repo, base)
+    print(f"\n── Done ──────────────────────────────────────────────────")
+    print(f"Branch:     feature/{tid.lower()}")
+    print(f"Base:       {base}")
+    print(f"Total diff: {len(final_diff.splitlines())} lines vs {base}")
+    print(f"Commits:    git log {base}..HEAD --oneline")
 
 
 if __name__ == "__main__":

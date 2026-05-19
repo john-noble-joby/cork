@@ -1,12 +1,14 @@
 # code-orchestrator
 
-Serial multi-model coding pipeline: fetch a Linear story → Claude Code implements → GPT-4o reviews → Claude fixes → Gemini reviews → Claude final fix + mem0 save.
+Multi-model coding pipeline with independent sequential reviews. Each reviewer
+sees only the current code state — never what prior reviewers found — so every
+model hunts for issues with genuinely fresh eyes.
 
 ## Usage
 
 ```bash
-python orchestrate.py <TICKET-ID> <repo-path>
-python orchestrate.py ENG-123 ~/dev/my-repo
+python orchestrate.py <TICKET-ID> <repo-path> [--base-branch <branch>]
+python orchestrate.py ENG-123 ~/dev/edge-fmt --base-branch develop
 ```
 
 ## Requirements
@@ -19,15 +21,24 @@ pip install openai
 - **opencode** — must be authenticated with GitHub Copilot (`opencode auth login`); the script reads the token from `~/.local/share/opencode/auth.json`. This token unlocks Gemini and newer GPT models not available via the `gh` CLI token.
 - **mem0** running locally at `http://localhost:8888` (for Claude's MCP context)
 
-## How it works
+## Pipeline (7 steps)
 
-1. Claude Code fetches the Linear story via MCP, searches mem0 for codebase context, creates `feature/<ticket>` branch, implements the story
-2. GPT-4o (via GitHub Copilot API) reviews the diff + changed files
-3. Claude Code applies the review findings
-4. Gemini (via GitHub Copilot API) reviews the updated diff
-5. Claude Code applies final fixes and saves architectural decisions to mem0
+| Step | Who | What |
+|------|-----|-------|
+| 1 | Claude Code | Fetch Linear story via MCP, search mem0, implement, **commit** |
+| 2 | Claude Code | Multi-agent review of own work using `code-review/AGENTS.md` |
+| 3 | Claude Code | Apply Claude findings, **commit** |
+| 4 | GPT-5.3-Codex | Blind review — sees current code, not Claude's findings |
+| 5 | Claude Code | Apply GPT findings, **commit** |
+| 6 | Gemini 3.1 Pro | Blind review — sees current code, not prior findings |
+| 7 | Claude Code | Apply Gemini findings, save to mem0, **commit** |
 
-Review models read `AGENTS.md` (or `agent.md` / `.github/AGENTS.md`) from the target repo as their system prompt.
+Each Copilot reviewer gets the full `git diff base..HEAD` plus current file
+contents — enough context to review thoroughly without knowing what prior
+reviewers found. Commits after each fix step give a clear audit trail.
+
+Review models use `code-review/AGENTS.md` if present, falling back to root
+`AGENTS.md` or `.github/AGENTS.md`.
 
 ## Configuration
 
