@@ -46,7 +46,7 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
 CLAUDE         = os.environ.get("CLAUDE_BIN", str(Path.home() / ".local/bin/claude"))
 COPILOT_BASE   = "https://api.githubcopilot.com"
-MODELS         = ["gpt-5.3-codex", "gemini-3.1-pro-preview"]  # review pass 1, pass 2
+MODELS         = ["gpt-4.1", "gemini-3.1-pro-preview"]  # review pass 1, pass 2
 MAX_FILE_LINES = 500
 TOTAL_STEPS    = 7
 STATE_DIR      = Path.home() / ".local/share/code-orchestrator"
@@ -181,6 +181,28 @@ def load_agent_instructions(repo: str) -> tuple[str, str]:
     return "", ""
 
 
+def _budget_files(files: dict[str, str], budget_chars: int) -> tuple[str, int]:
+    """
+    Pack as many file contents as fit within budget_chars.
+    Returns (file_block_str, included_count).
+    Sorts by size ascending so small files always get in.
+    """
+    sorted_files = sorted(files.items(), key=lambda x: len(x[1]))
+    included, used = [], 0
+    for name, content in sorted_files:
+        entry = f"### {name}\n```\n{content}\n```"
+        if used + len(entry) > budget_chars:
+            break
+        included.append(entry)
+        used += len(entry)
+    if not included:
+        return "(files omitted — diff too large; see diff section)", 0
+    block = "\n\n".join(included)
+    if len(included) < len(files):
+        block += f"\n\n_(+{len(files) - len(included)} files omitted for token budget — see diff)_"
+    return block, len(included)
+
+
 def copilot_review(model: str, instructions: str,
                    story: str, diff: str, files: dict[str, str],
                    max_attempts: int = 3) -> str:
@@ -194,17 +216,6 @@ def copilot_review(model: str, instructions: str,
         },
     )
 
-    file_block = "\n\n".join(
-        f"### {name}\n```\n{content}\n```"
-        for name, content in files.items()
-    ) or "(no changed files)"
-
-    user_msg = (
-        f"## Story / Task\n{story}\n\n"
-        f"## Changed Files (current state)\n{file_block}\n\n"
-        f"## Branch Diff\n```diff\n{diff}\n```"
-    )
-
     system = (
         instructions
         + "\n\n---\n"
@@ -213,6 +224,25 @@ def copilot_review(model: str, instructions: str,
         "the §8 output format. Do NOT apply fixes; report findings only."
         if instructions
         else REVIEW_SYSTEM
+    )
+
+    # Rough token estimate: 1 token ≈ 4 chars. Reserve 8k tokens for the
+    # response. Use 90% of remainder for content to stay safely under limit.
+    # We don't know the model's exact limit so we cap at 48k tokens (192k chars)
+    # which fits comfortably within the lowest limit we've seen (64k tokens).
+    CHAR_BUDGET = 192_000
+    fixed_chars = len(system) + len(story) + len(diff) + 500  # headers + overhead
+    file_budget  = max(0, CHAR_BUDGET - fixed_chars)
+
+    file_block, n_included = _budget_files(files, file_budget)
+    if n_included < len(files):
+        print(f"  → token budget: included {n_included}/{len(files)} files "
+              f"(diff-only for the rest)")
+
+    user_msg = (
+        f"## Story / Task\n{story}\n\n"
+        f"## Changed Files (current state)\n{file_block}\n\n"
+        f"## Branch Diff\n```diff\n{diff}\n```"
     )
 
     for attempt in range(max_attempts):
