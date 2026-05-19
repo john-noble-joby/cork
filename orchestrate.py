@@ -94,15 +94,22 @@ def changed_files(cwd: str) -> dict:
 
 
 def load_agent_instructions(repo: str) -> str:
+    """
+    Precedence: dedicated code-review dir first (richest instructions),
+    then repo root, then .github. Returns (content, path) so callers
+    know whether a structured output format is already embedded.
+    """
     candidates = [
+        Path(repo) / "code-review" / "AGENTS.md",   # richest — repo-specific review spec
+        Path(repo) / "code-review" / "agent.md",
         Path(repo) / "AGENTS.md",
         Path(repo) / "agent.md",
         Path(repo) / ".github" / "AGENTS.md",
     ]
     for p in candidates:
         if p.exists():
-            return p.read_text(errors="replace")
-    return ""
+            return p.read_text(errors="replace"), str(p)
+    return "", ""
 
 
 def copilot_review(model: str, instructions: str,
@@ -128,7 +135,19 @@ def copilot_review(model: str, instructions: str,
         f"## Git Diff\n```diff\n{diff}\n```"
     )
 
-    system = "\n\n".join(filter(None, [instructions, REVIEW_SYSTEM]))
+    # If the repo ships detailed review instructions (with their own output
+    # format in §8), let those govern. Only append our terse fallback format
+    # when there are no repo-specific instructions.
+    if instructions:
+        system = (
+            instructions
+            + "\n\n---\n"
+            + "Note: you are operating as a single-pass reviewer via API — "
+            + "you cannot spawn sub-agents or invoke skills. Apply §3–§7 "
+            + "directly in your single pass and produce the §8 output format."
+        )
+    else:
+        system = REVIEW_SYSTEM
 
     resp = client.chat.completions.create(
         model=model,
@@ -186,9 +205,9 @@ def main() -> None:
     if not Path(repo).is_dir():
         fail(f"repo_path does not exist: {repo}")
 
-    instructions = load_agent_instructions(repo)
+    instructions, instructions_path = load_agent_instructions(repo)
     if instructions:
-        print(f"Loaded agent instructions ({len(instructions)} chars)")
+        print(f"Loaded review instructions: {instructions_path} ({len(instructions)} chars)")
 
     # Step 1 — implement
     step(1, f"Claude Code: implement {tid}")
