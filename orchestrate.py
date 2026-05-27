@@ -2,14 +2,16 @@
 """
 orchestrate.py — Multi-model coding pipeline with independent sequential reviews.
 
-Pipeline (7 steps):
+Pipeline (9 steps):
   1. Claude Code: implement story (branch + commit)
   2. Claude Code: parallel multi-agent review of own work → findings
   3. Claude Code: apply Claude findings → commit
-  4. GPT-5.3-Codex: blind review of current branch state → findings
+  4. GPT-4o: blind review of current branch state → findings
   5. Claude Code: apply GPT findings → commit
   6. Gemini 3.1 Pro: blind review of current branch state → findings
-  7. Claude Code: apply Gemini findings → commit + save to mem0
+  7. Claude Code: apply Gemini findings → commit
+  8. Claude Opus 4.7: blind review of current branch state → findings
+  9. Claude Code: apply Claude Opus findings → commit + save to mem0
 
 Each Copilot reviewer sees only the current code state, never prior review text.
 Commits after each fix step create a clear audit trail of what each model caught.
@@ -47,9 +49,9 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
 CLAUDE         = os.environ.get("CLAUDE_BIN", str(Path.home() / ".local/bin/claude"))
 COPILOT_BASE   = "https://api.githubcopilot.com"
-MODELS         = ["gpt-4.1", "gemini-3.1-pro-preview"]  # review pass 1, pass 2
+MODELS         = ["gpt-4o", "gemini-3.1-pro-preview", "claude-opus-4.7"]  # review pass 1, 2, 3
 MAX_FILE_LINES = 500
-TOTAL_STEPS    = 7
+TOTAL_STEPS    = 9  # 2 steps per model (review + fix) + implement + push/PR
 STATE_DIR      = Path.home() / ".local/share/code-orchestrator"
 _OPENCODE_AUTH = Path.home() / ".local/share/opencode/auth.json"
 _DEFAULT_CHAR_BUDGET = 192_000  # fallback if /models fetch fails
@@ -596,7 +598,30 @@ def main() -> None:
     files = changed_files_branch(repo, base)
     if not diff.strip():
         fail("No diff vs base branch — nothing to review.")
-    print(f"  {len(files)} files, {len(diff.splitlines())} diff lines vs {base}")
+    diff_lines = len(diff.splitlines())
+    print(f"  {len(files)} files, {diff_lines} diff lines vs {base}")
+
+    # ── Diff-size gate ───────────────────────────────────────────────────────
+    # A diff > ~1,500 lines saturates reviewer context and overflows smaller
+    # models (gpt-4o at 64k tokens fails around 7,000 lines). Warn early so
+    # the story can be split before investing review time.
+    _WARN_LINES  = 1_500   # soft: flag for splitting consideration
+    _BLOCK_LINES = 5_000   # hard: refuse to continue (almost certainly too large)
+    if diff_lines >= _BLOCK_LINES:
+        fail(
+            f"Diff is {diff_lines} lines — too large for reliable multi-model review "
+            f"(hard limit: {_BLOCK_LINES}). Split the branch into smaller stories "
+            f"(target ≤500 lines each) before re-running the pipeline."
+        )
+    if diff_lines >= _WARN_LINES:
+        print(
+            f"\n  ⚠  WARNING: diff is {diff_lines} lines (soft limit: {_WARN_LINES}).\n"
+            f"     Consider splitting into smaller stories. Smaller diffs:\n"
+            f"     • Keep each review pass under the smallest model's token budget\n"
+            f"     • Give reviewers a focused surface to reason about\n"
+            f"     • Make findings easier to attribute and fix\n"
+            f"     Continuing — but expect reduced review quality.\n"
+        )
 
     # ── Step 2: Claude multi-agent review ────────────────────────────────────
     if start_from <= 2:
@@ -662,16 +687,42 @@ def main() -> None:
 
     uncertain_items.append((MODELS[1], extract_uncertain(gemini_review)))
 
-    # ── Step 7: Apply Gemini findings + save to mem0 ─────────────────────────
+    # ── Step 7: Apply Gemini findings ───────────────────────────────────────
     if start_from <= 7:
-        step(7, f"Claude Code: apply {MODELS[1]} findings + save to mem0")
-        fix_out = run_claude(prompt_fix(summary, base, gemini_review, tid, is_final=True), cwd=repo)
+        step(7, f"Claude Code: apply {MODELS[1]} findings")
+        fix_out = run_claude(prompt_fix(summary, base, gemini_review, tid), cwd=repo)
         fix_notes.append((f"Step 7 — {MODELS[1]} fixes", fix_out))
         git_commit_all(repo, f"fix: apply {MODELS[1]} review [{tid}]")
         mark_done(tid, 7, fix_note_7=fix_out)
     else:
         skip(7, f"Claude Code: apply {MODELS[1]} findings")
         fix_notes.append((f"Step 7 — {MODELS[1]} fixes", state.get("fix_note_7", "")))
+
+    # ── Step 8: Claude Opus blind review ────────────────────────────────────
+    if start_from <= 8:
+        step(8, f"Blind review: {MODELS[2]} via Copilot")
+        diff  = git_diff_branch(repo, base)
+        files = changed_files_branch(repo, base)
+        print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {MODELS[2]}")
+        opus_review = copilot_review(MODELS[2], instructions, summary, diff, files, char_budget)
+        print(f"  {opus_review[:300]}…")
+        mark_done(tid, 8, opus_review=opus_review)
+    else:
+        skip(8, f"Blind review: {MODELS[2]}")
+        opus_review = state.get("opus_review", "")
+
+    uncertain_items.append((MODELS[2], extract_uncertain(opus_review)))
+
+    # ── Step 9: Apply Claude Opus findings + save to mem0 ───────────────────
+    if start_from <= 9:
+        step(9, f"Claude Code: apply {MODELS[2]} findings + save to mem0")
+        fix_out = run_claude(prompt_fix(summary, base, opus_review, tid, is_final=True), cwd=repo)
+        fix_notes.append((f"Step 9 — {MODELS[2]} fixes", fix_out))
+        git_commit_all(repo, f"fix: apply {MODELS[2]} review [{tid}]")
+        mark_done(tid, 9, fix_note_9=fix_out)
+    else:
+        skip(9, f"Claude Code: apply {MODELS[2]} findings")
+        fix_notes.append((f"Step 9 — {MODELS[2]} fixes", state.get("fix_note_9", "")))
 
     final_diff = git_diff_branch(repo, base)
     clear_state(tid)
