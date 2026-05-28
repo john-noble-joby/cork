@@ -65,7 +65,7 @@ Push the branch and open a PR with `gh`, summarizing what each pass caught.
 
 - **Base branch** is `develop` for edge-fmt. Pass `--base-branch develop` (local and origin are kept in sync; if in doubt `git fetch origin && git merge --ff-only origin/develop`).
 - **Run tests** after each fix before committing — don't commit a broken build.
-- **Copilot token**: `--review-model` calls the Copilot API via the opencode token (`~/.local/share/opencode/auth.json`). A 401 means the token expired — re-auth opencode with GitHub Copilot.
+- **Copilot token**: `--review-model` resolves a token in priority order — `CORK_COPILOT_TOKEN` env var → cork's own `~/.config/cork/auth.json` (`CORK_AUTH_FILE`) → opencode (`~/.local/share/opencode/auth.json`). To give cork its own token, run `python "$CORK_HOME/orchestrate.py" login` (GitHub device flow, writes the auth file automatically). A 401 means the token expired — re-run `login`.
 - **Worktree**: all edits go in the PR's worktree, not the main checkout.
 - **Legacy headless mode** still exists: `$CORK_HOME/orchestrate.py {TICKET} {WORKTREE} --start-from 2` runs the full pipeline with `claude --print` subprocesses. Use that only for unattended/background runs.
 - **Path config:** the orchestrator location comes from `$CORK_HOME` (default `~/dev/code-orchestrator`). Set it in your shell profile or `~/.claude/settings.json` `env` block if your clone lives elsewhere.

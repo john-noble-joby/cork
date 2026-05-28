@@ -40,6 +40,8 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -58,6 +60,9 @@ _OPENCODE_AUTH = Path.home() / ".local/share/opencode/auth.json"
 # cork's own token store (XDG default), overridable with CORK_AUTH_FILE.
 _CORK_AUTH     = Path(os.environ.get("CORK_AUTH_FILE",
                       str(Path.home() / ".config/cork/auth.json")))
+# Public GitHub Copilot OAuth client id (same one editor integrations / opencode
+# use). Overridable in case GitHub rotates it.
+_COPILOT_CLIENT_ID = os.environ.get("CORK_COPILOT_CLIENT_ID", "Iv1.b507a08c87ecfe98")
 _DEFAULT_CHAR_BUDGET = 192_000  # fallback if /models fetch fails
 
 REVIEW_SYSTEM = """\
@@ -606,6 +611,68 @@ def cmd_status(ticket_id: str) -> None:
         print(f"? {ticket_id}: no status or checkpoint found")
 
 
+def _post_form(url: str, fields: dict[str, str], timeout: int = 15) -> dict:
+    """POST application/x-www-form-urlencoded, parse JSON. GitHub device-flow
+    returns errors as HTTP 200 (with an `error` field) or 4xx — handle both."""
+    req = urllib.request.Request(
+        url,
+        data=urllib.parse.urlencode(fields).encode(),
+        headers={"Accept": "application/json",
+                 "Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read())
+        except Exception:
+            fail(f"HTTP {e.code} from {url}")
+
+
+def cmd_login() -> None:
+    """GitHub device-authorization flow → mint a Copilot OAuth token → write it to
+    cork's own auth file (CORK_AUTH_FILE, default ~/.config/cork/auth.json).
+
+    Makes cork self-sufficient: no manual token copying and no dependency on
+    opencode's auth.json. Re-run any time the token expires.
+    """
+    print(f"Requesting device code (client_id={_COPILOT_CLIENT_ID})…", flush=True)
+    dc = _post_form("https://github.com/login/device/code",
+                    {"client_id": _COPILOT_CLIENT_ID, "scope": "read:user"})
+    if "device_code" not in dc:
+        fail(f"Device-code request failed: {dc.get('error_description') or dc}")
+
+    print(f"\n  Open:  {dc['verification_uri']}")
+    print(f"  Code:  {dc['user_code']}\n")
+    print("Waiting for authorization (Ctrl-C to cancel)…", flush=True)
+
+    interval = int(dc.get("interval", 5))
+    deadline = time.time() + int(dc.get("expires_in", 900))
+    while time.time() < deadline:
+        time.sleep(interval)
+        tok = _post_form("https://github.com/login/oauth/access_token", {
+            "client_id": _COPILOT_CLIENT_ID,
+            "device_code": dc["device_code"],
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        })
+        if tok.get("access_token"):
+            _CORK_AUTH.parent.mkdir(parents=True, exist_ok=True)
+            _CORK_AUTH.write_text(json.dumps({"token": tok["access_token"]}, indent=2))
+            _CORK_AUTH.chmod(0o600)
+            print(f"\n✓ Authorized. Token written to {_CORK_AUTH} (chmod 600).")
+            print("  cork will now use this token before falling back to opencode.")
+            return
+        err = tok.get("error")
+        if err == "authorization_pending":
+            continue
+        if err == "slow_down":
+            interval += 5
+            continue
+        fail(f"Device authorization failed: {err or tok}")
+    fail("Device authorization timed out — re-run `orchestrate.py login`.")
+
+
 def cmd_review(tid: str, repo: str, base: str, model: str) -> None:
     """Run a single Copilot model's review of the branch diff and print findings.
 
@@ -633,6 +700,13 @@ def cmd_review(tid: str, repo: str, base: str, model: str) -> None:
 
 
 def main() -> None:
+    # `login` is a standalone subcommand — no ticket_id, runs the GitHub device
+    # flow to mint cork's own Copilot token. Handle before argparse (which
+    # requires a positional ticket_id).
+    if len(sys.argv) >= 2 and sys.argv[1] == "login":
+        cmd_login()
+        return
+
     parser = argparse.ArgumentParser(
         description="Linear story → Claude review → GPT review → Gemini review"
     )
