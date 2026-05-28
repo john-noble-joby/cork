@@ -1,4 +1,6 @@
-# code-orchestrator
+# Cork
+
+**Cork** — **C**ode **Or**chestrator **R**eview **K**ickoff.
 
 Multi-model coding pipeline with independent sequential reviews. Each reviewer
 sees only the current code state — never what prior reviewers found — so every
@@ -38,7 +40,7 @@ pip install openai
 ```
 
 - **Claude Code CLI** — authenticated via `~/.claude/` (no extra setup)
-- **opencode** — must be authenticated with GitHub Copilot (`opencode auth login`); the script reads the token from `~/.local/share/opencode/auth.json`. This token unlocks Gemini and newer GPT models not available via the `gh` CLI token.
+- **A GitHub Copilot token** — unlocks Gemini and newer GPT models not available via the `gh` CLI token. Resolved in priority order: `CORK_COPILOT_TOKEN` env var → cork's own `~/.config/cork/auth.json` (`CORK_AUTH_FILE`) → opencode's `~/.local/share/opencode/auth.json`. The easiest way to get one: run `python orchestrate.py login` (GitHub device flow — writes `~/.config/cork/auth.json` for you).
 - **mem0** running locally at `http://localhost:8888` (for Claude's MCP context)
 
 ## Pipeline (7 steps)
@@ -65,5 +67,9 @@ Review models use `code-review/AGENTS.md` if present, falling back to root
 | Env var | Default | Purpose |
 |---------|---------|---------|
 | `CLAUDE_BIN` | `~/.local/bin/claude` | Path to Claude Code CLI |
+| `CORK_HOME` | `~/dev/cork` | Location of this repo (used by the cork skill) |
+| `CORK_COPILOT_TOKEN` | — | Copilot token, used directly (highest priority) |
+| `CORK_AUTH_FILE` | `~/.config/cork/auth.json` | Cork's own Copilot token store |
+| `CORK_COPILOT_CLIENT_ID` | `Iv1.b507a08c87ecfe98` | GitHub OAuth client id for `login` |
 
 Review models can be changed by editing `MODELS` at the top of `orchestrate.py`.

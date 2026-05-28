@@ -33,11 +33,11 @@ comments or the max is reached. Reviewer login is `Copilot` for requesting,
 ## Configuration
 
 `cork` resolves the orchestrator location from the `CORK_HOME` environment variable,
-defaulting to `~/dev/code-orchestrator`. If your clone lives elsewhere, set it once —
+defaulting to `~/dev/cork`. If your clone lives elsewhere, set it once —
 in your shell profile, or in `~/.claude/settings.json`:
 
 ```json
-{ "env": { "CORK_HOME": "/path/to/code-orchestrator" } }
+{ "env": { "CORK_HOME": "/path/to/cork" } }
 ```
 
 ## Copilot token

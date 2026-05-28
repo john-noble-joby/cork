@@ -11,13 +11,13 @@ description: Use when the user says "cork" or "run cork" on a branch — runs a 
 
 ## Configuration
 
-Resolve the orchestrator location from the `CORK_HOME` environment variable, falling back to `~/dev/code-orchestrator`. Every command below uses:
+Resolve the orchestrator location from the `CORK_HOME` environment variable, falling back to `~/dev/cork`. Every command below uses:
 
 ```bash
-CORK_HOME="${CORK_HOME:-$HOME/dev/code-orchestrator}"
+CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 ```
 
-If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` to their clone of the code-orchestrator repo and stop.
+If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` to their clone of the cork repo and stop.
 
 ## Why session-driven
 
@@ -51,7 +51,7 @@ Review your own diff with subagents (dispatch parallel reviewers), apply fixes, 
 For each model in `gpt-4o`, `gemini-3.1-pro-preview`, `claude-opus-4.7`:
 
 ```bash
-CORK_HOME="${CORK_HOME:-$HOME/dev/code-orchestrator}"
+CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 python "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch develop
 ```
 
@@ -68,4 +68,4 @@ Push the branch and open a PR with `gh`, summarizing what each pass caught.
 - **Copilot token**: `--review-model` resolves a token in priority order — `CORK_COPILOT_TOKEN` env var → cork's own `~/.config/cork/auth.json` (`CORK_AUTH_FILE`) → opencode (`~/.local/share/opencode/auth.json`). To give cork its own token, run `python "$CORK_HOME/orchestrate.py" login` (GitHub device flow, writes the auth file automatically). A 401 means the token expired — re-run `login`.
 - **Worktree**: all edits go in the PR's worktree, not the main checkout.
 - **Legacy headless mode** still exists: `$CORK_HOME/orchestrate.py {TICKET} {WORKTREE} --start-from 2` runs the full pipeline with `claude --print` subprocesses. Use that only for unattended/background runs.
-- **Path config:** the orchestrator location comes from `$CORK_HOME` (default `~/dev/code-orchestrator`). Set it in your shell profile or `~/.claude/settings.json` `env` block if your clone lives elsewhere.
+- **Path config:** the orchestrator location comes from `$CORK_HOME` (default `~/dev/cork`). Set it in your shell profile or `~/.claude/settings.json` `env` block if your clone lives elsewhere.
