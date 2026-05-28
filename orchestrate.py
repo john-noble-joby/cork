@@ -25,7 +25,7 @@ Resume after failure:
 
 Usage:
     python orchestrate.py <TICKET-ID> <repo-path> [options]
-    python orchestrate.py ENG-123 ~/dev/edge-fmt --base-branch develop
+    python orchestrate.py ENG-123 ~/dev/edge-fmt --base-branch origin/develop
 
 Requirements:
     pip install openai
@@ -41,6 +41,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
@@ -164,6 +165,25 @@ def _state_path(ticket_id: str) -> Path:
     return STATE_DIR / f"{ticket_id}.json"
 
 
+def _status_path(ticket_id: str) -> Path:
+    return STATE_DIR / f"{ticket_id}.status.json"
+
+
+def write_status(ticket_id: str, step_n: int, label: str, phase: str = "running",
+                 elapsed: float | None = None) -> None:
+    """Write a machine-readable status snapshot for external polling."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    _status_path(ticket_id).write_text(json.dumps({
+        "ticket_id": ticket_id,
+        "step": step_n,
+        "of": TOTAL_STEPS,
+        "label": label,
+        "phase": phase,          # running | done | failed
+        "elapsed_sec": round(elapsed, 1) if elapsed is not None else None,
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+    }, indent=2))
+
+
 def load_state(ticket_id: str) -> dict:
     p = _state_path(ticket_id)
     if p.exists():
@@ -188,16 +208,35 @@ def clear_state(ticket_id: str) -> None:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def step(n: int, msg: str) -> None:
+_step_start: float = 0.0
+_current_ticket: str = ""
+
+
+def step(n: int, msg: str, ticket_id: str = "") -> None:
+    global _step_start, _current_ticket
+    _step_start = time.monotonic()
+    _current_ticket = ticket_id or _current_ticket
     print(f"\n── Step {n}/{TOTAL_STEPS} — {msg}", flush=True)
+    if _current_ticket:
+        write_status(_current_ticket, n, msg, phase="running")
 
 
 def skip(n: int, msg: str) -> None:
     print(f"\n── Step {n}/{TOTAL_STEPS} — {msg} [skipped — already done]", flush=True)
 
 
+def step_done(n: int, msg: str) -> None:
+    """Call after a step completes to log elapsed time and update status."""
+    elapsed = time.monotonic() - _step_start
+    print(f"  ✓ done in {elapsed:.0f}s", flush=True)
+    if _current_ticket:
+        write_status(_current_ticket, n, msg, phase="done", elapsed=elapsed)
+
+
 def fail(msg: str) -> None:
     print(f"\nFAIL: {msg}", file=sys.stderr)
+    if _current_ticket:
+        write_status(_current_ticket, 0, msg, phase="failed")
     sys.exit(1)
 
 
@@ -438,8 +477,22 @@ def prompt_initial(ticket_id: str) -> str:
         f"The branch must start with 'feature/{ticket_id}' and include a short kebab-case "
         f"slug derived from the ticket title "
         f"(e.g. feature/{ticket_id.lower()}-per-station-backdoor-routing). "
-        "Implement the story fully. Write or update tests if the codebase has them. "
-        "When done, output a concise paragraph summarising what you changed and why. "
+        "Implement the story. Write or update tests if the codebase has them. "
+        "\n\n"
+        "IMPORTANT — keep the diff small and focused:\n"
+        "- Target ≤500 changed lines. If you find yourself touching more than ~3 files "
+        "outside the story's stated scope, stop and reconsider.\n"
+        "- Do NOT fix pre-existing issues, refactor surrounding code, or add features "
+        "beyond what the story explicitly requires. Those belong in separate stories.\n"
+        "- If the story's acceptance criteria genuinely require >500 lines to implement "
+        "correctly, implement only the smallest complete, mergeable slice and call out "
+        "in your summary what was deferred and why. Do not silently expand scope.\n"
+        "- If you discover a split signal mid-implementation (e.g. the story touches "
+        "multiple language runtimes, or requires a new domain type AND all its downstream "
+        "consumers), flag it explicitly in your summary so a follow-on story can be filed.\n"
+        "\n"
+        "When done, output a concise paragraph summarising what you changed, why, "
+        "and — if scope was trimmed — what was intentionally deferred. "
         "Do NOT commit — the orchestrator will commit after this step."
     )
 
@@ -507,14 +560,60 @@ def prompt_push_pr(ticket_id: str, base: str, summary: str) -> str:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def cmd_status(ticket_id: str) -> None:
+    """Print current pipeline status for a ticket."""
+    sp = _status_path(ticket_id)
+    cp = _state_path(ticket_id)
+    if sp.exists():
+        s = json.loads(sp.read_text())
+        phase = s.get("phase", "?")
+        icon = {"running": "⏳", "done": "✓", "failed": "✗"}.get(phase, "?")
+        elapsed = f"  ({s['elapsed_sec']}s)" if s.get("elapsed_sec") else ""
+        print(f"{icon} {ticket_id}: Step {s['step']}/{s['of']} — {s['label']}{elapsed}")
+        print(f"   phase={phase}  updated={s.get('updated_at','?')}")
+    elif cp.exists():
+        state = json.loads(cp.read_text())
+        done = sorted(state.get("completed", []))
+        print(f"✓ {ticket_id}: checkpoint exists, steps done: {done}")
+    else:
+        print(f"? {ticket_id}: no status or checkpoint found")
+
+
+def cmd_review(tid: str, repo: str, base: str, model: str) -> None:
+    """Run a single Copilot model's review of the branch diff and print findings.
+
+    Stateless: the reviewer sees only the diff, the changed-file contents, and the
+    repo's AGENTS.md review instructions — never prior review text — preserving the
+    blind-review property. This is the building block for the session-driven cork
+    flow: the active Claude session implements + applies fixes (with full codebase
+    context), and calls this once per model to fetch an outside model's findings.
+    """
+    char_budget = startup_checks([model])
+    instructions, instructions_path = load_agent_instructions(repo)
+    if instructions_path:
+        print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
+    diff = git_diff_branch(repo, base)
+    if not diff.strip():
+        fail(f"No diff vs {base} — nothing to review.")
+    files = changed_files_branch(repo, base)
+    # Reuse the checkpoint summary if one was seeded; otherwise a minimal label.
+    # The reviewer's signal is the diff + files + AGENTS.md, not this string.
+    story = load_state(tid).get("summary") or f"Review the branch changes for {tid}."
+    print(f"\n── Review: {model} — {len(files)} files, {len(diff.splitlines())} diff lines vs {base}\n",
+          flush=True)
+    findings = copilot_review(model, instructions, story, diff, files, char_budget)
+    print(findings)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Linear story → Claude review → GPT review → Gemini review"
     )
     parser.add_argument("ticket_id",  help="Linear ticket ID, e.g. ENG-123")
-    parser.add_argument("repo_path",  help="Absolute path to target git repo")
-    parser.add_argument("--base-branch", default="develop",
-                        help="Branch to diff against (default: develop)")
+    parser.add_argument("repo_path",  nargs="?", default=None,
+                        help="Absolute path to target git repo (omit with --status)")
+    parser.add_argument("--base-branch", default="origin/develop",
+                        help="Branch to diff against (default: origin/develop)")
     parser.add_argument("--start-from", type=int, metavar="N",
                         help="Force resume from step N (auto-detected from checkpoint if omitted)")
     parser.add_argument("--reset", action="store_true",
@@ -523,7 +622,22 @@ def main() -> None:
                         help="Seed checkpoint from existing branch commits and exit. "
                              "Use when implementation is already done — then re-run "
                              "with --start-from 2 to begin reviews.")
+    parser.add_argument("--status", action="store_true",
+                        help="Print current pipeline status for ticket_id and exit.")
+    parser.add_argument("--review-model", metavar="MODEL",
+                        help="Review-only mode: run ONE Copilot model's review of the "
+                             "branch diff, print findings to stdout, and exit. Stateless "
+                             "(reviewer sees only diff + changed files + AGENTS.md). Used by "
+                             "the session-driven cork skill, where the active Claude session "
+                             "does the implementing and fixing instead of a headless subprocess.")
     args = parser.parse_args()
+
+    if args.status:
+        cmd_status(args.ticket_id)
+        return
+
+    if not args.repo_path:
+        fail("repo_path is required (omit only with --status)")
 
     tid  = args.ticket_id
     repo = str(Path(args.repo_path).expanduser().resolve())
@@ -531,6 +645,10 @@ def main() -> None:
 
     if not Path(repo).is_dir():
         fail(f"repo_path does not exist: {repo}")
+
+    if args.review_model:
+        cmd_review(tid, repo, base, args.review_model)
+        return
 
     if args.reset:
         clear_state(tid)
@@ -586,11 +704,12 @@ def main() -> None:
 
     # ── Step 1: Implement ────────────────────────────────────────────────────
     if start_from <= 1:
-        step(1, f"Claude Code: implement {tid}")
+        step(1, f"Claude Code: implement {tid}", ticket_id=tid)
         summary = run_claude(prompt_initial(tid), cwd=repo)
         print(f"  Summary: {summary[:200]}…")
         git_commit_all(repo, f"feat: implement {tid}")
         mark_done(tid, 1, summary=summary, base=base, repo=repo)
+        step_done(1, f"Claude Code: implement {tid}")
     else:
         skip(1, f"Claude Code: implement {tid}")
 
@@ -625,10 +744,11 @@ def main() -> None:
 
     # ── Step 2: Claude multi-agent review ────────────────────────────────────
     if start_from <= 2:
-        step(2, "Claude Code: multi-agent review")
+        step(2, "Claude Code: multi-agent review", ticket_id=tid)
         claude_review = run_claude(prompt_claude_review(base, instructions_path), cwd=repo)
         print(f"  {claude_review[:300]}…")
         mark_done(tid, 2, claude_review=claude_review)
+        step_done(2, "Claude Code: multi-agent review")
     else:
         skip(2, "Claude Code: multi-agent review")
         claude_review = state.get("claude_review", "")
@@ -637,24 +757,26 @@ def main() -> None:
 
     # ── Step 3: Apply Claude findings ────────────────────────────────────────
     if start_from <= 3:
-        step(3, "Claude Code: apply Claude review findings")
+        step(3, "Claude Code: apply Claude review findings", ticket_id=tid)
         fix_out = run_claude(prompt_fix(summary, base, claude_review, tid), cwd=repo)
         fix_notes.append(("Step 3 — Claude review fixes", fix_out))
         git_commit_all(repo, f"fix: apply Claude agent review [{tid}]")
         mark_done(tid, 3, fix_note_3=fix_out)
+        step_done(3, "Claude Code: apply Claude review findings")
     else:
         skip(3, "Claude Code: apply Claude review findings")
         fix_notes.append(("Step 3 — Claude review fixes", state.get("fix_note_3", "")))
 
     # ── Step 4: GPT blind review ─────────────────────────────────────────────
     if start_from <= 4:
-        step(4, f"Blind review: {MODELS[0]} via Copilot")
+        step(4, f"Blind review: {MODELS[0]} via Copilot", ticket_id=tid)
         diff  = git_diff_branch(repo, base)
         files = changed_files_branch(repo, base)
         print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {MODELS[0]}")
         gpt_review = copilot_review(MODELS[0], instructions, summary, diff, files, char_budget)
         print(f"  {gpt_review[:300]}…")
         mark_done(tid, 4, gpt_review=gpt_review)
+        step_done(4, f"Blind review: {MODELS[0]} via Copilot")
     else:
         skip(4, f"Blind review: {MODELS[0]}")
         gpt_review = state.get("gpt_review", "")
@@ -663,24 +785,26 @@ def main() -> None:
 
     # ── Step 5: Apply GPT findings ───────────────────────────────────────────
     if start_from <= 5:
-        step(5, f"Claude Code: apply {MODELS[0]} findings")
+        step(5, f"Claude Code: apply {MODELS[0]} findings", ticket_id=tid)
         fix_out = run_claude(prompt_fix(summary, base, gpt_review, tid), cwd=repo)
         fix_notes.append((f"Step 5 — {MODELS[0]} fixes", fix_out))
         git_commit_all(repo, f"fix: apply {MODELS[0]} review [{tid}]")
         mark_done(tid, 5, fix_note_5=fix_out)
+        step_done(5, f"Claude Code: apply {MODELS[0]} findings")
     else:
         skip(5, f"Claude Code: apply {MODELS[0]} findings")
         fix_notes.append((f"Step 5 — {MODELS[0]} fixes", state.get("fix_note_5", "")))
 
     # ── Step 6: Gemini blind review ──────────────────────────────────────────
     if start_from <= 6:
-        step(6, f"Blind review: {MODELS[1]} via Copilot")
+        step(6, f"Blind review: {MODELS[1]} via Copilot", ticket_id=tid)
         diff  = git_diff_branch(repo, base)
         files = changed_files_branch(repo, base)
         print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {MODELS[1]}")
         gemini_review = copilot_review(MODELS[1], instructions, summary, diff, files, char_budget)
         print(f"  {gemini_review[:300]}…")
         mark_done(tid, 6, gemini_review=gemini_review)
+        step_done(6, f"Blind review: {MODELS[1]} via Copilot")
     else:
         skip(6, f"Blind review: {MODELS[1]}")
         gemini_review = state.get("gemini_review", "")
@@ -689,24 +813,26 @@ def main() -> None:
 
     # ── Step 7: Apply Gemini findings ───────────────────────────────────────
     if start_from <= 7:
-        step(7, f"Claude Code: apply {MODELS[1]} findings")
+        step(7, f"Claude Code: apply {MODELS[1]} findings", ticket_id=tid)
         fix_out = run_claude(prompt_fix(summary, base, gemini_review, tid), cwd=repo)
         fix_notes.append((f"Step 7 — {MODELS[1]} fixes", fix_out))
         git_commit_all(repo, f"fix: apply {MODELS[1]} review [{tid}]")
         mark_done(tid, 7, fix_note_7=fix_out)
+        step_done(7, f"Claude Code: apply {MODELS[1]} findings")
     else:
         skip(7, f"Claude Code: apply {MODELS[1]} findings")
         fix_notes.append((f"Step 7 — {MODELS[1]} fixes", state.get("fix_note_7", "")))
 
     # ── Step 8: Claude Opus blind review ────────────────────────────────────
     if start_from <= 8:
-        step(8, f"Blind review: {MODELS[2]} via Copilot")
+        step(8, f"Blind review: {MODELS[2]} via Copilot", ticket_id=tid)
         diff  = git_diff_branch(repo, base)
         files = changed_files_branch(repo, base)
         print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {MODELS[2]}")
         opus_review = copilot_review(MODELS[2], instructions, summary, diff, files, char_budget)
         print(f"  {opus_review[:300]}…")
         mark_done(tid, 8, opus_review=opus_review)
+        step_done(8, f"Blind review: {MODELS[2]} via Copilot")
     else:
         skip(8, f"Blind review: {MODELS[2]}")
         opus_review = state.get("opus_review", "")
@@ -715,11 +841,12 @@ def main() -> None:
 
     # ── Step 9: Apply Claude Opus findings + save to mem0 ───────────────────
     if start_from <= 9:
-        step(9, f"Claude Code: apply {MODELS[2]} findings + save to mem0")
+        step(9, f"Claude Code: apply {MODELS[2]} findings + save to mem0", ticket_id=tid)
         fix_out = run_claude(prompt_fix(summary, base, opus_review, tid, is_final=True), cwd=repo)
         fix_notes.append((f"Step 9 — {MODELS[2]} fixes", fix_out))
         git_commit_all(repo, f"fix: apply {MODELS[2]} review [{tid}]")
         mark_done(tid, 9, fix_note_9=fix_out)
+        step_done(9, f"Claude Code: apply {MODELS[2]} findings + save to mem0")
     else:
         skip(9, f"Claude Code: apply {MODELS[2]} findings")
         fix_notes.append((f"Step 9 — {MODELS[2]} fixes", state.get("fix_note_9", "")))
@@ -736,6 +863,7 @@ def main() -> None:
         ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo, text=True
     ).strip()
 
+    write_status(tid, TOTAL_STEPS, "Pipeline complete", phase="done")
     print(f"\n── Done ──────────────────────────────────────────────────")
     print(f"Branch:     {branch}")
     print(f"Base:       {base}")
