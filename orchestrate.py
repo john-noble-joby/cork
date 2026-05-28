@@ -28,9 +28,9 @@ Usage:
     python orchestrate.py ENG-123 ~/dev/edge-fmt --base-branch origin/develop
 
 Requirements:
-    pip install openai
-    opencode authenticated with GitHub Copilot
-    (token read from ~/.local/share/opencode/auth.json)
+    Python 3.10+ stdlib only — no third-party packages.
+    A GitHub Copilot token (see `login` subcommand, CORK_COPILOT_TOKEN, or
+    opencode's auth.json).
 """
 
 import argparse
@@ -45,8 +45,6 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-
-from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -114,6 +112,29 @@ def _copilot_token() -> str:
         f"  • authenticate opencode with GitHub Copilot ({_OPENCODE_AUTH})."
     )
 
+
+def _copilot_headers() -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {_copilot_token()}",
+        "x-initiator": "user",
+        "Openai-Intent": "conversation-edits",
+        "User-Agent": "opencode/0.1.0",
+    }
+
+
+def _copilot_chat(payload: dict, timeout: int = 300) -> dict:
+    # POST to the OpenAI-compatible Copilot /chat/completions endpoint and return
+    # the parsed JSON. HTTPError / URLError / TimeoutError propagate unhandled so
+    # callers can classify them for retry-vs-fail (see copilot_review).
+    req = urllib.request.Request(
+        f"{COPILOT_BASE}/chat/completions",
+        data=json.dumps(payload).encode(),
+        headers={**_copilot_headers(), "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
 # ── Startup checks ───────────────────────────────────────────────────────────
 
 def startup_checks(models: list[str]) -> int:
@@ -124,17 +145,10 @@ def startup_checks(models: list[str]) -> int:
     4. Return a char budget derived from the minimum max_prompt_tokens across models.
     Fails fast with a clear message if any model is misconfigured.
     """
-    token = _copilot_token()
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "x-initiator": "user",
-        "Openai-Intent": "conversation-edits",
-        "User-Agent": "opencode/0.1.0",
-    }
-
     print("Validating review models…")
     try:
-        req = urllib.request.Request(f"{COPILOT_BASE}/models", headers=headers)
+        req = urllib.request.Request(f"{COPILOT_BASE}/models",
+                                     headers=_copilot_headers())
         with urllib.request.urlopen(req, timeout=15) as r:
             model_list = json.loads(r.read()).get("data", [])
     except Exception as e:
@@ -142,13 +156,6 @@ def startup_checks(models: list[str]) -> int:
         model_list = []
 
     model_map = {m["id"]: m for m in model_list}
-
-    client = OpenAI(
-        base_url=COPILOT_BASE,
-        api_key=token,
-        default_headers={k: v for k, v in headers.items()
-                         if k != "Authorization"},
-    )
 
     min_prompt_tokens = 48_000  # conservative fallback
     for model in models:
@@ -163,13 +170,13 @@ def startup_checks(models: list[str]) -> int:
                 f"  → Update MODELS in orchestrate.py"
             )
         try:
-            client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": "ok"}],
-                max_tokens=1,
-            )
-        except APIStatusError as e:
-            if e.status_code == 400 and "not accessible" in str(e):
+            _copilot_chat({
+                "model": model,
+                "messages": [{"role": "user", "content": "ok"}],
+                "max_tokens": 1,
+            }, timeout=30)
+        except urllib.error.HTTPError as e:
+            if e.code == 400 and "not accessible" in e.read().decode(errors="replace"):
                 fail(
                     f"Model '{model}' does not support /chat/completions.\n"
                     f"  → gpt-5.x and codex models use a different endpoint.\n"
@@ -382,16 +389,6 @@ def copilot_review(model: str, instructions: str,
                    story: str, diff: str, files: dict[str, str],
                    char_budget: int = _DEFAULT_CHAR_BUDGET,
                    max_attempts: int = 3) -> str:
-    client = OpenAI(
-        base_url=COPILOT_BASE,
-        api_key=_copilot_token(),
-        default_headers={
-            "x-initiator": "user",
-            "Openai-Intent": "conversation-edits",
-            "User-Agent": "opencode/0.1.0",
-        },
-    )
-
     system = (
         instructions
         + "\n\n---\n"
@@ -418,24 +415,26 @@ def copilot_review(model: str, instructions: str,
 
     for attempt in range(max_attempts):
         try:
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[
+            resp = _copilot_chat({
+                "model": model,
+                "messages": [
                     {"role": "system", "content": system},
                     {"role": "user",   "content": user_msg},
                 ],
-            )
-            return resp.choices[0].message.content.strip()
+            })
+            return resp["choices"][0]["message"]["content"].strip()
 
-        except APITimeoutError:
-            _retry_wait(attempt, max_attempts, "timeout")
-        except APIConnectionError:
-            _retry_wait(attempt, max_attempts, "connection error")
-        except APIStatusError as e:
-            if e.status_code in (429, 500, 502, 503, 504):
-                _retry_wait(attempt, max_attempts, f"HTTP {e.status_code}", long=e.status_code == 429)
+        # HTTPError is a subclass of URLError — catch it first.
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 500, 502, 503, 504):
+                _retry_wait(attempt, max_attempts, f"HTTP {e.code}", long=e.code == 429)
             else:
-                fail(f"Copilot API error {e.status_code}: {e.message}")
+                body = e.read().decode(errors="replace")
+                fail(f"Copilot API error {e.code}: {body[:500]}")
+        except TimeoutError:
+            _retry_wait(attempt, max_attempts, "timeout")
+        except urllib.error.URLError as e:
+            _retry_wait(attempt, max_attempts, f"connection error: {e.reason}")
 
     fail(f"Copilot API failed after {max_attempts} attempts")
 

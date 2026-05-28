@@ -52,9 +52,11 @@ Copilot auth comes from `gh auth token` (OS keyring). Claude Code auth comes fro
 ## Running
 
 ```bash
-pip install openai
 python orchestrate.py ENG-123 ~/dev/target-repo
 ```
+
+No third-party dependencies — Python 3.10+ stdlib only (Copilot API calls go
+through `urllib`).
 
 ## What NOT to Do
 

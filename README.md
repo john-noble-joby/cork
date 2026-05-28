@@ -35,9 +35,7 @@ errors, and 5xx responses. Rate-limit (429) responses wait 5× longer.
 
 ## Requirements
 
-```bash
-pip install openai
-```
+No third-party Python packages — Python 3.10+ stdlib only.
 
 - **Claude Code CLI** — authenticated via `~/.claude/` (no extra setup)
 - **A GitHub Copilot token** — unlocks the GPT and Claude review models not available via the `gh` CLI token. Resolved in priority order: `CORK_COPILOT_TOKEN` env var → cork's own `~/.config/cork/auth.json` (`CORK_AUTH_FILE`) → opencode's `~/.local/share/opencode/auth.json`. The easiest way to get one: run `python orchestrate.py login` (GitHub device flow — writes `~/.config/cork/auth.json` for you).
