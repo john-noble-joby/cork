@@ -30,9 +30,19 @@ Iterative GitHub Copilot PR review: request review → poll → fix/push-back ea
 comments or the max is reached. Reviewer login is `Copilot` for requesting,
 `copilot-pull-request-reviewer[bot]` for filtering comments.
 
+## Configuration
+
+`cork` resolves the orchestrator location from the `CORK_HOME` environment variable,
+defaulting to `~/dev/code-orchestrator`. If your clone lives elsewhere, set it once —
+in your shell profile, or in `~/.claude/settings.json`:
+
+```json
+{ "env": { "CORK_HOME": "/path/to/code-orchestrator" } }
+```
+
 ## Notes
 
-- The repo paths in `cork/SKILL.md` are absolute (`/home/john.noble/dev/code-orchestrator`).
-  Adjust them if you clone elsewhere.
 - `cork` requires an authenticated opencode GitHub Copilot token at
-  `~/.local/share/opencode/auth.json` for the `--review-model` calls.
+  `~/.local/share/opencode/auth.json` for the `--review-model` calls. A 401 means
+  the token expired — re-auth opencode with GitHub Copilot. (This is separate from
+  the `gh` CLI auth that `copilot-review-loop` uses for GitHub's hosted PR reviewer.)
