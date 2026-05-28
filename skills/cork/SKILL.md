@@ -1,6 +1,6 @@
 ---
 name: cork
-description: Use when the user says "cork" or "run cork" on a branch — runs a session-driven multi-model review pipeline where the active Claude session implements and applies fixes, calling out to GPT-4o, Gemini, and Opus (via the orchestrate.py --review-model mode) for blind review passes between fixes.
+description: Use when the user says "cork" or "run cork" on a branch — runs a session-driven multi-model review pipeline where the active Claude session implements and applies fixes, calling out to several Copilot-hosted models (GPT-4o, GPT-4.1, Claude Sonnet, Claude Opus via the orchestrate.py --review-model mode) for blind review passes between fixes.
 ---
 
 # Cork — Session-Driven Multi-Model Review Pipeline
@@ -36,7 +36,7 @@ git log origin/develop..HEAD --oneline                  # commits vs base
 ```
 
 If the branch name has no ticket ID, ask for it. Confirm with the user:
-`Cork: {TICKET} | worktree: {PATH} | N commits vs develop — run? (max models default: gpt-4o, gemini-3.1-pro-preview, claude-opus-4.7)`
+`Cork: {TICKET} | worktree: {PATH} | N commits vs develop — run? (model rotation: gpt-4o, gpt-4.1, claude-sonnet-4.5, claude-opus-4.7)`
 
 ### Step 1 — Implement (only if not already done)
 
@@ -46,14 +46,20 @@ If the branch has no commits vs develop, implement the story now (in-session), t
 
 Review your own diff with subagents (dispatch parallel reviewers), apply fixes, commit.
 
-### Steps 3–5 — One blind pass per model
+### Steps 3+ — One blind pass per model
 
-For each model in `gpt-4o`, `gemini-3.1-pro-preview`, `claude-opus-4.7`:
+**Division of labour (do not blur):** each Copilot model is a *read-only reviewer* — it only returns findings on the current diff. It never edits the worktree, never commits, never applies its own suggestions. **You — the active Claude Code session — are the only thing that writes code.** You read each model's findings, decide what's valid, apply the fixes yourself, run tests, and commit. The `--review-model` call is a one-shot, stateless "give me your review of this diff" — nothing more.
+
+Default rotation, one review→fix cycle per model in order: `gpt-4o`, `gpt-4.1`, `claude-sonnet-4.5`, `claude-opus-4.7`. Each cycle is: (1) the model reviews the diff, (2) you apply/reject its findings and commit. Opus last — it's the strongest, so it reviews after the others' fixes have landed.
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 python "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch develop
 ```
+
+This command **only prints the model's review to stdout** — it makes no changes. Applying the findings is your job (next paragraph).
+
+**Model availability (Copilot integrator catalog, as of 2026-05):** Gemini is no longer served to cork's integrator identity (`gemini-3.1-pro-preview`/`gemini-2.5-pro` both fail validation), and `gpt-5.x`/codex use an endpoint cork can't reach. If a model errors with "not found in your Copilot account" or "not accessible", drop it and continue with the rest of the rotation — don't block the run. The other confirmed-available substitutes are `claude-opus-4.5` and `claude-haiku-4.5`. The catalog is gated by the `Copilot-Integration-Id` header, not the token, so it can shift; the rotation above is the current known-good set.
 
 Read the findings from stdout. For each: apply the fix in the worktree (run tests before committing), or push back with reasoning if wrong. Commit after each model's fixes with message `fix: apply {MODEL} review [{TICKET}]`.
 

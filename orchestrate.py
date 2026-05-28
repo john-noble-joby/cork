@@ -52,7 +52,12 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
 CLAUDE         = os.environ.get("CLAUDE_BIN", str(Path.home() / ".local/bin/claude"))
 COPILOT_BASE   = "https://api.githubcopilot.com"
-MODELS         = ["gpt-4o", "gemini-3.1-pro-preview", "claude-opus-4.7"]  # review pass 1, 2, 3
+# Legacy headless pipeline (cmd_run, steps 4/6/8) consumes EXACTLY these three, in order.
+# All confirmed available to cork's Copilot integrator identity (no integration-id spoofing)
+# and reachable on /chat/completions as of 2026-05. Gemini is no longer served to this
+# integrator; gpt-5.x uses a different endpoint. The session-driven cork skill runs its own
+# (richer) rotation via --review-model and does not read this list.
+MODELS         = ["gpt-4o", "gpt-4.1", "claude-opus-4.7"]
 MAX_FILE_LINES = 500
 TOTAL_STEPS    = 9  # 2 steps per model (review + fix) + implement + push/PR
 STATE_DIR      = Path.home() / ".local/share/code-orchestrator"
@@ -168,8 +173,8 @@ def startup_checks(models: list[str]) -> int:
                 fail(
                     f"Model '{model}' does not support /chat/completions.\n"
                     f"  → gpt-5.x and codex models use a different endpoint.\n"
-                    f"  → Working alternatives: gpt-4.1, gpt-4o, "
-                    f"gemini-3.1-pro-preview, claude-sonnet-4.6"
+                    f"  → Working alternatives: gpt-4o, gpt-4.1, "
+                    f"claude-sonnet-4.5, claude-opus-4.7"
                 )
             raise
 

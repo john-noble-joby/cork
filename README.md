@@ -40,27 +40,40 @@ pip install openai
 ```
 
 - **Claude Code CLI** — authenticated via `~/.claude/` (no extra setup)
-- **A GitHub Copilot token** — unlocks Gemini and newer GPT models not available via the `gh` CLI token. Resolved in priority order: `CORK_COPILOT_TOKEN` env var → cork's own `~/.config/cork/auth.json` (`CORK_AUTH_FILE`) → opencode's `~/.local/share/opencode/auth.json`. The easiest way to get one: run `python orchestrate.py login` (GitHub device flow — writes `~/.config/cork/auth.json` for you).
+- **A GitHub Copilot token** — unlocks the GPT and Claude review models not available via the `gh` CLI token. Resolved in priority order: `CORK_COPILOT_TOKEN` env var → cork's own `~/.config/cork/auth.json` (`CORK_AUTH_FILE`) → opencode's `~/.local/share/opencode/auth.json`. The easiest way to get one: run `python orchestrate.py login` (GitHub device flow — writes `~/.config/cork/auth.json` for you).
 - **mem0** running locally at `http://localhost:8888` (for Claude's MCP context)
 
-## Pipeline (7 steps)
+## Pipeline (9 steps)
 
 | Step | Who | What |
 |------|-----|-------|
 | 1 | Claude Code | Fetch Linear story via MCP, search mem0, implement, **commit** |
 | 2 | Claude Code | Multi-agent review of own work using `code-review/AGENTS.md` |
 | 3 | Claude Code | Apply Claude findings, **commit** |
-| 4 | GPT-5.3-Codex | Blind review — sees current code, not Claude's findings |
-| 5 | Claude Code | Apply GPT findings, **commit** |
-| 6 | Gemini 3.1 Pro | Blind review — sees current code, not prior findings |
-| 7 | Claude Code | Apply Gemini findings, save to mem0, **commit** |
+| 4 | GPT-4o | Blind review — sees current code, not Claude's findings |
+| 5 | Claude Code | Apply GPT-4o findings, **commit** |
+| 6 | GPT-4.1 | Blind review — sees current code, not prior findings |
+| 7 | Claude Code | Apply GPT-4.1 findings, **commit** |
+| 8 | Claude Opus 4.7 | Blind review — sees current code, not prior findings |
+| 9 | Claude Code | Apply Opus findings, save to mem0, **commit** |
+
+Finally, Claude Code pushes the branch and opens a PR summarizing what each
+review pass caught.
 
 Each Copilot reviewer gets the full `git diff base..HEAD` plus current file
 contents — enough context to review thoroughly without knowing what prior
 reviewers found. Commits after each fix step give a clear audit trail.
 
 Review models use `code-review/AGENTS.md` if present, falling back to root
-`AGENTS.md` or `.github/AGENTS.md`.
+`AGENTS.md` or `.github/AGENTS.md`. The three blind-review models are the
+`MODELS` list at the top of `orchestrate.py`; they're the set confirmed
+available to cork's Copilot integrator identity (Gemini is no longer served to
+it, and `gpt-5.x`/codex models use an endpoint cork can't reach).
+
+> **Session-driven mode:** the `cork` skill runs a richer, interactive variant
+> where the active Claude Code session does the implementing and fixing and
+> calls `orchestrate.py --review-model MODEL` once per model for a stateless
+> blind review. See `skills/cork/SKILL.md`.
 
 ## Configuration
 
