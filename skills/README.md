@@ -22,7 +22,10 @@ Session-driven multi-model review pipeline. The active Claude session implements
 applies fixes; `orchestrate.py --review-model MODEL` is called once per model
 (rotation: gpt-4o, gpt-4.1, claude-sonnet-4.5, claude-opus-4.7) to fetch blind review
 findings between fix passes. Each review call is stateless — the reviewer sees only the
-diff, changed files, and the repo's `AGENTS.md`.
+diff, changed files, and the repo's `AGENTS.md`. Two modes: **full** ("cork" — implement
++ iterative fixes + PR, sequential passes) and **review-only** ("cork review" — all
+reviewers run in parallel over the same diff, producing one consolidated findings report
+with nothing applied; for reviewing someone else's branch).
 
 ### copilot-review-loop
 Iterative GitHub Copilot PR review: request review → poll → fix/push-back each comment
