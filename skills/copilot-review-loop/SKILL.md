@@ -32,7 +32,7 @@ Then proceed to Step 2.
 
 ```bash
 gh api repos/{owner}/{repo}/pulls/{pr}/requested_reviewers \
-  -X POST -f body='{"reviewers":["copilot-pull-request-reviewer"]}'
+  -X POST -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
 ```
 
 Start the loop:
@@ -56,7 +56,7 @@ Extract: `pr`, `repo`, `max`, `worktree`, `iteration`.
 gh api repos/{repo}/pulls/{pr}/reviews | python3 -c "
 import json, sys
 reviews = json.load(sys.stdin)
-copilot = [r for r in reviews if r['user']['login'] == 'copilot-pull-request-reviewer']
+copilot = [r for r in reviews if r['user']['login'].startswith('copilot-pull-request-reviewer')]
 print(copilot[-1]['state'] if copilot else 'NONE')
 "
 ```
@@ -83,7 +83,7 @@ unresolved = [
     t for t in threads
     if not t['isResolved']
     and t['comments']['nodes']
-    and t['comments']['nodes'][0]['author']['login'] == 'copilot-pull-request-reviewer'
+    and t['comments']['nodes'][0]['author']['login'].startswith('copilot-pull-request-reviewer')
 ]
 for t in unresolved:
     print(t['id'], t['comments']['nodes'][0]['databaseId'])
@@ -128,8 +128,8 @@ Print final summary on stop: iterations run, commits made, PR URL.
 ### 7. Re-request and continue
 
 ```bash
-gh api repos/{repo}/pulls/{pr}/requested_reviewers \
-  -X POST -f body='{"reviewers":["copilot-pull-request-reviewer"]}'
+gh api repos/{owner}/{repo}/pulls/{pr}/requested_reviewers \
+  -X POST -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
 ```
 
 Update loop prompt with `iteration={N+1}` and reschedule.
@@ -143,3 +143,5 @@ Update loop prompt with `iteration={N+1}` and reschedule.
 - **Worktree:** all edits go in the PR's worktree, not the main checkout.
 - **Re-request works** once Copilot has completed a review — same POST endpoint.
 - **Default max:** 3 passes unless the user specifies otherwise.
+- **Copilot's login is `copilot-pull-request-reviewer[bot]`** (display login `Copilot`, type `Bot`). Request it with that exact login, and match submitted reviews / threads with `.startswith('copilot-pull-request-reviewer')` so the `[bot]` suffix (or any future change to it) doesn't break detection.
+- **Reply-POST parsing:** the `pulls/comments/{id}/replies` response can carry extra data or omit keys like `in_reply_to_id` — parse it defensively (`.get(...)`), and treat the `resolveReviewThread` GraphQL mutation as the reliable success signal, not the reply parse.
