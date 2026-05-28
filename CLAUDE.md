@@ -5,19 +5,19 @@
 Serial multi-model coding pipeline that takes a Linear ticket and produces reviewed, fixed code:
 
 1. **Claude Code** fetches the story via Linear MCP, searches mem0 for codebase context, creates a feature branch, implements the story
-2. **GPT-4o** (GitHub Copilot API) reviews the diff and changed files
-3. **Claude Code** applies the review findings
-4. **Gemini** (GitHub Copilot API) reviews the updated diff
-5. **Claude Code** applies final fixes and saves decisions to mem0
+2. **Claude Code** reviews its own diff (multi-agent), then applies the findings
+3. Each blind reviewer in `MODELS` (currently **GPT-4o**, **GPT-4.1**, **Claude Opus 4.7**, via the GitHub Copilot API) reviews the current code state in turn — never prior review text — and **Claude Code** applies each model's findings before the next reviewer runs
+4. **Claude Code** applies the final model's findings and saves decisions to mem0
 
-mem0 and Linear are accessed through Claude Code's existing MCP connections — the Python script never calls those APIs directly.
+Each blind review + fix is its own committed step (9 steps total). mem0 and Linear are accessed through Claude Code's existing MCP connections — the Python script never calls those APIs directly.
 
 ## Architecture
 
 ```
-orchestrate.py          # single entry point, ~130 lines
-docs/plan.md            # design decisions and rationale
+orchestrate.py          # single entry point
+docs/plan.md            # design decisions and rationale (historical record)
 README.md               # usage and setup
+skills/                 # Claude Code skills: cork (session-driven), copilot-review-loop
 ```
 
 No frameworks. No classes. No abstractions beyond what the task requires.
@@ -46,8 +46,12 @@ When the orchestrator runs against a repo, it looks for:
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CLAUDE_BIN` | `~/.local/bin/claude` | Claude Code CLI path |
+| `CORK_HOME` | `~/dev/cork` | Location of this repo (used by the cork skill) |
+| `CORK_COPILOT_TOKEN` | — | Copilot token, used directly (highest priority) |
+| `CORK_AUTH_FILE` | `~/.config/cork/auth.json` | Cork's own Copilot token store |
+| `CORK_COPILOT_CLIENT_ID` | `Iv1.b507a08c87ecfe98` | GitHub OAuth client id for `login` |
 
-Copilot auth comes from `gh auth token` (OS keyring). Claude Code auth comes from `~/.claude/`.
+Copilot auth resolves in priority order: `CORK_COPILOT_TOKEN` → `CORK_AUTH_FILE` (`~/.config/cork/auth.json`, written by `orchestrate.py login`) → opencode's `~/.local/share/opencode/auth.json`. Claude Code auth comes from `~/.claude/`.
 
 ## Running
 
