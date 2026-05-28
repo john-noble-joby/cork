@@ -40,9 +40,24 @@ in your shell profile, or in `~/.claude/settings.json`:
 { "env": { "CORK_HOME": "/path/to/code-orchestrator" } }
 ```
 
-## Notes
+## Copilot token
 
-- `cork` requires an authenticated opencode GitHub Copilot token at
-  `~/.local/share/opencode/auth.json` for the `--review-model` calls. A 401 means
-  the token expired — re-auth opencode with GitHub Copilot. (This is separate from
-  the `gh` CLI auth that `copilot-review-loop` uses for GitHub's hosted PR reviewer.)
+`--review-model` calls the Copilot chat API and resolves its token in priority order:
+
+1. **`CORK_COPILOT_TOKEN`** env var — used directly. Best for CI or a dedicated
+   token; fully decoupled from opencode.
+2. **cork's own auth file** — `CORK_AUTH_FILE` (default `~/.config/cork/auth.json`),
+   JSON of either `{"token": "..."}` or `{"github-copilot": {"refresh": "..."}}`.
+3. **opencode** `~/.local/share/opencode/auth.json` — legacy fallback.
+
+To give cork its own token independent of opencode, either export
+`CORK_COPILOT_TOKEN` or write `~/.config/cork/auth.json`:
+
+```bash
+mkdir -p ~/.config/cork
+echo '{"token": "<your-copilot-token>"}' > ~/.config/cork/auth.json
+chmod 600 ~/.config/cork/auth.json
+```
+
+A 401 means the token expired. This Copilot auth is entirely separate from the
+`gh` CLI auth that `copilot-review-loop` uses for GitHub's hosted PR reviewer.

@@ -55,6 +55,9 @@ MAX_FILE_LINES = 500
 TOTAL_STEPS    = 9  # 2 steps per model (review + fix) + implement + push/PR
 STATE_DIR      = Path.home() / ".local/share/code-orchestrator"
 _OPENCODE_AUTH = Path.home() / ".local/share/opencode/auth.json"
+# cork's own token store (XDG default), overridable with CORK_AUTH_FILE.
+_CORK_AUTH     = Path(os.environ.get("CORK_AUTH_FILE",
+                      str(Path.home() / ".config/cork/auth.json")))
 _DEFAULT_CHAR_BUDGET = 192_000  # fallback if /models fetch fails
 
 REVIEW_SYSTEM = """\
@@ -68,14 +71,38 @@ style consistency with surrounding code, test coverage.\
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 def _copilot_token() -> str:
-    try:
-        data = json.loads(_OPENCODE_AUTH.read_text())
-        return data["github-copilot"]["refresh"]
-    except (KeyError, FileNotFoundError) as e:
-        fail(
-            f"Cannot read opencode Copilot token from {_OPENCODE_AUTH}: {e}\n"
-            "  → Run opencode and authenticate with GitHub Copilot first."
-        )
+    """Resolve the Copilot API token from (in priority order):
+
+    1. CORK_COPILOT_TOKEN env var — the token used directly. Best for CI or a
+       dedicated token; cork is fully decoupled from opencode.
+    2. cork's own auth file (CORK_AUTH_FILE, default ~/.config/cork/auth.json) —
+       JSON with either {"token": "..."} or the opencode shape
+       {"github-copilot": {"refresh": "..."}}.
+    3. opencode's auth.json (legacy fallback) — {"github-copilot": {"refresh"}}.
+    """
+    # 1. Explicit env var.
+    env_tok = os.environ.get("CORK_COPILOT_TOKEN")
+    if env_tok:
+        return env_tok.strip()
+
+    # 2. cork's own auth file, then 3. opencode's — same parse logic.
+    for src in (_CORK_AUTH, _OPENCODE_AUTH):
+        if not src.exists():
+            continue
+        try:
+            data = json.loads(src.read_text())
+        except json.JSONDecodeError as e:
+            fail(f"Cannot parse Copilot token file {src}: {e}")
+        tok = data.get("token") or data.get("github-copilot", {}).get("refresh")
+        if tok:
+            return tok.strip()
+
+    fail(
+        "No Copilot API token found. Set one of:\n"
+        f"  • CORK_COPILOT_TOKEN env var (a Copilot token), or\n"
+        f"  • {_CORK_AUTH} with {{\"token\": \"...\"}}, or\n"
+        f"  • authenticate opencode with GitHub Copilot ({_OPENCODE_AUTH})."
+    )
 
 # ── Startup checks ───────────────────────────────────────────────────────────
 
