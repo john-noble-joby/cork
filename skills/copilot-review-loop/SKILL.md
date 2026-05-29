@@ -32,8 +32,20 @@ Then proceed to Step 2.
 
 ```bash
 gh api repos/{owner}/{repo}/pulls/{pr}/requested_reviewers \
-  -X POST -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
+  -X POST -f 'reviewers[]=copilot-pull-request-reviewer[bot]' -i 2>&1 | head -1
 ```
+
+**Verify the request stuck before polling.** A wrong login (e.g. the display name `Copilot`)
+returns `200 OK` and silently assigns nobody — no error, but `requested_reviewers` stays empty
+and Copilot never reviews. Confirm `201 Created` above, then check Copilot is actually assigned:
+
+```bash
+gh api repos/{owner}/{repo}/pulls/{pr}/requested_reviewers \
+  --jq '.users[].login' | grep -qi copilot && echo OK || echo "NOT REQUESTED — re-check login"
+```
+
+If it didn't stick, you almost certainly used the display name instead of the bot login — re-run
+with `copilot-pull-request-reviewer[bot]`. Don't start the loop until this prints `OK`.
 
 Start the loop:
 
@@ -143,5 +155,5 @@ Update loop prompt with `iteration={N+1}` and reschedule.
 - **Worktree:** all edits go in the PR's worktree, not the main checkout.
 - **Re-request works** once Copilot has completed a review — same POST endpoint.
 - **Default max:** 3 passes unless the user specifies otherwise.
-- **Copilot's login is `copilot-pull-request-reviewer[bot]`** (display login `Copilot`, type `Bot`). Request it with that exact login, and match submitted reviews / threads with `.startswith('copilot-pull-request-reviewer')` so the `[bot]` suffix (or any future change to it) doesn't break detection.
+- **Copilot's login is `copilot-pull-request-reviewer[bot]`** (display login `Copilot`, type `Bot`). Request it with that exact login, and match submitted reviews / threads with `.startswith('copilot-pull-request-reviewer')` so the `[bot]` suffix (or any future change to it) doesn't break detection. **Do not request with the display name `Copilot`** — it returns `200 OK` but silently assigns nobody (confirmed on joby/edge-fmt, 2026-05); only the `[bot]` login returns `201 Created` and actually assigns. Always verify the assignment stuck (Step 2) rather than trusting the POST not to error.
 - **Reply-POST parsing:** the `pulls/comments/{id}/replies` response can carry extra data or omit keys like `in_reply_to_id` — parse it defensively (`.get(...)`), and treat the `resolveReviewThread` GraphQL mutation as the reliable success signal, not the reply parse.
