@@ -111,8 +111,9 @@ Read the comment body and the file + line it references.
 **Fix** — if correct: implement the change in the worktree, run tests, commit, push. Then:
 
 ```bash
-# Reply
-gh api repos/{repo}/pulls/comments/{comment_id}/replies \
+# Reply — the endpoint is PR-scoped; the {pr} number is REQUIRED in the path.
+# Omitting it (repos/{repo}/pulls/comments/{id}/replies) returns 404 Not Found.
+gh api repos/{owner}/{repo}/pulls/{pr}/comments/{comment_id}/replies \
   -X POST -f body="Fixed in {sha} — {brief explanation}"
 
 # Resolve
@@ -156,4 +157,6 @@ Update loop prompt with `iteration={N+1}` and reschedule.
 - **Re-request works** once Copilot has completed a review — same POST endpoint.
 - **Default max:** 3 passes unless the user specifies otherwise.
 - **Copilot's login is `copilot-pull-request-reviewer[bot]`** (display login `Copilot`, type `Bot`). Request it with that exact login, and match submitted reviews / threads with `.startswith('copilot-pull-request-reviewer')` so the `[bot]` suffix (or any future change to it) doesn't break detection. **Do not request with the display name `Copilot`** — it returns `200 OK` but silently assigns nobody (confirmed on joby/edge-fmt, 2026-05); only the `[bot]` login returns `201 Created` and actually assigns. Always verify the assignment stuck (Step 2) rather than trusting the POST not to error.
-- **Reply-POST parsing:** the `pulls/comments/{id}/replies` response can carry extra data or omit keys like `in_reply_to_id` — parse it defensively (`.get(...)`), and treat the `resolveReviewThread` GraphQL mutation as the reliable success signal, not the reply parse.
+- **Reply endpoint is PR-scoped:** use `repos/{owner}/{repo}/pulls/{pr}/comments/{comment_id}/replies` — the `{pr}` number is required. The shorter `repos/{repo}/pulls/comments/{id}/replies` form returns `404 Not Found` (confirmed on joby/edge-fmt, 2026-05).
+- **Reply-POST parsing:** the replies response can carry extra data or omit keys like `in_reply_to_id` — parse it defensively (`.get(...)`), and treat the `resolveReviewThread` GraphQL mutation as the reliable success signal, not the reply parse.
+- **Human comments too:** Copilot is not the only reviewer. After processing Copilot threads, also check for unresolved threads from human reviewers (the `reviewThreads` query without the `copilot-pull-request-reviewer` filter) — those still need a reply + fix/resolve, and the Copilot-only filter will silently skip them.
