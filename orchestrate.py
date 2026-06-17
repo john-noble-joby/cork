@@ -51,11 +51,11 @@ from pathlib import Path
 CLAUDE         = os.environ.get("CLAUDE_BIN", str(Path.home() / ".local/bin/claude"))
 COPILOT_BASE   = "https://api.githubcopilot.com"
 # Legacy headless pipeline (cmd_run, steps 4/6/8) consumes EXACTLY these three, in order.
-# All confirmed available to cork's Copilot integrator identity (no integration-id spoofing)
-# and reachable on /chat/completions as of 2026-05. Gemini is no longer served to this
-# integrator; gpt-5.x uses a different endpoint. The session-driven cork skill runs its own
-# (richer) rotation via --review-model and does not read this list.
-MODELS         = ["gpt-4o", "gpt-4.1", "claude-opus-4.7"]
+# All confirmed available on the (personal) Copilot seat as of 2026-06. gpt-5.x is reached
+# via the /responses endpoint (chat/completions returns 400 for it — cork routes by id, see
+# _uses_responses_api); Gemini is no longer served to this integrator. The session-driven
+# cork skill runs its own (richer) rotation via --review-model and does not read this list.
+MODELS         = ["gpt-5.5", "gpt-4.1", "claude-opus-4.7"]
 MAX_FILE_LINES = 500
 TOTAL_STEPS    = 9  # 2 steps per model (review + fix) + implement + push/PR
 STATE_DIR      = Path.home() / ".local/share/code-orchestrator"
@@ -135,6 +135,53 @@ def _copilot_chat(payload: dict, timeout: int = 300) -> dict:
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 
+
+_RESPONSES_MAX_OUTPUT = 32_000      # ceiling, not a target — reasoning + findings share it
+_RESPONSES_EFFORT     = "medium"    # reasoning effort for gpt-5.x review calls
+
+
+def _uses_responses_api(model: str) -> bool:
+    # gpt-5.x and codex models are gated to the Responses endpoint on Copilot —
+    # /chat/completions returns 400 unsupported_api_for_model for them.
+    return model.startswith("gpt-5") or "codex" in model
+
+
+def _copilot_responses(payload: dict, timeout: int = 300) -> dict:
+    # POST to the Copilot /responses endpoint (Responses API shape: `instructions`
+    # + `input`, not `messages`). Same error-propagation contract as _copilot_chat.
+    req = urllib.request.Request(
+        f"{COPILOT_BASE}/responses",
+        data=json.dumps(payload).encode(),
+        headers={**_copilot_headers(), "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def _extract_chat_text(data: dict) -> str:
+    choices = data.get("choices") or []
+    if not choices:
+        return ""
+    content = choices[0].get("message", {}).get("content")
+    return content.strip() if content else ""
+
+
+def _extract_responses_text(data: dict) -> str:
+    # Copilot's proxy leaves the convenience `output_text` empty, so walk the
+    # output array: skip reasoning items, collect text from message items.
+    flat = data.get("output_text")
+    if isinstance(flat, str) and flat.strip():
+        return flat.strip()
+    parts = []
+    for item in data.get("output", []) or []:
+        if item.get("type") != "message":
+            continue
+        for c in item.get("content", []) or []:
+            if c.get("type") == "output_text" and c.get("text"):
+                parts.append(c["text"])
+    return "".join(parts).strip()
+
 # ── Startup checks ───────────────────────────────────────────────────────────
 
 def startup_checks(models: list[str]) -> int:
@@ -170,18 +217,23 @@ def startup_checks(models: list[str]) -> int:
                 f"  → Update MODELS in orchestrate.py"
             )
         try:
-            _copilot_chat({
-                "model": model,
-                "messages": [{"role": "user", "content": "ok"}],
-                "max_tokens": 1,
-            }, timeout=30)
+            if _uses_responses_api(model):
+                _copilot_responses({
+                    "model": model, "input": "ok", "max_output_tokens": 16,
+                }, timeout=30)
+            else:
+                _copilot_chat({
+                    "model": model,
+                    "messages": [{"role": "user", "content": "ok"}],
+                    "max_tokens": 1,
+                }, timeout=30)
         except urllib.error.HTTPError as e:
             if e.code == 400 and "not accessible" in e.read().decode(errors="replace"):
                 fail(
                     f"Model '{model}' does not support /chat/completions.\n"
-                    f"  → gpt-5.x and codex models use a different endpoint.\n"
-                    f"  → Working alternatives: gpt-4o, gpt-4.1, "
-                    f"claude-sonnet-4.5, claude-opus-4.7"
+                    f"  → gpt-5.x / codex use the Responses endpoint; cork routes them there\n"
+                    f"     automatically (_uses_responses_api), so this 400 means the id is wrong.\n"
+                    f"  → Working alternatives: gpt-4.1, claude-sonnet-4.5, claude-opus-4.7"
                 )
             raise
 
@@ -415,14 +467,35 @@ def copilot_review(model: str, instructions: str,
 
     for attempt in range(max_attempts):
         try:
-            resp = _copilot_chat({
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user",   "content": user_msg},
-                ],
-            })
-            return resp["choices"][0]["message"]["content"].strip()
+            if _uses_responses_api(model):
+                resp = _copilot_responses({
+                    "model": model,
+                    "instructions": system,
+                    "input": user_msg,
+                    "max_output_tokens": _RESPONSES_MAX_OUTPUT,
+                    "reasoning": {"effort": _RESPONSES_EFFORT},
+                })
+                text = _extract_responses_text(resp)
+            else:
+                resp = _copilot_chat({
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user",   "content": user_msg},
+                    ],
+                })
+                text = _extract_chat_text(resp)
+
+            if text:
+                return text
+            # 200 but no usable content (e.g. reasoning consumed the whole output
+            # budget, or an empty completion). Retry, then skip gracefully rather
+            # than crash — one empty reviewer shouldn't sink the run.
+            if attempt < max_attempts - 1:
+                print(f"  → {model} returned empty content, retrying "
+                      f"({attempt + 1}/{max_attempts})")
+                continue
+            return f"[{model} returned no usable content after {max_attempts} attempts — skipped]"
 
         # HTTPError is a subclass of URLError — catch it first.
         except urllib.error.HTTPError as e:
@@ -677,7 +750,7 @@ def cmd_login() -> None:
     fail("Device authorization timed out — re-run `orchestrate.py login`.")
 
 
-def cmd_review(tid: str, repo: str, base: str, model: str) -> None:
+def cmd_review(tid: str, repo: str, base: str, model: str, validate: bool = True) -> None:
     """Run a single Copilot model's review of the branch diff and print findings.
 
     Stateless: the reviewer sees only the diff, the changed-file contents, and the
@@ -686,7 +759,12 @@ def cmd_review(tid: str, repo: str, base: str, model: str) -> None:
     flow: the active Claude session implements + applies fixes (with full codebase
     context), and calls this once per model to fetch an outside model's findings.
     """
-    char_budget = startup_checks([model])
+    if validate:
+        char_budget = startup_checks([model])
+    else:
+        char_budget = _DEFAULT_CHAR_BUDGET
+        print(f"Skipping validation (--skip-validation) — default char budget "
+              f"{char_budget:,} (~{char_budget // 4:,} tokens).")
     instructions, instructions_path = load_agent_instructions(repo)
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
@@ -729,6 +807,12 @@ def main() -> None:
                              "with --start-from 2 to begin reviews.")
     parser.add_argument("--status", action="store_true",
                         help="Print current pipeline status for ticket_id and exit.")
+    parser.add_argument("--skip-validation", action="store_true",
+                        help="Skip startup_checks (the /models fetch + a real test call "
+                             "per model). Each validation call costs a Copilot premium "
+                             "request, so skipping saves quota when firing many parallel "
+                             "--review-model passes. Falls back to a conservative default "
+                             "char budget instead of the live per-model token limits.")
     parser.add_argument("--review-model", metavar="MODEL",
                         help="Review-only mode: run ONE Copilot model's review of the "
                              "branch diff, print findings to stdout, and exit. Stateless "
@@ -752,7 +836,7 @@ def main() -> None:
         fail(f"repo_path does not exist: {repo}")
 
     if args.review_model:
-        cmd_review(tid, repo, base, args.review_model)
+        cmd_review(tid, repo, base, args.review_model, validate=not args.skip_validation)
         return
 
     if args.reset:
@@ -776,7 +860,8 @@ def main() -> None:
         print(f"Run:     python orchestrate.py {tid} {repo} --start-from 2 --base-branch {base}")
         return
 
-    char_budget = startup_checks(MODELS)
+    char_budget = (_DEFAULT_CHAR_BUDGET if args.skip_validation
+                   else startup_checks(MODELS))
 
     state = load_state(tid)
     completed = set(state.get("completed", []))

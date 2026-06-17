@@ -6,7 +6,7 @@ Serial multi-model coding pipeline that takes a Linear ticket and produces revie
 
 1. **Claude Code** fetches the story via Linear MCP, searches mem0 for codebase context, creates a feature branch, implements the story
 2. **Claude Code** reviews its own diff (multi-agent), then applies the findings
-3. Each blind reviewer in `MODELS` (currently **GPT-4o**, **GPT-4.1**, **Claude Opus 4.7**, via the GitHub Copilot API) reviews the current code state in turn — never prior review text — and **Claude Code** applies each model's findings before the next reviewer runs
+3. Each blind reviewer in `MODELS` (currently **GPT-5.5**, **GPT-4.1**, **Claude Opus 4.7**, via the GitHub Copilot API; `gpt-5.x` is routed to Copilot's `/responses` endpoint automatically) reviews the current code state in turn — never prior review text — and **Claude Code** applies each model's findings before the next reviewer runs
 4. **Claude Code** applies the final model's findings and saves decisions to mem0
 
 Each blind review + fix is its own committed step (9 steps total). mem0 and Linear are accessed through Claude Code's existing MCP connections — the Python script never calls those APIs directly.

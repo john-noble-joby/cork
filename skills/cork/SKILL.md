@@ -1,6 +1,6 @@
 ---
 name: cork
-description: Use when the user says "cork" / "run cork" on a branch (full mode — implement, iteratively apply each model's fixes, open a PR) or "cork review" / "review only" / "review this branch without fixing" (review-only mode — run every model's review in parallel and print a consolidated findings report, applying nothing). Session-driven multi-model pipeline where the active Claude session drives several Copilot-hosted models (GPT-4o, GPT-4.1, Claude Sonnet, Claude Opus via orchestrate.py --review-model) for blind reviews.
+description: Use when the user says "cork" / "run cork" on a branch (full mode — implement, iteratively apply each model's fixes, open a PR) or "cork review" / "review only" / "review this branch without fixing" (review-only mode — run every model's review in parallel and print a consolidated findings report, applying nothing). Session-driven multi-model pipeline where the active Claude session drives several Copilot-hosted models (GPT-5.5, GPT-4.1, Claude Sonnet, Claude Opus via orchestrate.py --review-model) for blind reviews.
 ---
 
 # Cork — Session-Driven Multi-Model Review Pipeline
@@ -50,7 +50,7 @@ git log {BASE}..HEAD --oneline                          # commits vs base
 **Ticket ID** — required for full mode (used in commit/PR messages). Optional for review-only: if the branch doesn't match `feature/MXE-…`, proceed without one (the report doesn't need it).
 
 Confirm with the user before running:
-- Full mode: `Cork: {TICKET} | {PATH} | N commits vs {BASE} — implement/fix + PR. Run? (rotation: gpt-4o, gpt-4.1, claude-sonnet-4.5, claude-opus-4.7)`
+- Full mode: `Cork: {TICKET} | {PATH} | N commits vs {BASE} — implement/fix + PR. Run? (rotation: gpt-5.5, gpt-4.1, claude-sonnet-4.5, claude-opus-4.7)`
 - Review-only: `Cork review-only: {BRANCH} | {PATH} | N commits vs {BASE} — parallel reviews → consolidated report, no fixes. Run?`
 
 ## Full mode — implement → fix → PR
@@ -67,7 +67,7 @@ Review your own diff with subagents (dispatch parallel reviewers), apply fixes, 
 
 **Division of labour (do not blur):** each Copilot model is a *read-only reviewer* — it only returns findings on the current diff. It never edits the worktree, never commits, never applies its own suggestions. **You — the active Claude Code session — are the only thing that writes code.** You read each model's findings, decide what's valid, apply the fixes yourself, run tests, and commit. The `--review-model` call is a one-shot, stateless "give me your review of this diff" — nothing more.
 
-Default rotation, one review→fix cycle per model in order: `gpt-4o`, `gpt-4.1`, `claude-sonnet-4.5`, `claude-opus-4.7`. Each cycle is: (1) the model reviews the diff, (2) you apply/reject its findings and commit. Opus last — it's the strongest, so it reviews after the others' fixes have landed.
+Default rotation, one review→fix cycle per model in order: `gpt-5.5`, `gpt-4.1`, `claude-sonnet-4.5`, `claude-opus-4.7`. Each cycle is: (1) the model reviews the diff, (2) you apply/reject its findings and commit. Opus last — it's the strongest, so it reviews after the others' fixes have landed. (`gpt-5.5` is reached via Copilot's `/responses` endpoint; `orchestrate.py` routes it there automatically — nothing to configure.)
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
@@ -76,7 +76,7 @@ python "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --
 
 This command **only prints the model's review to stdout** — it makes no changes. Applying the findings is your job (next paragraph).
 
-**Model availability (Copilot integrator catalog, as of 2026-05):** Gemini is no longer served to cork's integrator identity (`gemini-3.1-pro-preview`/`gemini-2.5-pro` both fail validation), and `gpt-5.x`/codex use an endpoint cork can't reach. If a model errors with "not found in your Copilot account" or "not accessible", drop it and continue with the rest of the rotation — don't block the run. The other confirmed-available substitutes are `claude-opus-4.5` and `claude-haiku-4.5`. The catalog is gated by the `Copilot-Integration-Id` header, not the token, so it can shift; the rotation above is the current known-good set.
+**Model availability (Copilot catalog, as of 2026-06):** `gpt-5.x`/codex are reachable but only via the `/responses` endpoint (`/chat/completions` returns 400) — `orchestrate.py` routes them there automatically by id, so they work in the rotation with no special handling. Gemini is no longer served to this integrator (`gemini-3.1-pro-preview`/`gemini-2.5-pro` fail validation). If a model errors with "not found in your Copilot account" or "not accessible", drop it and continue with the rest of the rotation — don't block the run. Other confirmed-available substitutes: `claude-opus-4.5`, `claude-haiku-4.5`. The catalog is gated by the authenticated **seat's** Copilot plan (see `docs/personal-vs-work-seat.md`), so it can differ per account; hit `/models` for the seat you're on if in doubt.
 
 Read the findings from stdout. For each: apply the fix in the worktree (run tests before committing), or push back with reasoning if wrong. Commit after each model's fixes with message `fix: apply {MODEL} review [{TICKET}]`.
 
@@ -99,14 +99,15 @@ Dispatch concurrently, then collect when all return:
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-for M in gpt-4o gpt-4.1 claude-sonnet-4.5 claude-opus-4.7; do
+for M in gpt-5.5 gpt-4.1 claude-sonnet-4.5 claude-opus-4.7; do
   python "$CORK_HOME/orchestrate.py" "${TICKET:-REVIEW}" {WORKTREE} \
-    --review-model "$M" --base-branch {BASE} > "/tmp/cork-review-$M.txt" 2>&1 &
+    --review-model "$M" --base-branch {BASE} --skip-validation \
+    > "/tmp/cork-review-$M.txt" 2>&1 &
 done
 wait
 ```
 
-Each `--review-model` call is stateless and read-only — it only prints findings. The positional ticket arg isn't used by review output, so any placeholder is fine when there's no ticket. If a model errors with "not found in your Copilot account" or "not accessible", drop it and keep the rest (see *Model availability* under full mode).
+Each `--review-model` call is stateless and read-only — it only prints findings. Pass `--skip-validation` here: every reviewer otherwise fires a per-model validation call (one Copilot premium request each), so skipping it across the parallel fan-out saves ~one request per model. The positional ticket arg isn't used by review output, so any placeholder is fine when there's no ticket. `gpt-5.5` is auto-routed to Copilot's `/responses` endpoint. If a model errors with "not found in your Copilot account" or "not accessible", drop it and keep the rest (see *Model availability* under full mode).
 
 ### R2 — Consolidate into one report
 

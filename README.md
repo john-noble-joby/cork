@@ -48,8 +48,8 @@ No third-party Python packages — Python 3.10+ stdlib only.
 | 1 | Claude Code | Fetch Linear story via MCP, search mem0, implement, **commit** |
 | 2 | Claude Code | Multi-agent review of own work using `code-review/AGENTS.md` |
 | 3 | Claude Code | Apply Claude findings, **commit** |
-| 4 | GPT-4o | Blind review — sees current code, not Claude's findings |
-| 5 | Claude Code | Apply GPT-4o findings, **commit** |
+| 4 | GPT-5.5 | Blind review — sees current code, not Claude's findings |
+| 5 | Claude Code | Apply GPT-5.5 findings, **commit** |
 | 6 | GPT-4.1 | Blind review — sees current code, not prior findings |
 | 7 | Claude Code | Apply GPT-4.1 findings, **commit** |
 | 8 | Claude Opus 4.7 | Blind review — sees current code, not prior findings |
@@ -65,8 +65,10 @@ reviewers found. Commits after each fix step give a clear audit trail.
 Review models use `code-review/AGENTS.md` if present, falling back to root
 `AGENTS.md` or `.github/AGENTS.md`. The three blind-review models are the
 `MODELS` list at the top of `orchestrate.py`; they're the set confirmed
-available to cork's Copilot integrator identity (Gemini is no longer served to
-it, and `gpt-5.x`/codex models use an endpoint cork can't reach).
+available on the Copilot seat. `gpt-5.x`/codex models are reached via Copilot's
+`/responses` endpoint (cork routes them there automatically by id —
+`/chat/completions` returns 400 for them); everything else uses
+`/chat/completions`. Gemini is no longer served to this integrator.
 
 > **Session-driven mode:** the `cork` skill runs a richer, interactive variant
 > where the active Claude Code session does the implementing and fixing and
