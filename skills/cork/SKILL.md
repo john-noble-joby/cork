@@ -7,6 +7,8 @@ description: Use when the user says "cork" / "run cork" on a branch (full mode �
 
 "Cork" = **C**ode **Or**chestrator **R**eview **K**ickoff.
 
+**Version:** 0.4.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
+
 **The active Claude session is the coding agent.** Unlike the legacy headless mode (where `orchestrate.py` spawned `claude --print` subprocesses), here *you* — the session with full codebase + conversation context — do the implementing and fixing. The orchestrator script is used only as a stateless review tool: `--review-model MODEL` returns one outside model's findings on the current branch diff.
 
 ## Two modes
@@ -37,11 +39,15 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 ### Step 0 — Gather context & pick mode
 
 ```bash
+CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
+python "$CORK_HOME/orchestrate.py" --version            # cork version — announce it (see below)
 git rev-parse --abbrev-ref HEAD                         # current branch
 git rev-parse --abbrev-ref HEAD | grep -oP 'MXE-\d+'    # ticket ID, if branch follows convention
 pwd                                                     # worktree path
 git log {BASE}..HEAD --oneline                          # commits vs base
 ```
+
+Capture the `--version` output (e.g. `cork 0.4.0 (a1b2c3d)`) and lead the confirmation line with it, so every run announces exactly which cork the agent is using.
 
 **Mode** — from the user's phrasing: "review only" / "review this branch" / "don't fix" → **review-only mode** (gather context here, then jump to the *Review-only mode* section). Otherwise → **full mode** (the Step 1–6 flow below).
 
@@ -49,9 +55,9 @@ git log {BASE}..HEAD --oneline                          # commits vs base
 
 **Ticket ID** — required for full mode (used in commit/PR messages). Optional for review-only: if the branch doesn't match `feature/MXE-…`, proceed without one (the report doesn't need it).
 
-Confirm with the user before running:
-- Full mode: `Cork: {TICKET} | {PATH} | N commits vs {BASE} — implement/fix + PR. Run? (rotation: gpt-5.5, gpt-4.1, claude-sonnet-4.5, claude-opus-4.7)`
-- Review-only: `Cork review-only: {BRANCH} | {PATH} | N commits vs {BASE} — parallel reviews → consolidated report, no fixes. Run?`
+Confirm with the user before running (lead with the captured `{VERSION}`):
+- Full mode: `Cork {VERSION}: {TICKET} | {PATH} | N commits vs {BASE} — implement/fix + PR. Run? (rotation: gpt-5.5, gpt-4.1, claude-sonnet-4.5, claude-opus-4.7)`
+- Review-only: `Cork {VERSION} review-only: {BRANCH} | {PATH} | N commits vs {BASE} — parallel reviews → consolidated report, no fixes. Run?`
 
 ## Full mode — implement → fix → PR
 

@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Install cork's Claude Code skills into ~/.claude/skills and report versions.
+#
+# orchestrate.py is NOT installed: the skills invoke it via $CORK_HOME
+# (default ~/dev/cork), so it runs from this repo clone directly — a git pull
+# is all it takes to update the script. Only the SKILL.md files are copies that
+# can drift, which is what this script keeps in sync and version-checks.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEST="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
+VERSION="$(tr -d '[:space:]' < "$REPO/VERSION")"
+SKILLS=(cork copilot-review-loop)
+
+echo "Installing cork skills v$VERSION → $DEST"
+echo
+
+rc=0
+for s in "${SKILLS[@]}"; do
+  src="$REPO/skills/$s/SKILL.md"
+  if [ ! -f "$src" ]; then echo "  ✗ $s: missing $src"; rc=1; continue; fi
+
+  # The skill body carries a version stamp so an agent (and you) can tell which
+  # prompt is loaded. Warn if it drifted from VERSION — bump them together.
+  stamp="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' <(grep -m1 'Version:' "$src") || true)"
+  if [ "$stamp" != "$VERSION" ]; then
+    echo "  ⚠ $s: skill stamp '${stamp:-none}' != VERSION '$VERSION' — update the **Version:** line in $src"
+    rc=1
+  fi
+
+  mkdir -p "$DEST/$s"
+  cp -r "$REPO/skills/$s/." "$DEST/$s/"
+  echo "  ✓ $s installed (stamp v${stamp:-?})"
+done
+
+echo
+echo "orchestrate.py: $(python3 "$REPO/orchestrate.py" --version)"
+
+cork_home="${CORK_HOME:-$HOME/dev/cork}"
+if [ "$cork_home" != "$REPO" ]; then
+  echo "  ⚠ CORK_HOME=$cork_home but this repo is $REPO — the skills will run a"
+  echo "    different orchestrate.py than the one just version-checked. Point"
+  echo "    CORK_HOME at this clone, or run install.sh from the clone in use."
+else
+  echo "CORK_HOME: $cork_home ✓ (skills run this repo's orchestrate.py)"
+fi
+
+echo
+if [ "$rc" -eq 0 ]; then echo "Done."; else echo "Completed with warnings."; exit 1; fi

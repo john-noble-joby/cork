@@ -5,6 +5,8 @@ description: Use when the user says to run the Copilot review loop on a branch o
 
 # Copilot Review Loop
 
+**Version:** 0.4.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+
 ## Overview
 
 Runs an iterative Copilot PR review cycle: request review → wait → process every comment (fix or push back) → re-request → repeat up to N times. Stops early if Copilot submits a pass with no comments.

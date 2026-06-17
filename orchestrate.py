@@ -26,6 +26,7 @@ Resume after failure:
 Usage:
     python orchestrate.py <TICKET-ID> <repo-path> [options]
     python orchestrate.py ENG-123 ~/dev/edge-fmt --base-branch origin/develop
+    python orchestrate.py --version        # print "cork X.Y.Z (<git-sha>)"
 
 Requirements:
     Python 3.10+ stdlib only — no third-party packages.
@@ -781,12 +782,31 @@ def cmd_review(tid: str, repo: str, base: str, model: str, validate: bool = True
     print(findings)
 
 
+def _version() -> str:
+    here = Path(__file__).resolve().parent
+    vfile = here / "VERSION"
+    ver = vfile.read_text().strip() if vfile.exists() else "unknown"
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=here, text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+        dirty = subprocess.run(
+            ["git", "diff", "--quiet"], cwd=here,
+        ).returncode != 0
+        return f"cork {ver} ({sha}{'+dirty' if dirty else ''})"
+    except Exception:
+        return f"cork {ver}"
+
+
 def main() -> None:
-    # `login` is a standalone subcommand — no ticket_id, runs the GitHub device
-    # flow to mint cork's own Copilot token. Handle before argparse (which
-    # requires a positional ticket_id).
+    # `login` and `--version` are standalone — no ticket_id, handled before
+    # argparse (which requires a positional ticket_id).
     if len(sys.argv) >= 2 and sys.argv[1] == "login":
         cmd_login()
+        return
+    if len(sys.argv) >= 2 and sys.argv[1] in ("--version", "-V", "version"):
+        print(_version())
         return
 
     parser = argparse.ArgumentParser(

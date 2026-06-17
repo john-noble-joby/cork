@@ -4,12 +4,18 @@ Skills that drive the orchestrator from an interactive Claude Code session.
 
 ## Install
 
-Copy a skill into your personal skills directory (or symlink it):
+Run the installer from the repo root — it copies both skills into
+`~/.claude/skills/`, prints the version, and warns on drift:
 
 ```bash
-cp -r skills/cork ~/.claude/skills/cork
-cp -r skills/copilot-review-loop ~/.claude/skills/copilot-review-loop
+./install.sh
 ```
+
+`orchestrate.py` itself isn't installed: the skills call it via `$CORK_HOME`
+(default `~/dev/cork`), so it runs from this clone directly — `git pull` updates
+it. Only the `SKILL.md` files are copies, which is what `install.sh` keeps in
+sync. Check what's installed any time with `python orchestrate.py --version`
+(also surfaced in the cork skill's Step 0 confirmation line).
 
 Then invoke by phrase in any session:
 - **cork** — "cork" / "run cork on this branch"
