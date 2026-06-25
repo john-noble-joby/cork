@@ -960,7 +960,9 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     if not diff.strip():
         fail(f"No diff vs {base} — nothing to review.")
     files = changed_files_branch(repo, base)
-    story = load_state(tid).get("summary") or f"Review the branch changes for {tid}."
+    _st = load_state(tid)
+    story = (_st.get("done", {}).get("summary") or _st.get("summary")
+             or f"Review the branch changes for {tid}.")
     print(f"\n── Review: {provider}/{model} — {len(files)} files, "
           f"{len(diff.splitlines())} diff lines vs {base}\n", flush=True)
     print(review(provider, model, instructions, story, diff, files, _DEFAULT_CHAR_BUDGET))

@@ -23,7 +23,7 @@ class ClassifyTest(unittest.TestCase):
 
 
 class SelectTest(unittest.TestCase):
-    def test_stops_at_count_and_skips_dead(self, ):
+    def test_stops_at_count_and_skips_dead(self):
         rotation = [
             {"provider": "copilot", "model": "dead1"},
             {"provider": "copilot", "model": "good1"},

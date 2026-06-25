@@ -9,13 +9,17 @@ class TokenTest(unittest.TestCase):
         self.auth = Path(self.tmp.name) / "auth.json"
         self._orig = orchestrate._CORK_AUTH
         orchestrate._CORK_AUTH = self.auth
-        os.environ.pop("OPENAI_API_KEY", None)
-        os.environ.pop("ANTHROPIC_API_KEY", None)
+        # Save prior env values so we restore (not clobber) the developer's shell.
+        self._env = {k: os.environ.pop(k, None)
+                     for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")}
 
     def tearDown(self):
         orchestrate._CORK_AUTH = self._orig
-        os.environ.pop("OPENAI_API_KEY", None)
-        os.environ.pop("ANTHROPIC_API_KEY", None)
+        for k, v in self._env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
         self.tmp.cleanup()
 
     def test_env_var_wins(self):
