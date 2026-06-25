@@ -225,9 +225,9 @@ def _http_post_json(url: str, headers: dict, payload: dict,
 
 
 def _provider_headers(provider: str) -> dict[str, str]:
-    tok = _provider_token(provider)
     if provider == "copilot":
         return _copilot_headers()
+    tok = _provider_token(provider)
     if provider == "openai":
         return {"Authorization": f"Bearer {tok}"}
     if provider == "anthropic":
@@ -302,12 +302,17 @@ def _validate_config(cfg: dict) -> None:
     rotation = cfg.get("rotation")
     if not isinstance(rotation, list) or not rotation:
         fail("config.rotation must be a non-empty list")
+    seen: set[str] = set()
     for entry in rotation:
         if not isinstance(entry, dict) or "provider" not in entry or "model" not in entry:
             fail(f"config.rotation entry needs provider+model: {entry}")
         if entry["provider"] not in PROVIDER_BASE:
             fail(f"unknown provider '{entry['provider']}' "
                  f"(known: {', '.join(PROVIDER_BASE)})")
+        key = f"{entry['provider']}/{entry['model']}"
+        if key in seen:
+            fail(f"duplicate rotation entry: {key}")
+        seen.add(key)
     count = cfg.get("count", 3)
     if not isinstance(count, int) or count < 1:
         fail("config.count must be a positive integer")
@@ -320,6 +325,8 @@ def load_config() -> dict:
         return copy.deepcopy(DEFAULT_CONFIG)
     try:
         cfg = json.loads(CONFIG_PATH.read_text())
+    except OSError as e:
+        fail(f"Cannot read {CONFIG_PATH}: {e}")
     except json.JSONDecodeError as e:
         fail(f"Cannot parse {CONFIG_PATH}: {e}")
     _validate_config(cfg)
@@ -1077,10 +1084,15 @@ def main() -> None:
 
     # ── Load config + v2 checkpoint ───────────────────────────────────────────
     cfg   = load_config()
-    state = load_state(tid)
-    if state.get("version") != 2:
-        if state.get("completed"):
-            print(f"  → stale v1 checkpoint detected for {tid} — starting fresh")
+    if _state_path(tid).exists():
+        state = load_state(tid)
+        if state.get("version") != 2:
+            fail(
+                f"Found an old (pre-v2) checkpoint for {tid} at {_state_path(tid)}. "
+                f"The checkpoint format changed. Re-run with --reset to start fresh "
+                f"(this discards the old in-flight state)."
+            )
+    else:
         state = {"version": 2, "ticket_id": tid, "done": {}}
 
     # Freeze the selected rotation at first run; reuse it on resume.
@@ -1091,6 +1103,8 @@ def main() -> None:
             sel = _eligible_rotation(cfg)[:cfg.get("count", 3)]
         else:
             sel = preflight(_eligible_rotation(cfg), cfg.get("count", 3))
+        if not sel:
+            fail("No eligible models in rotation — check providers.enabled and tokens in config.json/auth.json.")
         state["rotation"] = sel
         mark_done_v2(tid, state)
 

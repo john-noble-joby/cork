@@ -42,6 +42,16 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             orchestrate.load_config()
 
+    def test_duplicate_rotation_fails(self):
+        self.path.write_text(json.dumps({
+            "rotation": [
+                {"provider": "copilot", "model": "gpt-4.1"},
+                {"provider": "copilot", "model": "gpt-4.1"},
+            ],
+        }))
+        with self.assertRaises(SystemExit):
+            orchestrate.load_config()
+
 
 if __name__ == "__main__":
     unittest.main()
