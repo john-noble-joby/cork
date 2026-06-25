@@ -575,14 +575,16 @@ def _openai_compatible_call(provider: str, model: str, system: str,
 
 def _call_and_extract(provider: str, model: str, system: str,
                       user_msg: str) -> tuple[int, str]:
-    # Returns (status, extracted_text). Text is "" if status != 200.
+    # Returns (status, extracted_text) on 200, or (status, raw_body) on non-200.
     if provider == "anthropic":
         status, body = _anthropic_call(model, system, user_msg)
-        text = _extract_anthropic_text(body) if status == 200 else ""
-        return status, text
+        if status == 200:
+            text = _extract_anthropic_text(body)
+            return status, text
+        return status, str(body)
     status, body = _openai_compatible_call(provider, model, system, user_msg)
     if status != 200:
-        return status, ""
+        return status, str(body)
     text = (_extract_responses_text(body) if _uses_responses_api(model)
             else _extract_chat_text(body))
     return status, text
@@ -632,7 +634,7 @@ def review(provider: str, model: str, instructions: str, story: str,
 
 def _retry_wait(attempt: int, max_attempts: int, reason: str, long: bool = False) -> None:
     if attempt == max_attempts - 1:
-        fail(f"Copilot API: {reason} — giving up after {max_attempts} attempts")
+        fail(f"Review API: {reason} — giving up after {max_attempts} attempts")
     wait = (2 ** attempt) * (5 if long else 1)
     print(f"  → {reason}, retrying in {wait}s (attempt {attempt + 1}/{max_attempts})")
     time.sleep(wait)
