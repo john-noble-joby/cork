@@ -32,6 +32,7 @@ git worktree add .worktrees/<branch> -b <branch> origin/develop
 - **Base branch:** `develop` (override with a flag/arg for repos that differ). devit targets the work repos.
 - **Worktree:** `<repo>/.worktrees/<branch>` (git-ignored). All edits happen in the worktree, not the main checkout.
 - **Branch name:** `feature/<TICKET>-<slug>` for features, `bugfix/<TICKET>-<slug>` for bugs. `<slug>` is a short kebab-case derivation of the story title.
+- **Session naming:** Claude Code exposes **no programmatic way** for a skill to rename the running session (`/rename` is a manual slash command only — no tool/hook/setting). So devit can't auto-rename. Instead, after creating the branch it **prints the exact command for the user to paste** — `/rename <TICKET>-<slug>` — so the session is identifiable in the `/resume` picker. Optional; the user runs it (or starts the session with `claude -n <TICKET>-<slug>`).
 
 ### 3. Implement
 - **Decomposable story** → write a quick plan (`writing-plans`) and execute via `subagent-driven-development` (fresh subagent per task, **parallel where tasks are independent**, review gate between). This is the parallelization the user asked for.
