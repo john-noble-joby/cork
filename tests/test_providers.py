@@ -10,10 +10,12 @@ class TokenTest(unittest.TestCase):
         self._orig = orchestrate._CORK_AUTH
         orchestrate._CORK_AUTH = self.auth
         os.environ.pop("OPENAI_API_KEY", None)
+        os.environ.pop("ANTHROPIC_API_KEY", None)
 
     def tearDown(self):
         orchestrate._CORK_AUTH = self._orig
         os.environ.pop("OPENAI_API_KEY", None)
+        os.environ.pop("ANTHROPIC_API_KEY", None)
         self.tmp.cleanup()
 
     def test_env_var_wins(self):

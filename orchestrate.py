@@ -144,16 +144,17 @@ def _copilot_token() -> str:
 
 
 def _resolve_native_token(env_var: str, auth_key: str) -> str:
-    tok = os.environ.get(env_var)
+    tok = os.environ.get(env_var, "").strip()
     if tok:
-        return tok.strip()
+        return tok
     if _CORK_AUTH.exists():
         try:
             data = json.loads(_CORK_AUTH.read_text())
         except json.JSONDecodeError as e:
             fail(f"Cannot parse {_CORK_AUTH}: {e}")
-        if data.get(auth_key):
-            return data[auth_key].strip()
+        val = (data.get(auth_key) or "").strip()
+        if val:
+            return val
     fail(f"No {auth_key} token — set {env_var} or add "
          f'"{auth_key}" to {_CORK_AUTH}.')
 
