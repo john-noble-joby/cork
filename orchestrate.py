@@ -1038,9 +1038,8 @@ def main() -> None:
                         help="Print current pipeline status for ticket_id and exit.")
     parser.add_argument("--skip-validation", action="store_true",
                         help="Bypass preflight probes and use the configured rotation's "
-                             "first `count` entries directly with a conservative default "
-                             "char budget (_DEFAULT_CHAR_BUDGET) instead of live per-model "
-                             "token limits. Saves Copilot quota on repeated runs.")
+                             "first `count` entries directly, with the conservative default "
+                             "char budget. Saves Copilot quota on repeated runs.")
     parser.add_argument("--review-model", metavar="MODEL",
                         help="Review-only mode: run ONE Copilot model's review of the "
                              "branch diff, print findings to stdout, and exit. Stateless "
