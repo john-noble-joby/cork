@@ -53,6 +53,16 @@ class SelectTest(unittest.TestCase):
         finally:
             orchestrate._probe = orig
 
+    def test_auth_halts(self):
+        orig = orchestrate._probe
+        orchestrate._probe = lambda p, m: "auth"
+        try:
+            with self.assertRaises(SystemExit):
+                orchestrate.preflight(
+                    [{"provider": "copilot", "model": "m"}], count=1)
+        finally:
+            orchestrate._probe = orig
+
 
 if __name__ == "__main__":
     unittest.main()
