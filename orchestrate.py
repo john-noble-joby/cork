@@ -590,6 +590,61 @@ def _call_and_extract(provider: str, model: str, system: str,
     return status, text
 
 
+# ── Preflight ────────────────────────────────────────────────────────────────
+
+def _classify_preflight(status: int, body: str) -> str:
+    if status == 200:
+        return "ok"
+    if status in (401, 403):
+        return "auth"
+    low = (body or "").lower()
+    if status == 400 and ("model_not_supported" in low or "not supported" in low):
+        return "model_not_supported"
+    if status == 400 and "not available for integrator" in low:
+        return "integrator_mismatch"
+    return "other"
+
+
+def _probe(provider: str, model: str) -> str:
+    try:
+        status, text = _call_and_extract(provider, model, "", "ok")
+    except (TimeoutError, urllib.error.URLError):
+        return "other"
+    return _classify_preflight(status, text)
+
+
+def preflight(rotation: list[dict], count: int) -> list[dict]:
+    selected: list[dict] = []
+    print(f"Preflight: selecting up to {count} of {len(rotation)} ranked models…",
+          flush=True)
+    for entry in rotation:
+        if len(selected) >= count:
+            break
+        provider, model = entry["provider"], entry["model"]
+        verdict = _probe(provider, model)
+        if verdict == "ok":
+            selected.append({"provider": provider, "model": model})
+            print(f"  ✓ {provider}/{model}")
+        elif verdict == "auth":
+            fail(f"{provider}: auth failed (401/403) — token invalid/expired. "
+                 f"Fix the {provider} token and retry.")
+        else:
+            print(f"  ✗ {provider}/{model} dropped ({verdict})")
+    if not selected:
+        fail("No usable models on this seat — check your config rotation / tokens.")
+    if len(selected) < count:
+        print(f"  ⚠ only {len(selected)}/{count} models available — running with these.")
+    return selected
+
+
+def _split_model_ref(ref: str) -> tuple[str, str]:
+    # "provider/model" or bare "model" (defaults to copilot for back-compat).
+    if "/" in ref:
+        provider, model = ref.split("/", 1)
+        return provider, model
+    return "copilot", ref
+
+
 def review(provider: str, model: str, instructions: str, story: str,
            diff: str, files: dict[str, str],
            char_budget: int = _DEFAULT_CHAR_BUDGET,
@@ -870,21 +925,12 @@ def cmd_login() -> None:
     fail("Device authorization timed out — re-run `orchestrate.py login`.")
 
 
-def cmd_review(tid: str, repo: str, base: str, model: str, validate: bool = True) -> None:
-    """Run a single Copilot model's review of the branch diff and print findings.
-
-    Stateless: the reviewer sees only the diff, the changed-file contents, and the
-    repo's AGENTS.md review instructions — never prior review text — preserving the
-    blind-review property. This is the building block for the session-driven cork
-    flow: the active Claude session implements + applies fixes (with full codebase
-    context), and calls this once per model to fetch an outside model's findings.
-    """
+def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True) -> None:
+    provider, model = _split_model_ref(model_ref)
     if validate:
-        char_budget = startup_checks([model])
-    else:
-        char_budget = _DEFAULT_CHAR_BUDGET
-        print(f"Skipping validation (--skip-validation) — default char budget "
-              f"{char_budget:,} (~{char_budget // 4:,} tokens).")
+        verdict = _probe(provider, model)
+        if verdict != "ok":
+            fail(f"{provider}/{model} not usable on this seat ({verdict}).")
     instructions, instructions_path = load_agent_instructions(repo)
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
@@ -892,13 +938,17 @@ def cmd_review(tid: str, repo: str, base: str, model: str, validate: bool = True
     if not diff.strip():
         fail(f"No diff vs {base} — nothing to review.")
     files = changed_files_branch(repo, base)
-    # Reuse the checkpoint summary if one was seeded; otherwise a minimal label.
-    # The reviewer's signal is the diff + files + AGENTS.md, not this string.
     story = load_state(tid).get("summary") or f"Review the branch changes for {tid}."
-    print(f"\n── Review: {model} — {len(files)} files, {len(diff.splitlines())} diff lines vs {base}\n",
-          flush=True)
-    findings = review("copilot", model, instructions, story, diff, files, char_budget)
-    print(findings)
+    print(f"\n── Review: {provider}/{model} — {len(files)} files, "
+          f"{len(diff.splitlines())} diff lines vs {base}\n", flush=True)
+    print(review(provider, model, instructions, story, diff, files, _DEFAULT_CHAR_BUDGET))
+
+
+def cmd_preflight() -> None:
+    cfg = load_config()
+    selected = preflight(cfg["rotation"], cfg.get("count", 3))
+    for s in selected:
+        print(f"{s['provider']}/{s['model']}")
 
 
 def _version() -> str:
@@ -926,6 +976,15 @@ def main() -> None:
         return
     if len(sys.argv) >= 2 and sys.argv[1] in ("--version", "-V", "version"):
         print(_version())
+        return
+    if len(sys.argv) >= 2 and sys.argv[1] == "config":
+        if len(sys.argv) >= 3 and sys.argv[2] == "init":
+            cmd_config_init()
+        else:
+            cmd_config_show()
+        return
+    if len(sys.argv) >= 2 and sys.argv[1] == "preflight":
+        cmd_preflight()
         return
 
     parser = argparse.ArgumentParser(
