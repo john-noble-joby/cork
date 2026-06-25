@@ -69,6 +69,33 @@ _CORK_AUTH     = Path(os.environ.get("CORK_AUTH_FILE",
 _COPILOT_CLIENT_ID = os.environ.get("CORK_COPILOT_CLIENT_ID", "Iv1.b507a08c87ecfe98")
 _DEFAULT_CHAR_BUDGET = 192_000  # fallback if /models fetch fails
 
+CONFIG_PATH = Path(os.environ.get("CORK_CONFIG_FILE",
+                   str(Path.home() / ".config/cork/config.json")))
+
+PROVIDER_BASE = {
+    "copilot":   "https://api.githubcopilot.com",
+    "openai":    "https://api.openai.com/v1",
+    "anthropic": "https://api.anthropic.com",
+}
+
+DEFAULT_CONFIG = {
+    "version": 1,
+    "count": 3,
+    "providers": {
+        "copilot":   {"enabled": True},
+        "openai":    {"enabled": False},
+        "anthropic": {"enabled": False},
+    },
+    "rotation": [
+        {"provider": "copilot", "model": "gpt-5.5"},
+        {"provider": "copilot", "model": "claude-opus-4.7"},
+        {"provider": "copilot", "model": "gpt-4.1"},
+        {"provider": "copilot", "model": "gemini-3.1-pro-preview"},
+        {"provider": "copilot", "model": "claude-sonnet-4.6"},
+        {"provider": "copilot", "model": "claude-haiku-4.5"},
+    ],
+}
+
 REVIEW_SYSTEM = """\
 You are a senior code reviewer. For each issue output exactly:
 FILE: <path> | LINE: <n> | ISSUE: <description> | FIX: <suggestion>
@@ -182,6 +209,49 @@ def _extract_responses_text(data: dict) -> str:
             if c.get("type") == "output_text" and c.get("text"):
                 parts.append(c["text"])
     return "".join(parts).strip()
+
+
+# ── Config ──────────────────────────────────────────────────────────────────
+
+def _validate_config(cfg: dict) -> None:
+    rotation = cfg.get("rotation")
+    if not isinstance(rotation, list) or not rotation:
+        fail("config.rotation must be a non-empty list")
+    for entry in rotation:
+        if not isinstance(entry, dict) or "provider" not in entry or "model" not in entry:
+            fail(f"config.rotation entry needs provider+model: {entry}")
+        if entry["provider"] not in PROVIDER_BASE:
+            fail(f"unknown provider '{entry['provider']}' "
+                 f"(known: {', '.join(PROVIDER_BASE)})")
+    count = cfg.get("count", 3)
+    if not isinstance(count, int) or count < 1:
+        fail("config.count must be a positive integer")
+
+
+def load_config() -> dict:
+    if not CONFIG_PATH.exists():
+        print(f"  ⚠ no {CONFIG_PATH}; using built-in default — run "
+              f"`orchestrate.py config init` to customize", flush=True)
+        return DEFAULT_CONFIG
+    try:
+        cfg = json.loads(CONFIG_PATH.read_text())
+    except json.JSONDecodeError as e:
+        fail(f"Cannot parse {CONFIG_PATH}: {e}")
+    _validate_config(cfg)
+    return cfg
+
+
+def cmd_config_init() -> None:
+    if CONFIG_PATH.exists():
+        print(f"{CONFIG_PATH} already exists — leaving it untouched.")
+        return
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(json.dumps(DEFAULT_CONFIG, indent=2) + "\n")
+    print(f"Wrote starter config to {CONFIG_PATH} — edit `rotation`/`count` to taste.")
+
+
+def cmd_config_show() -> None:
+    print(json.dumps(load_config(), indent=2))
 
 # ── Startup checks ───────────────────────────────────────────────────────────
 
