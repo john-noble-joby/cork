@@ -178,18 +178,52 @@ def _copilot_headers() -> dict[str, str]:
     }
 
 
-def _copilot_chat(payload: dict, timeout: int = 300) -> dict:
-    # POST to the OpenAI-compatible Copilot /chat/completions endpoint and return
-    # the parsed JSON. HTTPError / URLError / TimeoutError propagate unhandled so
-    # callers can classify them for retry-vs-fail (see copilot_review).
+def _http_post_json(url: str, headers: dict, payload: dict,
+                    timeout: int = 300) -> tuple[int, object]:
+    # Returns (status, parsed-json) on 2xx, (status, body-text) on HTTP error.
+    # Transport failures (timeout, connection) raise for the caller's retry loop.
     req = urllib.request.Request(
-        f"{COPILOT_BASE}/chat/completions",
-        data=json.dumps(payload).encode(),
-        headers={**_copilot_headers(), "Content-Type": "application/json"},
-        method="POST",
+        url, data=json.dumps(payload).encode(),
+        headers={**headers, "Content-Type": "application/json"}, method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode(errors="replace")
+
+
+def _provider_headers(provider: str) -> dict[str, str]:
+    tok = _provider_token(provider)
+    if provider == "copilot":
+        return _copilot_headers()
+    if provider == "openai":
+        return {"Authorization": f"Bearer {tok}"}
+    if provider == "anthropic":
+        return {"x-api-key": tok, "anthropic-version": "2023-06-01"}
+    fail(f"unknown provider: {provider}")
+
+
+def _anthropic_call(model: str, system: str, user_msg: str,
+                    max_tokens: int = 8000, timeout: int = 300) -> tuple[int, object]:
+    return _http_post_json(
+        f"{PROVIDER_BASE['anthropic']}/v1/messages",
+        _provider_headers("anthropic"),
+        {"model": model, "max_tokens": max_tokens, "system": system,
+         "messages": [{"role": "user", "content": user_msg}]},
+        timeout=timeout,
+    )
+
+
+def _extract_anthropic_text(data: dict) -> str:
+    parts = [b["text"] for b in data.get("content", []) or []
+             if b.get("type") == "text" and b.get("text")]
+    return "".join(parts).strip()
+
+
+def _copilot_chat(payload: dict, timeout: int = 300) -> tuple[int, object]:
+    return _http_post_json(f"{COPILOT_BASE}/chat/completions",
+                           _copilot_headers(), payload, timeout)
 
 
 _RESPONSES_MAX_OUTPUT = 32_000      # ceiling, not a target — reasoning + findings share it
@@ -202,17 +236,9 @@ def _uses_responses_api(model: str) -> bool:
     return model.startswith("gpt-5") or "codex" in model
 
 
-def _copilot_responses(payload: dict, timeout: int = 300) -> dict:
-    # POST to the Copilot /responses endpoint (Responses API shape: `instructions`
-    # + `input`, not `messages`). Same error-propagation contract as _copilot_chat.
-    req = urllib.request.Request(
-        f"{COPILOT_BASE}/responses",
-        data=json.dumps(payload).encode(),
-        headers={**_copilot_headers(), "Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read())
+def _copilot_responses(payload: dict, timeout: int = 300) -> tuple[int, object]:
+    return _http_post_json(f"{COPILOT_BASE}/responses",
+                           _copilot_headers(), payload, timeout)
 
 
 def _extract_chat_text(data: dict) -> str:
@@ -315,26 +341,20 @@ def startup_checks(models: list[str]) -> int:
                 f"  Available: {available}\n"
                 f"  → Update MODELS in orchestrate.py"
             )
-        try:
-            if _uses_responses_api(model):
-                _copilot_responses({
-                    "model": model, "input": "ok", "max_output_tokens": 16,
-                }, timeout=30)
-            else:
-                _copilot_chat({
-                    "model": model,
-                    "messages": [{"role": "user", "content": "ok"}],
-                    "max_tokens": 1,
-                }, timeout=30)
-        except urllib.error.HTTPError as e:
-            if e.code == 400 and "not accessible" in e.read().decode(errors="replace"):
-                fail(
-                    f"Model '{model}' does not support /chat/completions.\n"
-                    f"  → gpt-5.x / codex use the Responses endpoint; cork routes them there\n"
-                    f"     automatically (_uses_responses_api), so this 400 means the id is wrong.\n"
-                    f"  → Working alternatives: gpt-4.1, claude-sonnet-4.5, claude-opus-4.7"
-                )
-            raise
+        if _uses_responses_api(model):
+            status, body = _copilot_responses(
+                {"model": model, "input": "ok", "max_output_tokens": 16}, timeout=30)
+        else:
+            status, body = _copilot_chat(
+                {"model": model, "messages": [{"role": "user", "content": "ok"}],
+                 "max_tokens": 1}, timeout=30)
+        if status == 400 and "not accessible" in str(body):
+            fail(f"Model '{model}' does not support /chat/completions.\n"
+                 f"  → gpt-5.x / codex use the Responses endpoint; cork routes them there\n"
+                 f"     automatically (_uses_responses_api), so this 400 means the id is wrong.\n"
+                 f"  → Working alternatives: gpt-4.1, claude-sonnet-4.5, claude-opus-4.7")
+        elif status >= 400:
+            fail(f"Model '{model}' validation failed: HTTP {status}: {str(body)[:300]}")
 
         limit = (
             model_map.get(model, {})
@@ -536,79 +556,78 @@ def _budget_files(files: dict[str, str], budget_chars: int) -> tuple[str, int]:
     return block, len(included)
 
 
-def copilot_review(model: str, instructions: str,
-                   story: str, diff: str, files: dict[str, str],
-                   char_budget: int = _DEFAULT_CHAR_BUDGET,
-                   max_attempts: int = 3) -> str:
+def _openai_compatible_call(provider: str, model: str, system: str,
+                            user_msg: str, timeout: int = 300) -> tuple[int, object]:
+    base = PROVIDER_BASE[provider]
+    headers = _provider_headers(provider)
+    if _uses_responses_api(model):
+        return _http_post_json(f"{base}/responses", headers, {
+            "model": model, "instructions": system, "input": user_msg,
+            "max_output_tokens": _RESPONSES_MAX_OUTPUT,
+            "reasoning": {"effort": _RESPONSES_EFFORT},
+        }, timeout)
+    return _http_post_json(f"{base}/chat/completions", headers, {
+        "model": model,
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": user_msg}],
+    }, timeout)
+
+
+def _call_and_extract(provider: str, model: str, system: str,
+                      user_msg: str) -> tuple[int, str]:
+    # Returns (status, extracted_text). Text is "" if status != 200.
+    if provider == "anthropic":
+        status, body = _anthropic_call(model, system, user_msg)
+        text = _extract_anthropic_text(body) if status == 200 else ""
+        return status, text
+    status, body = _openai_compatible_call(provider, model, system, user_msg)
+    if status != 200:
+        return status, ""
+    text = (_extract_responses_text(body) if _uses_responses_api(model)
+            else _extract_chat_text(body))
+    return status, text
+
+
+def review(provider: str, model: str, instructions: str, story: str,
+           diff: str, files: dict[str, str],
+           char_budget: int = _DEFAULT_CHAR_BUDGET,
+           max_attempts: int = 3) -> str:
     system = (
-        instructions
-        + "\n\n---\n"
+        instructions + "\n\n---\n"
         "Note: you are a single-pass API reviewer — you cannot spawn "
         "sub-agents or invoke skills. Apply §3–§7 in one pass and produce "
         "the §8 output format. Do NOT apply fixes; report findings only."
-        if instructions
-        else REVIEW_SYSTEM
+        if instructions else REVIEW_SYSTEM
     )
-
-    fixed_chars = len(system) + len(story) + len(diff) + 500  # headers + overhead
-    file_budget  = max(0, char_budget - fixed_chars)
-
-    file_block, n_included = _budget_files(files, file_budget)
+    fixed_chars = len(system) + len(story) + len(diff) + 500
+    file_block, n_included = _budget_files(files, max(0, char_budget - fixed_chars))
     if n_included < len(files):
         print(f"  → token budget: included {n_included}/{len(files)} files "
               f"(diff-only for the rest)")
-
-    user_msg = (
-        f"## Story / Task\n{story}\n\n"
-        f"## Changed Files (current state)\n{file_block}\n\n"
-        f"## Branch Diff\n```diff\n{diff}\n```"
-    )
+    user_msg = (f"## Story / Task\n{story}\n\n"
+                f"## Changed Files (current state)\n{file_block}\n\n"
+                f"## Branch Diff\n```diff\n{diff}\n```")
 
     for attempt in range(max_attempts):
         try:
-            if _uses_responses_api(model):
-                resp = _copilot_responses({
-                    "model": model,
-                    "instructions": system,
-                    "input": user_msg,
-                    "max_output_tokens": _RESPONSES_MAX_OUTPUT,
-                    "reasoning": {"effort": _RESPONSES_EFFORT},
-                })
-                text = _extract_responses_text(resp)
-            else:
-                resp = _copilot_chat({
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user",   "content": user_msg},
-                    ],
-                })
-                text = _extract_chat_text(resp)
-
-            if text:
-                return text
-            # 200 but no usable content (e.g. reasoning consumed the whole output
-            # budget, or an empty completion). Retry, then skip gracefully rather
-            # than crash — one empty reviewer shouldn't sink the run.
-            if attempt < max_attempts - 1:
-                print(f"  → {model} returned empty content, retrying "
-                      f"({attempt + 1}/{max_attempts})")
-                continue
-            return f"[{model} returned no usable content after {max_attempts} attempts — skipped]"
-
-        # HTTPError is a subclass of URLError — catch it first.
-        except urllib.error.HTTPError as e:
-            if e.code in (429, 500, 502, 503, 504):
-                _retry_wait(attempt, max_attempts, f"HTTP {e.code}", long=e.code == 429)
-            else:
-                body = e.read().decode(errors="replace")
-                fail(f"Copilot API error {e.code}: {body[:500]}")
+            status, text = _call_and_extract(provider, model, system, user_msg)
         except TimeoutError:
-            _retry_wait(attempt, max_attempts, "timeout")
+            _retry_wait(attempt, max_attempts, "timeout"); continue
         except urllib.error.URLError as e:
-            _retry_wait(attempt, max_attempts, f"connection error: {e.reason}")
+            _retry_wait(attempt, max_attempts, f"connection error: {e.reason}"); continue
 
-    fail(f"Copilot API failed after {max_attempts} attempts")
+        if status == 200 and text:
+            return text
+        if status == 200:  # empty content — retry then skip
+            if attempt < max_attempts - 1:
+                print(f"  → {provider}/{model} returned empty content, retrying "
+                      f"({attempt + 1}/{max_attempts})"); continue
+            return f"[{provider}/{model} returned no usable content — skipped]"
+        if status in (429, 500, 502, 503, 504):
+            _retry_wait(attempt, max_attempts, f"HTTP {status}", long=status == 429); continue
+        body_preview = text or "(no body)"
+        fail(f"{provider}/{model} API error {status}: {str(body_preview)[:500]}")
+    fail(f"{provider}/{model} failed after {max_attempts} attempts")
 
 
 def _retry_wait(attempt: int, max_attempts: int, reason: str, long: bool = False) -> None:
@@ -876,7 +895,7 @@ def cmd_review(tid: str, repo: str, base: str, model: str, validate: bool = True
     story = load_state(tid).get("summary") or f"Review the branch changes for {tid}."
     print(f"\n── Review: {model} — {len(files)} files, {len(diff.splitlines())} diff lines vs {base}\n",
           flush=True)
-    findings = copilot_review(model, instructions, story, diff, files, char_budget)
+    findings = review("copilot", model, instructions, story, diff, files, char_budget)
     print(findings)
 
 
@@ -1081,7 +1100,7 @@ def main() -> None:
         diff  = git_diff_branch(repo, base)
         files = changed_files_branch(repo, base)
         print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {MODELS[0]}")
-        gpt_review = copilot_review(MODELS[0], instructions, summary, diff, files, char_budget)
+        gpt_review = review("copilot", MODELS[0], instructions, summary, diff, files, char_budget)
         print(f"  {gpt_review[:300]}…")
         mark_done(tid, 4, gpt_review=gpt_review)
         step_done(4, f"Blind review: {MODELS[0]} via Copilot")
@@ -1109,7 +1128,7 @@ def main() -> None:
         diff  = git_diff_branch(repo, base)
         files = changed_files_branch(repo, base)
         print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {MODELS[1]}")
-        gemini_review = copilot_review(MODELS[1], instructions, summary, diff, files, char_budget)
+        gemini_review = review("copilot", MODELS[1], instructions, summary, diff, files, char_budget)
         print(f"  {gemini_review[:300]}…")
         mark_done(tid, 6, gemini_review=gemini_review)
         step_done(6, f"Blind review: {MODELS[1]} via Copilot")
@@ -1137,7 +1156,7 @@ def main() -> None:
         diff  = git_diff_branch(repo, base)
         files = changed_files_branch(repo, base)
         print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {MODELS[2]}")
-        opus_review = copilot_review(MODELS[2], instructions, summary, diff, files, char_budget)
+        opus_review = review("copilot", MODELS[2], instructions, summary, diff, files, char_budget)
         print(f"  {opus_review[:300]}…")
         mark_done(tid, 8, opus_review=opus_review)
         step_done(8, f"Blind review: {MODELS[2]} via Copilot")

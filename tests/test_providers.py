@@ -33,5 +33,16 @@ class TokenTest(unittest.TestCase):
             orchestrate._provider_token("anthropic")
 
 
+class AnthropicExtractTest(unittest.TestCase):
+    def test_extracts_text_blocks(self):
+        data = {"content": [{"type": "text", "text": "FILE | LINE | ISSUE"},
+                            {"type": "text", "text": " | FIX"}]}
+        self.assertEqual(orchestrate._extract_anthropic_text(data),
+                         "FILE | LINE | ISSUE | FIX")
+
+    def test_empty_content(self):
+        self.assertEqual(orchestrate._extract_anthropic_text({"content": []}), "")
+
+
 if __name__ == "__main__":
     unittest.main()
