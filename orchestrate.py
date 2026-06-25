@@ -2,26 +2,22 @@
 """
 orchestrate.py — Multi-model coding pipeline with independent sequential reviews.
 
-Pipeline (9 steps):
+Pipeline (3 + 2*N steps, where N = number of preflight-selected reviewer models):
   1. Claude Code: implement story (branch + commit)
   2. Claude Code: parallel multi-agent review of own work → findings
   3. Claude Code: apply Claude findings → commit
-  4. GPT-4o: blind review of current branch state → findings
-  5. Claude Code: apply GPT findings → commit
-  6. Gemini 3.1 Pro: blind review of current branch state → findings
-  7. Claude Code: apply Gemini findings → commit
-  8. Claude Opus 4.7: blind review of current branch state → findings
-  9. Claude Code: apply Claude Opus findings → commit + save to mem0
+  4..3+2N. For each reviewer model:
+       even step: blind review of current branch state → findings
+       odd step:  Claude Code applies findings → commit
 
 Each Copilot reviewer sees only the current code state, never prior review text.
 Commits after each fix step create a clear audit trail of what each model caught.
 
 Resume after failure:
-  The orchestrator writes a checkpoint to
+  The orchestrator writes a v2 checkpoint (model-keyed) to
   ~/.local/share/code-orchestrator/<TICKET>.json after each completed step.
-  Re-running the same command resumes automatically. To force a specific step:
-    python orchestrate.py ENG-123 ~/dev/edge-fmt --start-from 4
-  To reset and start over, delete the checkpoint file.
+  Re-running the same command resumes automatically from where it left off.
+  To reset and start over, use --reset.
 
 Usage:
     python orchestrate.py <TICKET-ID> <repo-path> [options]
@@ -53,14 +49,7 @@ from typing import NoReturn
 
 CLAUDE         = os.environ.get("CLAUDE_BIN", str(Path.home() / ".local/bin/claude"))
 COPILOT_BASE   = "https://api.githubcopilot.com"
-# Legacy headless pipeline (cmd_run, steps 4/6/8) consumes EXACTLY these three, in order.
-# All confirmed available on the (personal) Copilot seat as of 2026-06. gpt-5.x is reached
-# via the /responses endpoint (chat/completions returns 400 for it — cork routes by id, see
-# _uses_responses_api); Gemini is no longer served to this integrator. The session-driven
-# cork skill runs its own (richer) rotation via --review-model and does not read this list.
-MODELS         = ["gpt-5.5", "gpt-4.1", "claude-opus-4.7"]
 MAX_FILE_LINES = 500
-TOTAL_STEPS    = 9  # 2 steps per model (review + fix) + implement + push/PR
 STATE_DIR      = Path.home() / ".local/share/code-orchestrator"
 _OPENCODE_AUTH = Path.home() / ".local/share/opencode/auth.json"
 # cork's own token store (XDG default), overridable with CORK_AUTH_FILE.
@@ -307,73 +296,6 @@ def cmd_config_init() -> None:
 def cmd_config_show() -> None:
     print(json.dumps(load_config(), indent=2))
 
-# ── Startup checks ───────────────────────────────────────────────────────────
-
-def startup_checks(models: list[str]) -> int:
-    """
-    1. Fetch /models from Copilot API.
-    2. Verify each model in `models` is listed.
-    3. Test each model with a 1-token call to confirm /chat/completions works.
-    4. Return a char budget derived from the minimum max_prompt_tokens across models.
-    Fails fast with a clear message if any model is misconfigured.
-    """
-    print("Validating review models…")
-    try:
-        req = urllib.request.Request(f"{COPILOT_BASE}/models",
-                                     headers=_copilot_headers())
-        with urllib.request.urlopen(req, timeout=15) as r:
-            model_list = json.loads(r.read()).get("data", [])
-    except Exception as e:
-        print(f"  ⚠ Could not fetch model list ({e}) — skipping limit detection")
-        model_list = []
-
-    model_map = {m["id"]: m for m in model_list}
-
-    min_prompt_tokens = 48_000  # conservative fallback
-    for model in models:
-        if model_map and model not in model_map:
-            available = ", ".join(
-                m for m in sorted(model_map)
-                if not m.startswith("text-embedding")
-            )
-            fail(
-                f"Model '{model}' not found in your Copilot account.\n"
-                f"  Available: {available}\n"
-                f"  → Update MODELS in orchestrate.py"
-            )
-        if _uses_responses_api(model):
-            status, body = _copilot_responses(
-                {"model": model, "input": "ok", "max_output_tokens": 16}, timeout=30)
-        else:
-            status, body = _copilot_chat(
-                {"model": model, "messages": [{"role": "user", "content": "ok"}],
-                 "max_tokens": 1}, timeout=30)
-        if status == 400 and "not accessible" in str(body):
-            fail(f"Model '{model}' does not support /chat/completions.\n"
-                 f"  → gpt-5.x / codex use the Responses endpoint; cork routes them there\n"
-                 f"     automatically (_uses_responses_api), so this 400 means the id is wrong.\n"
-                 f"  → Working alternatives: gpt-4.1, claude-sonnet-4.5, claude-opus-4.7")
-        elif status >= 400:
-            fail(f"Model '{model}' validation failed: HTTP {status}: {str(body)[:300]}")
-
-        limit = (
-            model_map.get(model, {})
-            .get("capabilities", {})
-            .get("limits", {})
-            .get("max_prompt_tokens")
-        )
-        if limit:
-            min_prompt_tokens = min(min_prompt_tokens, limit)
-            print(f"  ✓ {model}  ({limit:,} token limit)")
-        else:
-            print(f"  ✓ {model}  (limit unknown — using default)")
-
-    # Reserve 8k tokens for response, take 90% of remainder, 4 chars/token
-    budget = int((min_prompt_tokens - 8_000) * 0.9) * 4
-    print(f"  Char budget: {budget:,} chars (~{budget // 4:,} tokens)")
-    return budget
-
-
 # ── Checkpoint ────────────────────────────────────────────────────────────────
 
 def _state_path(ticket_id: str) -> Path:
@@ -384,14 +306,14 @@ def _status_path(ticket_id: str) -> Path:
     return STATE_DIR / f"{ticket_id}.status.json"
 
 
-def write_status(ticket_id: str, step_n: int, label: str, phase: str = "running",
-                 elapsed: float | None = None) -> None:
+def write_status(ticket_id: str, step_n: int, total: int, label: str,
+                 phase: str = "running", elapsed: float | None = None) -> None:
     """Write a machine-readable status snapshot for external polling."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     _status_path(ticket_id).write_text(json.dumps({
         "ticket_id": ticket_id,
         "step": step_n,
-        "of": TOTAL_STEPS,
+        "of": total,
         "label": label,
         "phase": phase,          # running | done | failed
         "elapsed_sec": round(elapsed, 1) if elapsed is not None else None,
@@ -421,37 +343,46 @@ def clear_state(ticket_id: str) -> None:
         p.unlink()
         print(f"  → cleared checkpoint {p}")
 
+
+def mark_done_v2(tid: str, state: dict) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    _state_path(tid).write_text(json.dumps(state, indent=2))
+
+
+def _save_model(tid: str, state: dict, key: str, field: str, value: str) -> None:
+    state["done"].setdefault("models", {}).setdefault(key, {})[field] = value
+    mark_done_v2(tid, state)
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 _step_start: float = 0.0
 _current_ticket: str = ""
 
 
-def step(n: int, msg: str, ticket_id: str = "") -> None:
+def step(n: int, total: int, msg: str, ticket_id: str = "") -> None:
     global _step_start, _current_ticket
     _step_start = time.monotonic()
     _current_ticket = ticket_id or _current_ticket
-    print(f"\n── Step {n}/{TOTAL_STEPS} — {msg}", flush=True)
+    print(f"\n── Step {n}/{total} — {msg}", flush=True)
     if _current_ticket:
-        write_status(_current_ticket, n, msg, phase="running")
+        write_status(_current_ticket, n, total, msg, phase="running")
 
 
-def skip(n: int, msg: str) -> None:
-    print(f"\n── Step {n}/{TOTAL_STEPS} — {msg} [skipped — already done]", flush=True)
+def skip(n: int, total: int, msg: str) -> None:
+    print(f"\n── Step {n}/{total} — {msg} [skipped — already done]", flush=True)
 
 
-def step_done(n: int, msg: str) -> None:
-    """Call after a step completes to log elapsed time and update status."""
+def step_done(n: int, total: int, msg: str) -> None:
     elapsed = time.monotonic() - _step_start
     print(f"  ✓ done in {elapsed:.0f}s", flush=True)
     if _current_ticket:
-        write_status(_current_ticket, n, msg, phase="done", elapsed=elapsed)
+        write_status(_current_ticket, n, total, msg, phase="done", elapsed=elapsed)
 
 
 def fail(msg: str) -> NoReturn:
     print(f"\nFAIL: {msg}", file=sys.stderr)
     if _current_ticket:
-        write_status(_current_ticket, 0, msg, phase="failed")
+        write_status(_current_ticket, 0, 0, msg, phase="failed")
     sys.exit(1)
 
 
@@ -635,6 +566,31 @@ def preflight(rotation: list[dict], count: int) -> list[dict]:
     if len(selected) < count:
         print(f"  ⚠ only {len(selected)}/{count} models available — running with these.")
     return selected
+
+
+def _model_key(entry: dict) -> str:
+    return f"{entry['provider']}/{entry['model']}"
+
+
+def _remaining_work(state: dict) -> dict:
+    done = state.get("done", {})
+    models_done = done.get("models", {})
+    pending, needs_fix_only = [], []
+    for entry in state["rotation"]:
+        key = _model_key(entry)
+        rec = models_done.get(key, {})
+        if "review" in rec and "fix" in rec:
+            continue
+        pending.append(key)
+        if "review" in rec and "fix" not in rec:
+            needs_fix_only.append(key)
+    return {
+        "implement": not done.get("implement"),
+        "self_review": "self_review" not in done,
+        "self_fix": "self_fix" not in done,
+        "models": pending,
+        "needs_fix_only": needs_fix_only,
+    }
 
 
 def _split_model_ref(ref: str) -> tuple[str, str]:
@@ -988,29 +944,26 @@ def main() -> None:
         return
 
     parser = argparse.ArgumentParser(
-        description="Linear story → Claude review → GPT review → Gemini review"
+        description="Linear story → dynamic multi-model review pipeline"
     )
     parser.add_argument("ticket_id",  help="Linear ticket ID, e.g. ENG-123")
     parser.add_argument("repo_path",  nargs="?", default=None,
                         help="Absolute path to target git repo (omit with --status)")
     parser.add_argument("--base-branch", default="origin/develop",
                         help="Branch to diff against (default: origin/develop)")
-    parser.add_argument("--start-from", type=int, metavar="N",
-                        help="Force resume from step N (auto-detected from checkpoint if omitted)")
     parser.add_argument("--reset", action="store_true",
                         help="Delete checkpoint and start from scratch")
     parser.add_argument("--seed-only", action="store_true",
-                        help="Seed checkpoint from existing branch commits and exit. "
+                        help="Seed a v2 checkpoint from existing branch commits and exit. "
                              "Use when implementation is already done — then re-run "
-                             "with --start-from 2 to begin reviews.")
+                             "to begin reviews (preflight runs automatically on the next run).")
     parser.add_argument("--status", action="store_true",
                         help="Print current pipeline status for ticket_id and exit.")
     parser.add_argument("--skip-validation", action="store_true",
-                        help="Skip startup_checks (the /models fetch + a real test call "
-                             "per model). Each validation call costs a Copilot premium "
-                             "request, so skipping saves quota when firing many parallel "
-                             "--review-model passes. Falls back to a conservative default "
-                             "char budget instead of the live per-model token limits.")
+                        help="Bypass preflight probes and use the configured rotation's "
+                             "first `count` entries directly with a conservative default "
+                             "char budget (_DEFAULT_CHAR_BUDGET) instead of live per-model "
+                             "token limits. Saves Copilot quota on repeated runs.")
     parser.add_argument("--review-model", metavar="MODEL",
                         help="Review-only mode: run ONE Copilot model's review of the "
                              "branch diff, print findings to stdout, and exit. Stateless "
@@ -1040,7 +993,7 @@ def main() -> None:
     if args.reset:
         clear_state(tid)
 
-    # ── --seed-only: checkpoint an existing branch and exit ──────────────────
+    # ── --seed-only: write v2 checkpoint from existing commits and exit ───────
     if args.seed_only:
         commits = subprocess.check_output(
             ["git", "log", f"{base}..HEAD", "--oneline"], cwd=repo, text=True
@@ -1048,37 +1001,46 @@ def main() -> None:
         if not commits:
             fail(f"No commits found on branch vs {base}. Is the branch checked out?")
         summary = f"Implementation already complete on branch. Commits:\n{commits}"
-        mark_done(tid, 1, summary=summary, base=base, repo=repo)
+        seed_state: dict = {
+            "version": 2, "ticket_id": tid,
+            "done": {"implement": True, "summary": summary},
+            "base": base, "repo": repo,
+        }
+        mark_done_v2(tid, seed_state)
         branch = subprocess.check_output(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo, text=True
         ).strip()
-        print(f"Seeded checkpoint for {tid}")
+        print(f"Seeded v2 checkpoint for {tid}")
         print(f"Branch:  {branch}")
         print(f"Commits: {len(commits.splitlines())} commits vs {base}")
-        print(f"Run:     python orchestrate.py {tid} {repo} --start-from 2 --base-branch {base}")
+        print(f"Run:     python orchestrate.py {tid} {repo} --base-branch {base}")
         return
 
-    char_budget = (_DEFAULT_CHAR_BUDGET if args.skip_validation
-                   else startup_checks(MODELS))
-
+    # ── Load config + v2 checkpoint ───────────────────────────────────────────
+    cfg   = load_config()
     state = load_state(tid)
-    completed = set(state.get("completed", []))
+    if state.get("version") != 2:
+        if state.get("completed"):
+            print(f"  → stale v1 checkpoint detected for {tid} — starting fresh")
+        state = {"version": 2, "ticket_id": tid, "done": {}}
 
-    start_from = args.start_from or (
-        max(completed) + 1 if completed else 1
-    )
+    # Freeze the selected rotation at first run; reuse it on resume.
+    # Never re-preflight on resume — the probes cost Copilot quota and the
+    # rotation must stay stable so step numbers don't shift mid-run.
+    if "rotation" not in state:
+        if args.skip_validation:
+            sel = cfg["rotation"][:cfg.get("count", 3)]
+        else:
+            sel = preflight(cfg["rotation"], cfg.get("count", 3))
+        state["rotation"] = sel
+        mark_done_v2(tid, state)
 
-    if start_from > 1:
-        summary = state.get("summary")
-        if not summary:
-            fail(
-                f"Resuming from step {start_from} but no checkpoint found for {tid}.\n"
-                f"  → Run without --start-from, or delete {_state_path(tid)} to reset."
-            )
-        print(f"Resuming {tid} from step {start_from} "
-              f"(completed: {sorted(completed)})")
-    else:
-        summary = ""
+    rotation = state["rotation"]
+    N     = len(rotation)
+    total = 3 + 2 * N
+
+    rem     = _remaining_work(state)
+    summary = state.get("done", {}).get("summary") or state.get("summary", "")
 
     instructions, instructions_path = load_agent_instructions(repo)
     if instructions_path:
@@ -1091,18 +1053,20 @@ def main() -> None:
     fix_notes: list[tuple[str, str]] = []
 
     # ── Step 1: Implement ────────────────────────────────────────────────────
-    if start_from <= 1:
-        step(1, f"Claude Code: implement {tid}", ticket_id=tid)
+    if rem["implement"]:
+        step(1, total, f"Claude Code: implement {tid}", ticket_id=tid)
         summary = run_claude(prompt_initial(tid), cwd=repo)
         print(f"  Summary: {summary[:200]}…")
         git_commit_all(repo, f"feat: implement {tid}")
-        mark_done(tid, 1, summary=summary, base=base, repo=repo)
-        step_done(1, f"Claude Code: implement {tid}")
+        state["done"]["implement"] = True
+        state["done"]["summary"]   = summary
+        mark_done_v2(tid, state)
+        step_done(1, total, f"Claude Code: implement {tid}")
     else:
-        skip(1, f"Claude Code: implement {tid}")
+        skip(1, total, f"Claude Code: implement {tid}")
 
-    diff  = git_diff_branch(repo, base)
-    files = changed_files_branch(repo, base)
+    diff       = git_diff_branch(repo, base)
+    files      = changed_files_branch(repo, base)
     if not diff.strip():
         fail("No diff vs base branch — nothing to review.")
     diff_lines = len(diff.splitlines())
@@ -1130,114 +1094,74 @@ def main() -> None:
             f"     Continuing — but expect reduced review quality.\n"
         )
 
-    # ── Step 2: Claude multi-agent review ────────────────────────────────────
-    if start_from <= 2:
-        step(2, "Claude Code: multi-agent review", ticket_id=tid)
-        claude_review = run_claude(prompt_claude_review(base, instructions_path), cwd=repo)
-        print(f"  {claude_review[:300]}…")
-        mark_done(tid, 2, claude_review=claude_review)
-        step_done(2, "Claude Code: multi-agent review")
+    # ── Step 2: Claude multi-agent self-review ────────────────────────────────
+    if rem["self_review"]:
+        step(2, total, "Claude Code: multi-agent self-review", ticket_id=tid)
+        self_review_out = run_claude(prompt_claude_review(base, instructions_path), cwd=repo)
+        print(f"  {self_review_out[:300]}…")
+        state["done"]["self_review"] = self_review_out
+        mark_done_v2(tid, state)
+        step_done(2, total, "Claude Code: multi-agent self-review")
     else:
-        skip(2, "Claude Code: multi-agent review")
-        claude_review = state.get("claude_review", "")
+        skip(2, total, "Claude Code: multi-agent self-review")
+        self_review_out = state["done"].get("self_review", "")
 
-    uncertain_items.append(("Claude agent review", extract_uncertain(claude_review)))
+    uncertain_items.append(("Claude self-review", extract_uncertain(self_review_out)))
 
-    # ── Step 3: Apply Claude findings ────────────────────────────────────────
-    if start_from <= 3:
-        step(3, "Claude Code: apply Claude review findings", ticket_id=tid)
-        fix_out = run_claude(prompt_fix(summary, base, claude_review, tid), cwd=repo)
-        fix_notes.append(("Step 3 — Claude review fixes", fix_out))
-        git_commit_all(repo, f"fix: apply Claude agent review [{tid}]")
-        mark_done(tid, 3, fix_note_3=fix_out)
-        step_done(3, "Claude Code: apply Claude review findings")
+    # ── Step 3: Apply self-review findings ───────────────────────────────────
+    if rem["self_fix"]:
+        step(3, total, "Claude Code: apply self-review findings", ticket_id=tid)
+        fix_out = run_claude(prompt_fix(summary, base, self_review_out, tid), cwd=repo)
+        fix_notes.append(("Step 3 — self-review fixes", fix_out))
+        git_commit_all(repo, f"fix: apply Claude self-review [{tid}]")
+        state["done"]["self_fix"] = fix_out
+        mark_done_v2(tid, state)
+        step_done(3, total, "Claude Code: apply self-review findings")
     else:
-        skip(3, "Claude Code: apply Claude review findings")
-        fix_notes.append(("Step 3 — Claude review fixes", state.get("fix_note_3", "")))
+        skip(3, total, "Claude Code: apply self-review findings")
+        fix_notes.append(("Step 3 — self-review fixes", state["done"].get("self_fix", "")))
 
-    # ── Step 4: GPT blind review ─────────────────────────────────────────────
-    if start_from <= 4:
-        step(4, f"Blind review: {MODELS[0]} via Copilot", ticket_id=tid)
-        diff  = git_diff_branch(repo, base)
-        files = changed_files_branch(repo, base)
-        print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {MODELS[0]}")
-        gpt_review = review("copilot", MODELS[0], instructions, summary, diff, files, char_budget)
-        print(f"  {gpt_review[:300]}…")
-        mark_done(tid, 4, gpt_review=gpt_review)
-        step_done(4, f"Blind review: {MODELS[0]} via Copilot")
-    else:
-        skip(4, f"Blind review: {MODELS[0]}")
-        gpt_review = state.get("gpt_review", "")
+    # ── Per-model review + fix loop ───────────────────────────────────────────
+    for i, entry in enumerate(rotation):
+        key        = _model_key(entry)
+        review_step = 4 + 2 * i
+        fix_step    = 5 + 2 * i
 
-    uncertain_items.append((MODELS[0], extract_uncertain(gpt_review)))
+        if key in rem["models"] and key not in rem["needs_fix_only"]:
+            step(review_step, total, f"Blind review: {key}", ticket_id=tid)
+            diff  = git_diff_branch(repo, base)
+            files = changed_files_branch(repo, base)
+            print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {key}")
+            review_out = review(
+                entry["provider"], entry["model"],
+                instructions, summary, diff, files, _DEFAULT_CHAR_BUDGET,
+            )
+            print(f"  {review_out[:300]}…")
+            _save_model(tid, state, key, "review", review_out)
+            step_done(review_step, total, f"Blind review: {key}")
+        else:
+            skip(review_step, total, f"Blind review: {key}")
+            review_out = state["done"].get("models", {}).get(key, {}).get("review", "")
 
-    # ── Step 5: Apply GPT findings ───────────────────────────────────────────
-    if start_from <= 5:
-        step(5, f"Claude Code: apply {MODELS[0]} findings", ticket_id=tid)
-        fix_out = run_claude(prompt_fix(summary, base, gpt_review, tid), cwd=repo)
-        fix_notes.append((f"Step 5 — {MODELS[0]} fixes", fix_out))
-        git_commit_all(repo, f"fix: apply {MODELS[0]} review [{tid}]")
-        mark_done(tid, 5, fix_note_5=fix_out)
-        step_done(5, f"Claude Code: apply {MODELS[0]} findings")
-    else:
-        skip(5, f"Claude Code: apply {MODELS[0]} findings")
-        fix_notes.append((f"Step 5 — {MODELS[0]} fixes", state.get("fix_note_5", "")))
+        uncertain_items.append((key, extract_uncertain(review_out)))
 
-    # ── Step 6: Gemini blind review ──────────────────────────────────────────
-    if start_from <= 6:
-        step(6, f"Blind review: {MODELS[1]} via Copilot", ticket_id=tid)
-        diff  = git_diff_branch(repo, base)
-        files = changed_files_branch(repo, base)
-        print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {MODELS[1]}")
-        gemini_review = review("copilot", MODELS[1], instructions, summary, diff, files, char_budget)
-        print(f"  {gemini_review[:300]}…")
-        mark_done(tid, 6, gemini_review=gemini_review)
-        step_done(6, f"Blind review: {MODELS[1]} via Copilot")
-    else:
-        skip(6, f"Blind review: {MODELS[1]}")
-        gemini_review = state.get("gemini_review", "")
-
-    uncertain_items.append((MODELS[1], extract_uncertain(gemini_review)))
-
-    # ── Step 7: Apply Gemini findings ───────────────────────────────────────
-    if start_from <= 7:
-        step(7, f"Claude Code: apply {MODELS[1]} findings", ticket_id=tid)
-        fix_out = run_claude(prompt_fix(summary, base, gemini_review, tid), cwd=repo)
-        fix_notes.append((f"Step 7 — {MODELS[1]} fixes", fix_out))
-        git_commit_all(repo, f"fix: apply {MODELS[1]} review [{tid}]")
-        mark_done(tid, 7, fix_note_7=fix_out)
-        step_done(7, f"Claude Code: apply {MODELS[1]} findings")
-    else:
-        skip(7, f"Claude Code: apply {MODELS[1]} findings")
-        fix_notes.append((f"Step 7 — {MODELS[1]} fixes", state.get("fix_note_7", "")))
-
-    # ── Step 8: Claude Opus blind review ────────────────────────────────────
-    if start_from <= 8:
-        step(8, f"Blind review: {MODELS[2]} via Copilot", ticket_id=tid)
-        diff  = git_diff_branch(repo, base)
-        files = changed_files_branch(repo, base)
-        print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {MODELS[2]}")
-        opus_review = review("copilot", MODELS[2], instructions, summary, diff, files, char_budget)
-        print(f"  {opus_review[:300]}…")
-        mark_done(tid, 8, opus_review=opus_review)
-        step_done(8, f"Blind review: {MODELS[2]} via Copilot")
-    else:
-        skip(8, f"Blind review: {MODELS[2]}")
-        opus_review = state.get("opus_review", "")
-
-    uncertain_items.append((MODELS[2], extract_uncertain(opus_review)))
-
-    # ── Step 9: Apply Claude Opus findings + save to mem0 ───────────────────
-    if start_from <= 9:
-        step(9, f"Claude Code: apply {MODELS[2]} findings + save to mem0", ticket_id=tid)
-        fix_out = run_claude(prompt_fix(summary, base, opus_review, tid, is_final=True), cwd=repo)
-        fix_notes.append((f"Step 9 — {MODELS[2]} fixes", fix_out))
-        git_commit_all(repo, f"fix: apply {MODELS[2]} review [{tid}]")
-        mark_done(tid, 9, fix_note_9=fix_out)
-        step_done(9, f"Claude Code: apply {MODELS[2]} findings + save to mem0")
-    else:
-        skip(9, f"Claude Code: apply {MODELS[2]} findings")
-        fix_notes.append((f"Step 9 — {MODELS[2]} fixes", state.get("fix_note_9", "")))
+        if key in rem["models"]:
+            is_final = (i == N - 1)
+            label    = f"Apply {key} findings" + (" + save to mem0" if is_final else "")
+            step(fix_step, total, f"Claude Code: {label}", ticket_id=tid)
+            fix_out = run_claude(
+                prompt_fix(summary, base, review_out, tid, is_final=is_final), cwd=repo
+            )
+            fix_notes.append((f"Step {fix_step} — {key} fixes", fix_out))
+            git_commit_all(repo, f"fix: apply {key} review [{tid}]")
+            _save_model(tid, state, key, "fix", fix_out)
+            step_done(fix_step, total, f"Claude Code: {label}")
+        else:
+            skip(fix_step, total, f"Claude Code: apply {key} findings")
+            fix_notes.append((
+                f"Step {fix_step} — {key} fixes",
+                state["done"].get("models", {}).get(key, {}).get("fix", ""),
+            ))
 
     final_diff = git_diff_branch(repo, base)
     clear_state(tid)
@@ -1251,7 +1175,7 @@ def main() -> None:
         ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo, text=True
     ).strip()
 
-    write_status(tid, TOTAL_STEPS, "Pipeline complete", phase="done")
+    write_status(tid, total, total, "Pipeline complete", phase="done")
     print(f"\n── Done ──────────────────────────────────────────────────")
     print(f"Branch:     {branch}")
     print(f"Base:       {base}")
