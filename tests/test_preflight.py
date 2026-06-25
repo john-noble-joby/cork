@@ -64,5 +64,95 @@ class SelectTest(unittest.TestCase):
             orchestrate._probe = orig
 
 
+class EligibleRotationTest(unittest.TestCase):
+    def _patch_token_available(self, return_val_map: dict[str, bool]):
+        # return_val_map: provider -> bool; missing providers default to True
+        def fake(provider: str) -> bool:
+            return return_val_map.get(provider, True)
+        orig = orchestrate._provider_token_available
+        orchestrate._provider_token_available = fake
+        return orig
+
+    def test_drops_disabled_provider(self):
+        cfg = {
+            "providers": {"openai": {"enabled": False}},
+            "rotation": [
+                {"provider": "openai", "model": "gpt-4o"},
+                {"provider": "copilot", "model": "gpt-5.5"},
+            ],
+        }
+        orig = self._patch_token_available({"openai": True, "copilot": True})
+        try:
+            result = orchestrate._eligible_rotation(cfg)
+        finally:
+            orchestrate._provider_token_available = orig
+        self.assertEqual(result, [{"provider": "copilot", "model": "gpt-5.5"}])
+
+    def test_drops_entry_with_no_token(self):
+        cfg = {
+            "providers": {},
+            "rotation": [
+                {"provider": "anthropic", "model": "claude-opus-4"},
+                {"provider": "copilot",   "model": "gpt-5.5"},
+            ],
+        }
+        orig = self._patch_token_available({"anthropic": False, "copilot": True})
+        try:
+            result = orchestrate._eligible_rotation(cfg)
+        finally:
+            orchestrate._provider_token_available = orig
+        self.assertEqual(result, [{"provider": "copilot", "model": "gpt-5.5"}])
+
+    def test_keeps_enabled_tokened_entries_in_rank_order(self):
+        cfg = {
+            "providers": {
+                "copilot":   {"enabled": True},
+                "openai":    {"enabled": True},
+                "anthropic": {"enabled": True},
+            },
+            "rotation": [
+                {"provider": "copilot",   "model": "gpt-5.5"},
+                {"provider": "openai",    "model": "gpt-4o"},
+                {"provider": "anthropic", "model": "claude-opus-4"},
+            ],
+        }
+        orig = self._patch_token_available(
+            {"copilot": True, "openai": True, "anthropic": True}
+        )
+        try:
+            result = orchestrate._eligible_rotation(cfg)
+        finally:
+            orchestrate._provider_token_available = orig
+        self.assertEqual(result, [
+            {"provider": "copilot",   "model": "gpt-5.5"},
+            {"provider": "openai",    "model": "gpt-4o"},
+            {"provider": "anthropic", "model": "claude-opus-4"},
+        ])
+
+    def test_provider_absent_from_providers_map_defaults_enabled(self):
+        # no "providers" key at all — should keep the entry if token available
+        cfg = {
+            "rotation": [{"provider": "copilot", "model": "gpt-5.5"}],
+        }
+        orig = self._patch_token_available({"copilot": True})
+        try:
+            result = orchestrate._eligible_rotation(cfg)
+        finally:
+            orchestrate._provider_token_available = orig
+        self.assertEqual(result, [{"provider": "copilot", "model": "gpt-5.5"}])
+
+    def test_disabled_takes_priority_over_token_presence(self):
+        cfg = {
+            "providers": {"copilot": {"enabled": False}},
+            "rotation": [{"provider": "copilot", "model": "gpt-5.5"}],
+        }
+        orig = self._patch_token_available({"copilot": True})
+        try:
+            result = orchestrate._eligible_rotation(cfg)
+        finally:
+            orchestrate._provider_token_available = orig
+        self.assertEqual(result, [])
+
+
 if __name__ == "__main__":
     unittest.main()

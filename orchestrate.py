@@ -158,6 +158,48 @@ def _provider_token(provider: str) -> str:
     fail(f"unknown provider: {provider}")
 
 
+def _provider_token_available(provider: str) -> bool:
+    match provider:
+        case "copilot":
+            if os.environ.get("CORK_COPILOT_TOKEN"):
+                return True
+            for src in (_CORK_AUTH, _OPENCODE_AUTH):
+                if not src.exists():
+                    continue
+                try:
+                    data = json.loads(src.read_text())
+                except (json.JSONDecodeError, OSError):
+                    continue
+                tok = data.get("token") or data.get("github-copilot", {}).get("refresh")
+                if tok:
+                    return True
+            return False
+        case "openai":
+            if os.environ.get("OPENAI_API_KEY", "").strip():
+                return True
+            if _CORK_AUTH.exists():
+                try:
+                    data = json.loads(_CORK_AUTH.read_text())
+                    if (data.get("openai") or "").strip():
+                        return True
+                except (json.JSONDecodeError, OSError):
+                    pass
+            return False
+        case "anthropic":
+            if os.environ.get("ANTHROPIC_API_KEY", "").strip():
+                return True
+            if _CORK_AUTH.exists():
+                try:
+                    data = json.loads(_CORK_AUTH.read_text())
+                    if (data.get("anthropic") or "").strip():
+                        return True
+                except (json.JSONDecodeError, OSError):
+                    pass
+            return False
+        case _:
+            return False
+
+
 def _copilot_headers() -> dict[str, str]:
     return {
         "Authorization": f"Bearer {_copilot_token()}",
@@ -544,6 +586,23 @@ def _probe(provider: str, model: str) -> str:
     return _classify_preflight(status, text)
 
 
+def _eligible_rotation(cfg: dict) -> list[dict]:
+    kept: list[dict] = []
+    providers_cfg = cfg.get("providers", {})
+    for entry in cfg.get("rotation", []):
+        provider = entry["provider"]
+        model    = entry["model"]
+        enabled  = providers_cfg.get(provider, {}).get("enabled", True)
+        if not enabled:
+            print(f"  ✗ {provider}/{model} skipped (provider disabled)", flush=True)
+            continue
+        if not _provider_token_available(provider):
+            print(f"  ✗ {provider}/{model} skipped (no {provider} token)", flush=True)
+            continue
+        kept.append(entry)
+    return kept
+
+
 def preflight(rotation: list[dict], count: int) -> list[dict]:
     selected: list[dict] = []
     print(f"Preflight: selecting up to {count} of {len(rotation)} ranked models…",
@@ -902,7 +961,7 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
 
 def cmd_preflight() -> None:
     cfg = load_config()
-    selected = preflight(cfg["rotation"], cfg.get("count", 3))
+    selected = preflight(_eligible_rotation(cfg), cfg.get("count", 3))
     for s in selected:
         print(f"{s['provider']}/{s['model']}")
 
@@ -1029,9 +1088,9 @@ def main() -> None:
     # rotation must stay stable so step numbers don't shift mid-run.
     if "rotation" not in state:
         if args.skip_validation:
-            sel = cfg["rotation"][:cfg.get("count", 3)]
+            sel = _eligible_rotation(cfg)[:cfg.get("count", 3)]
         else:
-            sel = preflight(cfg["rotation"], cfg.get("count", 3))
+            sel = preflight(_eligible_rotation(cfg), cfg.get("count", 3))
         state["rotation"] = sel
         mark_done_v2(tid, state)
 
