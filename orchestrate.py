@@ -141,6 +141,8 @@ def _resolve_native_token(env_var: str, auth_key: str) -> str:
             data = json.loads(_CORK_AUTH.read_text())
         except json.JSONDecodeError as e:
             fail(f"Cannot parse {_CORK_AUTH}: {e}")
+        except OSError as e:
+            fail(f"Cannot read {_CORK_AUTH}: {e}")
         val = (data.get(auth_key) or "").strip()
         if val:
             return val
@@ -537,32 +539,37 @@ def _budget_files(files: dict[str, str], budget_chars: int) -> tuple[str, int]:
 
 
 def _openai_compatible_call(provider: str, model: str, system: str,
-                            user_msg: str, timeout: int = 300) -> tuple[int, object]:
+                            user_msg: str, timeout: int = 300,
+                            max_out: int | None = None) -> tuple[int, object]:
+    # max_out caps output tokens — set small for preflight probes; None = review-sized.
     base = PROVIDER_BASE[provider]
     headers = _provider_headers(provider)
     if _uses_responses_api(model):
         return _http_post_json(f"{base}/responses", headers, {
             "model": model, "instructions": system, "input": user_msg,
-            "max_output_tokens": _RESPONSES_MAX_OUTPUT,
+            "max_output_tokens": max_out or _RESPONSES_MAX_OUTPUT,
             "reasoning": {"effort": _RESPONSES_EFFORT},
         }, timeout)
-    return _http_post_json(f"{base}/chat/completions", headers, {
+    payload = {
         "model": model,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": user_msg}],
-    }, timeout)
+    }
+    if max_out is not None:
+        payload["max_tokens"] = max_out
+    return _http_post_json(f"{base}/chat/completions", headers, payload, timeout)
 
 
 def _call_and_extract(provider: str, model: str, system: str,
-                      user_msg: str) -> tuple[int, str]:
+                      user_msg: str, max_out: int | None = None) -> tuple[int, str]:
     # Returns (status, extracted_text) on 200, or (status, raw_body) on non-200.
     if provider == "anthropic":
-        status, body = _anthropic_call(model, system, user_msg)
+        status, body = _anthropic_call(model, system, user_msg, max_tokens=max_out or 8000)
         if status == 200:
             text = _extract_anthropic_text(body)
             return status, text
         return status, str(body)
-    status, body = _openai_compatible_call(provider, model, system, user_msg)
+    status, body = _openai_compatible_call(provider, model, system, user_msg, max_out=max_out)
     if status != 200:
         return status, str(body)
     text = (_extract_responses_text(body) if _uses_responses_api(model)
@@ -586,8 +593,10 @@ def _classify_preflight(status: int, body: str) -> str:
 
 
 def _probe(provider: str, model: str) -> str:
+    # A cheap availability probe — cap output hard so it can't burn review-sized
+    # quota (the classification only needs the HTTP status, not the content).
     try:
-        status, text = _call_and_extract(provider, model, "", "ok")
+        status, text = _call_and_extract(provider, model, "", "ok", max_out=16)
     except (TimeoutError, urllib.error.URLError):
         return "other"
     return _classify_preflight(status, text)
