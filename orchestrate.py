@@ -35,6 +35,7 @@ Requirements:
 """
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -46,6 +47,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+from typing import NoReturn
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -232,7 +234,7 @@ def load_config() -> dict:
     if not CONFIG_PATH.exists():
         print(f"  ⚠ no {CONFIG_PATH}; using built-in default — run "
               f"`orchestrate.py config init` to customize", flush=True)
-        return DEFAULT_CONFIG
+        return copy.deepcopy(DEFAULT_CONFIG)
     try:
         cfg = json.loads(CONFIG_PATH.read_text())
     except json.JSONDecodeError as e:
@@ -400,7 +402,7 @@ def step_done(n: int, msg: str) -> None:
         write_status(_current_ticket, n, msg, phase="done", elapsed=elapsed)
 
 
-def fail(msg: str) -> None:
+def fail(msg: str) -> NoReturn:
     print(f"\nFAIL: {msg}", file=sys.stderr)
     if _current_ticket:
         write_status(_current_ticket, 0, msg, phase="failed")
