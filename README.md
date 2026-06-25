@@ -23,9 +23,6 @@ re-run the same command and it resumes automatically from where it left off.
 # Resume automatically (reads checkpoint)
 python orchestrate.py ENG-123 ~/dev/edge-fmt
 
-# Force a specific step (e.g. retry step 4 after a token expiry)
-python orchestrate.py ENG-123 ~/dev/edge-fmt --start-from 4
-
 # Discard checkpoint and start over
 python orchestrate.py ENG-123 ~/dev/edge-fmt --reset
 ```
@@ -41,39 +38,66 @@ No third-party Python packages — Python 3.10+ stdlib only.
 - **A GitHub Copilot token** — unlocks the GPT and Claude review models not available via the `gh` CLI token. Resolved in priority order: `CORK_COPILOT_TOKEN` env var → cork's own `~/.config/cork/auth.json` (`CORK_AUTH_FILE`) → opencode's `~/.local/share/opencode/auth.json`. The easiest way to get one: run `python orchestrate.py login` (GitHub device flow — writes `~/.config/cork/auth.json` for you).
 - **mem0** running locally at `http://localhost:8888` (for Claude's MCP context)
 
-## Pipeline (9 steps)
+## Pipeline
 
-| Step | Who | What |
-|------|-----|-------|
+The pipeline is `3 + 2×N` steps, where N is the number of models selected by
+`preflight` (see below):
+
+| Steps | Who | What |
+|-------|-----|-------|
 | 1 | Claude Code | Fetch Linear story via MCP, search mem0, implement, **commit** |
-| 2 | Claude Code | Multi-agent review of own work using `code-review/AGENTS.md` |
-| 3 | Claude Code | Apply Claude findings, **commit** |
-| 4 | GPT-5.5 | Blind review — sees current code, not Claude's findings |
-| 5 | Claude Code | Apply GPT-5.5 findings, **commit** |
-| 6 | GPT-4.1 | Blind review — sees current code, not prior findings |
-| 7 | Claude Code | Apply GPT-4.1 findings, **commit** |
-| 8 | Claude Opus 4.7 | Blind review — sees current code, not prior findings |
-| 9 | Claude Code | Apply Opus findings, save to mem0, **commit** |
+| 2 | Claude Code | Multi-agent self-review |
+| 3 | Claude Code | Apply self-review findings, **commit** |
+| 4, 6, … | Reviewer model (×N) | Blind review — sees current code, not prior findings |
+| 5, 7, … | Claude Code (×N) | Apply findings, **commit** |
 
 Finally, Claude Code pushes the branch and opens a PR summarizing what each
-review pass caught.
-
-Each Copilot reviewer gets the full `git diff base..HEAD` plus current file
-contents — enough context to review thoroughly without knowing what prior
-reviewers found. Commits after each fix step give a clear audit trail.
+review pass caught. Commits after each fix step give a clear audit trail.
 
 Review models use `code-review/AGENTS.md` if present, falling back to root
-`AGENTS.md` or `.github/AGENTS.md`. The three blind-review models are the
-`MODELS` list at the top of `orchestrate.py`; they're the set confirmed
-available on the Copilot seat. `gpt-5.x`/codex models are reached via Copilot's
-`/responses` endpoint (cork routes them there automatically by id —
+`AGENTS.md` or `.github/AGENTS.md`. `gpt-5.x`/codex models are reached via
+Copilot's `/responses` endpoint (cork routes them there automatically —
 `/chat/completions` returns 400 for them); everything else uses
-`/chat/completions`. Gemini is no longer served to this integrator.
+`/chat/completions`.
 
 > **Session-driven mode:** the `cork` skill runs a richer, interactive variant
 > where the active Claude Code session does the implementing and fixing and
 > calls `orchestrate.py --review-model MODEL` once per model for a stateless
 > blind review. See `skills/cork/SKILL.md`.
+
+## Model configuration
+
+Cork selects reviewers at runtime via `preflight`. The ranked candidate list and
+desired count live in `~/.config/cork/config.json` (override path with
+`CORK_CONFIG_FILE`):
+
+```json
+{
+  "version": 1,
+  "count": 3,
+  "rotation": [
+    {"provider": "copilot",   "model": "gpt-5.5"},
+    {"provider": "copilot",   "model": "claude-opus-4.7"},
+    {"provider": "copilot",   "model": "gpt-4.1"}
+  ]
+}
+```
+
+`rotation` is the ranked preference list; `count` is how many to select.
+`preflight` probes each entry in order and picks the first `count` that respond,
+skipping unreachable models. Auth failures (401/403) are fatal — fix the token
+and retry.
+
+```bash
+# Create a starter config (safe to re-run — won't overwrite)
+python orchestrate.py config init
+
+# Show the active config
+python orchestrate.py config
+
+# Probe and print the models that will be used for this seat
+python orchestrate.py preflight
+```
 
 ## Configuration
 
@@ -81,8 +105,11 @@ available on the Copilot seat. `gpt-5.x`/codex models are reached via Copilot's
 |---------|---------|---------|
 | `CLAUDE_BIN` | `~/.local/bin/claude` | Path to Claude Code CLI |
 | `CORK_HOME` | `~/dev/cork` | Location of this repo (used by the cork skill) |
+| `CORK_CONFIG_FILE` | `~/.config/cork/config.json` | Per-seat model config (ranked `rotation` + `count`) |
 | `CORK_COPILOT_TOKEN` | — | Copilot token, used directly (highest priority) |
 | `CORK_AUTH_FILE` | `~/.config/cork/auth.json` | Cork's own Copilot token store |
 | `CORK_COPILOT_CLIENT_ID` | `Iv1.b507a08c87ecfe98` | GitHub OAuth client id for `login` |
 
-Review models can be changed by editing `MODELS` at the top of `orchestrate.py`.
+Review models are configured via `config.json` — run `python orchestrate.py config init` to
+create a starter file, then edit `rotation` and `count` to taste. Use `preflight` to
+confirm what's reachable on your seat.
