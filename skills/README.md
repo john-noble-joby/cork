@@ -42,11 +42,11 @@ comments or the max is reached. Reviewer login is `Copilot` for requesting,
 ### devit
 Linear-story dev loop. `devit <TICKET>` verifies the story (asking for clarity if
 needed), gates on size (proposes a split for too-big stories — you verify, then it
-files the sub-stories in Linear), cuts a worktree + `feature/`|`bugfix/` branch from
-`develop`, implements (parallel subagent-driven-development when decomposable), runs
-cork review+fix, opens a PR (`<TICKET>:` title + "In plain terms" body), runs the
-copilot-review-loop, and surfaces all pushbacks. Orchestrates the other skills; does
-not auto-merge.
+files the sub-stories in Linear), cuts a worktree + `feature/` or `bugfix/` branch from
+`develop`, implements (parallel `subagent-driven-development` when decomposable — falls
+back to inline if the superpowers plugin isn't installed), runs cork review+fix, opens a
+PR (`<TICKET>:` title + "In plain terms" body), runs the `copilot-review-loop`, and
+surfaces all pushbacks. Orchestrates the other skills; does not auto-merge.
 
 ## Configuration
 
