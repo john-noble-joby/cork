@@ -6,10 +6,10 @@ Serial multi-model coding pipeline that takes a Linear ticket and produces revie
 
 1. **Claude Code** fetches the story via Linear MCP, searches mem0 for codebase context, creates a feature branch, implements the story
 2. **Claude Code** reviews its own diff (multi-agent), then applies the findings
-3. Each blind reviewer in `MODELS` (currently **GPT-5.5**, **GPT-4.1**, **Claude Opus 4.7**, via the GitHub Copilot API; `gpt-5.x` is routed to Copilot's `/responses` endpoint automatically) reviews the current code state in turn — never prior review text — and **Claude Code** applies each model's findings before the next reviewer runs
+3. Each blind reviewer from the **preflight-selected ranked rotation** (copilot/openai/anthropic, up to `count` models from `~/.config/cork/config.json`) reviews the current code state in turn — never prior review text — and **Claude Code** applies each model's findings before the next reviewer runs
 4. **Claude Code** applies the final model's findings and saves decisions to mem0
 
-Each blind review + fix is its own committed step (9 steps total). mem0 and Linear are accessed through Claude Code's existing MCP connections — the Python script never calls those APIs directly.
+The pipeline is `3 + 2×N` committed steps (N = number of preflight-selected models). mem0 and Linear are accessed through Claude Code's existing MCP connections — the Python script never calls those APIs directly.
 
 ## Architecture
 
@@ -47,6 +47,7 @@ When the orchestrator runs against a repo, it looks for:
 |----------|---------|---------|
 | `CLAUDE_BIN` | `~/.local/bin/claude` | Claude Code CLI path |
 | `CORK_HOME` | `~/dev/cork` | Location of this repo (used by the cork skill) |
+| `CORK_CONFIG_FILE` | `~/.config/cork/config.json` | Per-seat model config (ranked `rotation` + `count`) |
 | `CORK_COPILOT_TOKEN` | — | Copilot token, used directly (highest priority) |
 | `CORK_AUTH_FILE` | `~/.config/cork/auth.json` | Cork's own Copilot token store |
 | `CORK_COPILOT_CLIENT_ID` | `Iv1.b507a08c87ecfe98` | GitHub OAuth client id for `login` |

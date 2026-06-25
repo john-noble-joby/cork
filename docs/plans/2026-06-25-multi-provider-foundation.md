@@ -393,7 +393,30 @@ def _copilot_responses(payload: dict, timeout: int = 300) -> tuple[int, object]:
                            _copilot_headers(), payload, timeout)
 ```
 
-(Existing callers in `startup_checks` are replaced in Task 4; the only other caller is `copilot_review`, replaced next.)
+**Also update `startup_checks`'s probe block** (its only other caller besides
+`copilot_review`). `startup_checks` survives until Task 5, so it must adapt to the
+return-based helpers *now* — otherwise its `except urllib.error.HTTPError` never fires
+and a 400 is mis-read as success. Replace the `try/except` probe block with:
+
+```python
+        if _uses_responses_api(model):
+            status, body = _copilot_responses(
+                {"model": model, "input": "ok", "max_output_tokens": 16}, timeout=30)
+        else:
+            status, body = _copilot_chat(
+                {"model": model, "messages": [{"role": "user", "content": "ok"}],
+                 "max_tokens": 1}, timeout=30)
+        if status == 400 and "not accessible" in str(body):
+            fail(f"Model '{model}' does not support /chat/completions.\n"
+                 f"  → gpt-5.x / codex use the Responses endpoint; cork routes them there\n"
+                 f"     automatically (_uses_responses_api), so this 400 means the id is wrong.\n"
+                 f"  → Working alternatives: gpt-4.1, claude-sonnet-4.5, claude-opus-4.7")
+        elif status >= 400:
+            fail(f"Model '{model}' validation failed: HTTP {status}: {str(body)[:300]}")
+```
+
+(Transport errors — `TimeoutError`/`URLError` — still propagate from `_http_post_json`,
+matching prior behavior. `copilot_review` is replaced next.)
 
 - [ ] **Step 5: Replace `copilot_review` with provider-aware `review`**
 
