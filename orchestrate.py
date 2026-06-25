@@ -143,6 +143,31 @@ def _copilot_token() -> str:
     )
 
 
+def _resolve_native_token(env_var: str, auth_key: str) -> str:
+    tok = os.environ.get(env_var)
+    if tok:
+        return tok.strip()
+    if _CORK_AUTH.exists():
+        try:
+            data = json.loads(_CORK_AUTH.read_text())
+        except json.JSONDecodeError as e:
+            fail(f"Cannot parse {_CORK_AUTH}: {e}")
+        if data.get(auth_key):
+            return data[auth_key].strip()
+    fail(f"No {auth_key} token — set {env_var} or add "
+         f'"{auth_key}" to {_CORK_AUTH}.')
+
+
+def _provider_token(provider: str) -> str:
+    if provider == "copilot":
+        return _copilot_token()
+    if provider == "openai":
+        return _resolve_native_token("OPENAI_API_KEY", "openai")
+    if provider == "anthropic":
+        return _resolve_native_token("ANTHROPIC_API_KEY", "anthropic")
+    fail(f"unknown provider: {provider}")
+
+
 def _copilot_headers() -> dict[str, str]:
     return {
         "Authorization": f"Bearer {_copilot_token()}",
