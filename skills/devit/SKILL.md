@@ -82,11 +82,11 @@ Confirm with the user before starting work:
 - **Decomposable story** (independent tasks): use `writing-plans` to draft a short
   plan, then `subagent-driven-development` to execute it — fresh subagent per task,
   **dispatched in parallel where tasks are independent**, with a review gate between.
-  > **Dependency:** `writing-plans` and `subagent-driven-development` are
-  > **superpowers-plugin** skills, not part of cork. If they aren't installed in your
+  > **Dependency:** `writing-plans` and `subagent-driven-development` are skills from
+  > the `superpowers` plugin, not part of cork. If they aren't installed in your
   > environment, **fall back to implementing inline** (next bullet) — devit still works,
   > just without the parallel-subagent decomposition.
-- **Atomic/small story (or no superpowers plugin):** implement inline in the session.
+- **Atomic/small story (or no `superpowers` plugin):** implement inline in the session.
 - **During-implementation size check:** if the diff will cross ~500 lines, STOP and
   flag the user. Propose the smallest complete, mergeable slice; file the remainder
   as a follow-on Linear story (same propose → verify → write-to-Linear gate as
