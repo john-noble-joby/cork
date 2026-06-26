@@ -10,7 +10,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
 VERSION="$(tr -d '[:space:]' < "$REPO/VERSION")"
-SKILLS=(cork copilot-review-loop)
+SKILLS=(cork copilot-review-loop devit)
 
 echo "Installing cork skills v$VERSION → $DEST"
 echo
