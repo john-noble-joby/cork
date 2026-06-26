@@ -5,7 +5,7 @@ description: Use when the user says "devit <TICKET>", "run devit on <TICKET>", o
 
 # devit — Linear-story dev loop
 
-**Version:** 0.6.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.6.1 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 devit takes a Linear story and drives it from ticket to a reviewed PR. The active
 Claude Code session is the agent; devit **sequences existing skills** — it does not
@@ -19,12 +19,35 @@ Resolve the orchestrator/skills location from `CORK_HOME` (default `~/dev/cork`)
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 ```
 
+## Gates — STOP and wait for the user (read this first)
+
+devit has three human-approval **gates**. **Invoking devit (`devit <TICKET>`) only
+authorizes you to *reach the first gate* — it is NOT approval to pass any gate.** At each
+🛑 gate, STOP, post the prompt, and **wait for the user's reply** before continuing.
+Creating the worktree is *not* "starting work"; implementing (Phase 3) is — G2 sits
+between them.
+
+| Gate | Where | You must |
+|---|---|---|
+| 🛑 **G0** | Phase 0 | If the story is unclear, ask — don't guess. |
+| 🛑 **G1** | Phase 1 | If too big, propose a split and wait for verification before writing to Linear. |
+| 🛑 **G2** | Phase 2 | Before Phase 3, post the confirm line and wait for explicit go-ahead. |
+
+**Red flags — you are rationalizing past a gate. STOP.**
+- "The user said run devit, so they approved the whole run." → No. Invocation *reaches* G2; it does not pass it.
+- "The story looks clear enough, I'll just start implementing." → G2 is a stop regardless of how clear it looks.
+- "I'll cut the worktree and start coding in one motion." → Worktree is Phase 2; coding is Phase 3. G2 is the line between them.
+- "It's a tiny change, the gate is overkill." → Post the gate anyway; the user answers in one line.
+- "I reached G2 without printing the `/rename` line." → You skipped a required Phase 2 output. Print it, then post G2.
+
+Violating the letter of a gate is violating the spirit of devit.
+
 ## Phase 0 — Verify the story
 
 Fetch the story with the Linear MCP tools (by `<TICKET>`). Read title, description,
 acceptance criteria, type/labels, and links.
 
-- **Clarity gate:** if scope or acceptance criteria are unclear, ambiguous, or
+- 🛑 **G0 — Clarity gate:** if scope or acceptance criteria are unclear, ambiguous, or
   missing, **STOP and ask the user** before doing anything else. Do not guess.
 - **Type:** classify feature vs. bug — Linear issue type/label first; else infer
   from content ("bug", "fix", "regression", an error report). This decides the
@@ -44,10 +67,10 @@ estimate from the story's scope and judge.
   definition/parsing/schema, (b) the consumers + fixtures;
 - **more than ~3 new test files.**
 
-**If too big — split flow (human-verify gate):**
+**🛑 G1 — If too big, split flow (HARD STOP before writing to Linear):**
 1. **Propose** a split: a list of sub-stories, each a title + one-paragraph scope,
    and which is the smallest complete, mergeable slice to do first.
-2. **Wait for the user to verify/adjust.** Do not write to Linear yet.
+2. **STOP — wait for the user to verify/adjust. Do not write to Linear yet.**
 3. **After confirmation, write it to Linear** via MCP: create the new sub-stories
    (and/or adjust existing ones), linked to the parent.
 4. Proceed with the first slice as the active story for the rest of the run.
@@ -65,17 +88,23 @@ git worktree add ".worktrees/$BR" -b "$BR" origin/develop
 cd ".worktrees/$BR"
 ```
 
-**Session naming (manual — Claude Code has no programmatic rename):** after creating
-the branch, print this for the user to paste so the session is identifiable in
-`/resume`:
+**Session naming — REQUIRED output of Phase 2, do not skip.** The user tracks which
+session is working on which ticket by its name, so this is not optional. Claude Code
+can't rename programmatically (no tool/hook/API — devit cannot run `/rename` itself), so
+after creating the branch you MUST print this line for the user verbatim:
 
-> Tip: run `/rename <TICKET>-<slug>` to label this session.
+> Run `/rename <TICKET>-<slug>` to label this session (so you can track it in `/resume`).
+> Or start the session with `claude -n <TICKET>-<slug>`.
 
-(devit cannot run `/rename` itself — it's a manual slash command with no tool/hook/API.
-Alternatively start the session with `claude -n <TICKET>-<slug>`.)
+### 🛑 G2 — Confirm before implementing (HARD STOP)
 
-Confirm with the user before starting work:
+**Do NOT begin Phase 3 until the user explicitly replies.** Invoking devit does not pass
+this gate; creating the worktree does not pass it. Post exactly this line and then wait:
+
 `devit: <TICKET> | <BR> | worktree .worktrees/<BR> | base develop — start? (split needed: yes/no)`
+
+If you catch yourself about to edit a file or dispatch an implementer before the user has
+answered this line — STOP. That is the exact failure this gate exists to prevent.
 
 ## Phase 3 — Implement
 
