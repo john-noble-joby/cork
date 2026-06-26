@@ -34,6 +34,17 @@ for s in "${SKILLS[@]}"; do
 done
 
 echo
+# Status line: deploy the cork status-line script (shows the active ticket/branch).
+# Activation is opt-in — add to ~/.claude/settings.json:
+#   "statusLine": { "type": "command", "command": "~/.claude/statusline.py" }
+cp "$REPO/statusline.py" "$DEST/../statusline.py"
+chmod +x "$DEST/../statusline.py"
+echo "  ✓ statusline.py installed to $(cd "$DEST/.." && pwd)/statusline.py"
+if ! grep -q '"statusLine"' "$HOME/.claude/settings.json" 2>/dev/null; then
+  echo "    (not yet enabled — add a statusLine block to ~/.claude/settings.json; see README)"
+fi
+
+echo
 echo "orchestrate.py: $(python3 "$REPO/orchestrate.py" --version)"
 
 cork_home="${CORK_HOME:-$HOME/dev/cork}"

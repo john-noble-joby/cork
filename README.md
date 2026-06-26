@@ -113,3 +113,19 @@ python orchestrate.py preflight
 Review models are configured via `config.json` — run `python orchestrate.py config init` to
 create a starter file, then edit `rotation` and `count` to taste. Use `preflight` to
 confirm what's reachable on your seat.
+
+## Status line (optional)
+
+`install.sh` deploys `statusline.py` to `~/.claude/statusline.py`. It shows the active
+ticket/branch of the current dir (e.g. `⎇ MXE-123 (feature/mxe-123-foo) · Opus`), so you
+can see at a glance what a session — especially a `devit` run in a worktree — is working
+on. It's branch-driven and updates automatically; no per-session action needed.
+
+Enable it by adding to `~/.claude/settings.json`:
+
+```json
+{ "statusLine": { "type": "command", "command": "~/.claude/statusline.py" } }
+```
+
+Restart Claude Code to pick it up. Outside a git branch it falls back to the directory
+name; it never blocks or errors to blank.

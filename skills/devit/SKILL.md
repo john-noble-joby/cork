@@ -5,7 +5,7 @@ description: Use when the user says "devit <TICKET>", "run devit on <TICKET>", o
 
 # devit — Linear-story dev loop
 
-**Version:** 0.6.1 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.6.2 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 devit takes a Linear story and drives it from ticket to a reviewed PR. The active
 Claude Code session is the agent; devit **sequences existing skills** — it does not
@@ -95,6 +95,12 @@ after creating the branch you MUST print this line for the user verbatim:
 
 > Run `/rename <TICKET>-<slug>` to label this session (so you can track it in `/resume`).
 > Or start the session with `claude -n <TICKET>-<slug>`.
+
+The **cork status line** (if enabled — see the repo README) *also* surfaces the ticket
+automatically: it reads the branch of the current dir, so the moment you're in the
+`feature/<TICKET>-…` worktree it shows `⎇ <TICKET> (<branch>)`. The `/rename` labels the
+`/resume` picker; the status line is the always-visible indicator — devit needs to do
+nothing extra for it (it's branch-driven), but still print the `/rename` line above.
 
 ### 🛑 G2 — Confirm before implementing (HARD STOP)
 
