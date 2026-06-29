@@ -71,7 +71,7 @@ if [ "$current" = "$REPO" ]; then
   echo "CORK_HOME already set to $REPO in $SETTINGS ✓"
 else
   printf "Set CORK_HOME=%s in %s? [y/N] " "$REPO" "$SETTINGS"
-  read -r ans
+  read -r ans || ans=""   # EOF / non-interactive stdin must not abort under set -e
   if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
     python3 - "$SETTINGS" "$REPO" <<'PY'
 import json, os, sys
@@ -83,7 +83,8 @@ except Exception:
 cfg.setdefault("env", {})["CORK_HOME"] = repo
 os.makedirs(os.path.dirname(path), exist_ok=True)
 tmp = path + ".tmp"
-open(tmp, "w").write(json.dumps(cfg, indent=2) + "\n")
+with open(tmp, "w") as f:
+    f.write(json.dumps(cfg, indent=2) + "\n")
 os.replace(tmp, path)
 print(f"  ✓ set env.CORK_HOME={repo} in {path} (restart Claude Code to apply)")
 PY
