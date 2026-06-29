@@ -958,6 +958,9 @@ def cmd_standards_status(repo: str) -> None:
         print("  universal default: OFF (global default_standards=false)")
     elif opted:
         print("  universal default: OFF (opted out via code-review/.cork-standards-off)")
+    elif not _DEFAULT_STANDARDS.exists():
+        # Mirror load_agent_instructions: a missing default file is effectively OFF.
+        print(f"  universal default: OFF (missing — {_DEFAULT_STANDARDS} not found)")
     else:
         print(f"  universal default: ON ({_DEFAULT_STANDARDS})")
     print(f"  project standards: {project or 'none — run `standards init` to add one'}")

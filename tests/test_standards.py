@@ -82,6 +82,22 @@ class StandardsCmdTest(unittest.TestCase):
         orchestrate.cmd_standards_init(str(self.repo), opt_out=True)
         self.assertTrue(orchestrate._repo_opted_out(str(self.repo)))
 
+    def test_status_reports_missing_default_as_off(self):
+        # status must mirror load_agent_instructions: a missing default file is OFF.
+        import io
+        from contextlib import redirect_stdout
+        orig = orchestrate._DEFAULT_STANDARDS
+        orchestrate._DEFAULT_STANDARDS = self.repo / "does-not-exist.md"
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                orchestrate.cmd_standards_status(str(self.repo))
+            out = buf.getvalue()
+            self.assertIn("universal default: OFF", out)
+            self.assertIn("missing", out)
+        finally:
+            orchestrate._DEFAULT_STANDARDS = orig
+
 
 if __name__ == "__main__":
     unittest.main()
