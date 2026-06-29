@@ -540,18 +540,38 @@ def git_commit_all(cwd: str, message: str) -> bool:
     return False
 
 
+_DEFAULT_STANDARDS = Path(__file__).resolve().parent / "standards" / "AGENTS.md"
+
+_PROJECT_STANDARDS = [
+    "code-review/AGENTS.md", "code-review/agent.md",
+    "AGENTS.md", "agent.md", ".github/AGENTS.md",
+]
+
+
+def _repo_opted_out(repo: str) -> bool:
+    return (Path(repo) / "code-review" / ".cork-standards-off").exists()
+
+
 def load_agent_instructions(repo: str) -> tuple[str, str]:
-    candidates = [
-        Path(repo) / "code-review" / "AGENTS.md",
-        Path(repo) / "code-review" / "agent.md",
-        Path(repo) / "AGENTS.md",
-        Path(repo) / "agent.md",
-        Path(repo) / ".github" / "AGENTS.md",
-    ]
-    for p in candidates:
+    # Effective review/coding rubric = cork universal default (gated) + the repo's own.
+    project_text, project_path = "", ""
+    for rel in _PROJECT_STANDARDS:
+        p = Path(repo) / rel
         if p.exists():
-            return p.read_text(errors="replace"), str(p)
-    return "", ""
+            project_text, project_path = p.read_text(errors="replace"), str(p)
+            break
+    use_default = (load_config(quiet=True).get("default_standards", True)
+                   and not _repo_opted_out(repo))
+    universal_text = (_DEFAULT_STANDARDS.read_text(errors="replace")
+                      if use_default and _DEFAULT_STANDARDS.exists() else "")
+    parts, labels = [], []
+    if universal_text.strip():
+        parts.append(universal_text); labels.append("cork default")
+    if project_text.strip():
+        parts.append(project_text); labels.append(project_path)
+    if not parts:
+        return "", ""
+    return "\n\n---\n\n".join(parts), " + ".join(labels)
 
 
 def _budget_files(files: dict[str, str], budget_chars: int) -> tuple[str, int]:
