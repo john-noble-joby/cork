@@ -54,5 +54,34 @@ class LayeringTest(unittest.TestCase):
         self.assertEqual((text, label), ("", ""))
 
 
+class StandardsCmdTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name)
+        self._cfg = orchestrate.CONFIG_PATH
+        orchestrate.CONFIG_PATH = self.repo / "config.json"
+
+    def tearDown(self):
+        orchestrate.CONFIG_PATH = self._cfg
+        self.tmp.cleanup()
+
+    def test_init_scaffolds_project_file(self):
+        orchestrate.cmd_standards_init(str(self.repo))
+        f = self.repo / "code-review" / "AGENTS.md"
+        self.assertTrue(f.exists())
+        self.assertIn("project-specific", f.read_text().lower())
+
+    def test_init_refuses_overwrite(self):
+        d = self.repo / "code-review"; d.mkdir()
+        (d / "AGENTS.md").write_text("mine")
+        with self.assertRaises(SystemExit):
+            orchestrate.cmd_standards_init(str(self.repo))
+        self.assertEqual((d / "AGENTS.md").read_text(), "mine")
+
+    def test_init_opt_out_writes_sentinel(self):
+        orchestrate.cmd_standards_init(str(self.repo), opt_out=True)
+        self.assertTrue(orchestrate._repo_opted_out(str(self.repo)))
+
+
 if __name__ == "__main__":
     unittest.main()

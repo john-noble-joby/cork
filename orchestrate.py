@@ -931,6 +931,55 @@ def prompt_push_pr(ticket_id: str, base: str, summary: str) -> str:
     )
 
 
+_PROJECT_STANDARDS_TEMPLATE = """\
+# <Project> — Coding & Review Standards
+
+This file **extends cork's universal default standards** (it's layered underneath the
+default, not instead of it). Put this project's stack-specific conventions and checks here.
+
+## Project conventions
+- Language/runtime, formatter, naming, file layout, result/error pattern, test framework.
+
+## Project-specific review checks
+- Things a reviewer must verify for THIS codebase (required update sites for a new type,
+  protocol/schema invariants, fixture conventions, etc.).
+"""
+
+
+def cmd_standards_status(repo: str) -> None:
+    global_on = load_config(quiet=True).get("default_standards", True)
+    opted = _repo_opted_out(repo)
+    project = next((str(Path(repo) / rel) for rel in _PROJECT_STANDARDS
+                    if (Path(repo) / rel).exists()), None)
+    print(f"standards for {repo}:")
+    if not global_on:
+        print("  universal default: OFF (global default_standards=false)")
+    elif opted:
+        print(f"  universal default: OFF (opted out via code-review/.cork-standards-off)")
+    else:
+        print(f"  universal default: ON ({_DEFAULT_STANDARDS})")
+    print(f"  project standards: {project or 'none — run `standards init` to add one'}")
+
+
+def cmd_standards_init(repo: str, opt_out: bool = False) -> None:
+    cr = Path(repo) / "code-review"
+    if opt_out:
+        sentinel = cr / ".cork-standards-off"
+        if sentinel.exists():
+            print(f"{sentinel} already exists."); return
+        cr.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text("# This repo opts out of cork's universal default standards.\n"
+                            "# Delete this file to re-enable. See cork README.\n")
+        print(f"Wrote opt-out sentinel {sentinel}.")
+        return
+    target = cr / "AGENTS.md"
+    if target.exists():
+        fail(f"{target} already exists — edit it directly (won't overwrite).")
+    cr.mkdir(parents=True, exist_ok=True)
+    target.write_text(_PROJECT_STANDARDS_TEMPLATE)
+    print(f"Scaffolded {target} — add project-specific conventions; it layers under cork's default.")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def cmd_status(ticket_id: str) -> None:
@@ -1087,6 +1136,19 @@ def main() -> None:
         return
     if len(sys.argv) >= 2 and sys.argv[1] == "preflight":
         cmd_preflight()
+        return
+    if len(sys.argv) >= 2 and sys.argv[1] == "standards":
+        sub = sys.argv[2] if len(sys.argv) >= 3 else ""
+        rest = sys.argv[3:]
+        opt = "--opt-out" in rest
+        repo = next((a for a in rest if not a.startswith("--")), ".")
+        repo = str(Path(repo).expanduser().resolve())
+        if sub == "status":
+            cmd_standards_status(repo)
+        elif sub == "init":
+            cmd_standards_init(repo, opt_out=opt)
+        else:
+            fail("usage: orchestrate.py standards status|init [repo] [--opt-out]")
         return
 
     parser = argparse.ArgumentParser(
