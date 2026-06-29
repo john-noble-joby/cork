@@ -72,6 +72,7 @@ PROVIDER_BASE = {
 DEFAULT_CONFIG = {
     "version": 1,
     "count": 3,
+    "interactive_review": True,
     "providers": {
         "copilot":   {"enabled": True},
         "openai":    {"enabled": False},
@@ -318,19 +319,22 @@ def _validate_config(cfg: dict) -> None:
     count = cfg.get("count", 3)
     if not isinstance(count, int) or count < 1:
         fail("config.count must be a positive integer")
+    if not isinstance(cfg.get("interactive_review", True), bool):
+        fail("config.interactive_review must be true or false (a JSON boolean)")
 
 
-def load_config() -> dict:
+def load_config(quiet: bool = False) -> dict:
     if not CONFIG_PATH.exists():
-        print(f"  ⚠ no {CONFIG_PATH}; using built-in default — run "
-              f"`orchestrate.py config init` to customize", flush=True)
+        if not quiet:
+            print(f"  ⚠ no {CONFIG_PATH}; using built-in default — run "
+                  f"`orchestrate.py config init` to customize", flush=True)
         return copy.deepcopy(DEFAULT_CONFIG)
     try:
         cfg = json.loads(CONFIG_PATH.read_text())
-    except OSError as e:
-        fail(f"Cannot read {CONFIG_PATH}: {e}")
     except json.JSONDecodeError as e:
         fail(f"Cannot parse {CONFIG_PATH}: {e}")
+    except OSError as e:
+        fail(f"Cannot read {CONFIG_PATH}: {e}")
     _validate_config(cfg)
     return cfg
 
@@ -339,13 +343,44 @@ def cmd_config_init() -> None:
     if CONFIG_PATH.exists():
         print(f"{CONFIG_PATH} already exists — leaving it untouched.")
         return
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(DEFAULT_CONFIG, indent=2) + "\n")
+    _atomic_write_json(CONFIG_PATH, DEFAULT_CONFIG)
     print(f"Wrote starter config to {CONFIG_PATH} — edit `rotation`/`count` to taste.")
 
 
 def cmd_config_show() -> None:
     print(json.dumps(load_config(), indent=2))
+
+
+_SETTABLE_KEYS = {"interactive_review"}  # scalar bool prefs settable via `config set`; structural fields are edited in config.json directly
+
+
+def cmd_config_get(key: str) -> None:
+    cfg = load_config(quiet=True)
+    if key not in cfg and key not in DEFAULT_CONFIG:
+        fail(f"unknown config key: {key!r}")
+    print(json.dumps(cfg.get(key, DEFAULT_CONFIG.get(key))))
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    os.replace(tmp, path)   # atomic on POSIX — an interrupted write can't truncate the real file
+
+
+def cmd_config_set(key: str, value: str) -> None:
+    if key not in _SETTABLE_KEYS:
+        fail(f"Cannot set '{key}' via config set "
+             f"(settable: {', '.join(sorted(_SETTABLE_KEYS))}); "
+             f"edit {CONFIG_PATH} directly for structural fields.")
+    low = value.strip().lower()
+    if low not in ("true", "false"):
+        fail(f"{key} must be true or false, got {value!r}")
+    cfg = load_config(quiet=True)
+    cfg[key] = (low == "true")
+    _validate_config(cfg)                      # defense: never persist an invalid config
+    _atomic_write_json(CONFIG_PATH, cfg)
+    print(f"Set {key} = {json.dumps(cfg[key])} in {CONFIG_PATH}")
 
 # ── Checkpoint ────────────────────────────────────────────────────────────────
 
@@ -1011,10 +1046,21 @@ def main() -> None:
         print(_version())
         return
     if len(sys.argv) >= 2 and sys.argv[1] == "config":
-        if len(sys.argv) >= 3 and sys.argv[2] == "init":
+        sub = sys.argv[2] if len(sys.argv) >= 3 else ""
+        if sub == "init":
             cmd_config_init()
-        else:
+        elif sub == "get":
+            if len(sys.argv) < 4:
+                fail("usage: orchestrate.py config get <key>")
+            cmd_config_get(sys.argv[3])
+        elif sub == "set":
+            if len(sys.argv) < 5:
+                fail("usage: orchestrate.py config set <key> <value>")
+            cmd_config_set(sys.argv[3], sys.argv[4])
+        elif sub in ("", "show"):
             cmd_config_show()
+        else:
+            fail(f"unknown config subcommand: {sub!r} (use init|show|get|set)")
         return
     if len(sys.argv) >= 2 and sys.argv[1] == "preflight":
         cmd_preflight()

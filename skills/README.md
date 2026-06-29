@@ -4,7 +4,7 @@ Skills that drive the orchestrator from an interactive Claude Code session.
 
 ## Install
 
-Run the installer from the repo root — it copies both skills into
+Run the installer from the repo root — it copies the skills into
 `~/.claude/skills/`, prints the version, and warns on drift:
 
 ```bash
@@ -14,12 +14,14 @@ Run the installer from the repo root — it copies both skills into
 `orchestrate.py` itself isn't installed: the skills call it via `$CORK_HOME`
 (default `~/dev/cork`), so it runs from this clone directly — `git pull` updates
 it. Only the `SKILL.md` files are copies, which is what `install.sh` keeps in
-sync. Check what's installed any time with `python orchestrate.py --version`
+sync. Check what's installed any time with `python3 orchestrate.py --version`
 (also surfaced in the cork skill's Step 0 confirmation line).
 
 Then invoke by phrase in any session:
 - **cork** — "cork" / "run cork on this branch"
 - **copilot-review-loop** — "run the copilot review loop on this branch"
+- **devit** — "devit <TICKET>"
+- **cork-setup** — "set up cork"
 
 ## Skills
 
@@ -48,6 +50,12 @@ back to inline if the `superpowers` plugin isn't installed), runs cork review+fi
 PR (`<TICKET>:` title + "In plain terms" body), runs the `copilot-review-loop`, and
 surfaces all pushbacks. Orchestrates the other skills; does not auto-merge.
 
+### cork-setup
+Guided, interactive first-time setup. Say "set up cork" and it walks through the Copilot
+token (`login`), review models (`config init`/`preflight`), the pause-between-reviews
+preference (`interactive_review`), the status line, and Linear/mem0 MCP checks. Run it after
+`install.sh` + a restart.
+
 ## Configuration
 
 `cork` resolves the orchestrator location from the `CORK_HOME` environment variable,
@@ -75,7 +83,7 @@ writes `~/.config/cork/auth.json` (chmod 600) for you, with no token copying and
 dependency on opencode:
 
 ```bash
-python "$CORK_HOME/orchestrate.py" login
+python3 "$CORK_HOME/orchestrate.py" login
 #   Open:  https://github.com/login/device
 #   Code:  FD65-A4B3
 # (authorize in the browser; cork polls and writes the token automatically)

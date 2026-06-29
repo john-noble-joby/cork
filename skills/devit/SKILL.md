@@ -5,7 +5,7 @@ description: Use when the user says "devit <TICKET>", "run devit on <TICKET>", o
 
 # devit — Linear-story dev loop
 
-**Version:** 0.6.2 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.7.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 devit takes a Linear story and drives it from ticket to a reviewed PR. The active
 Claude Code session is the agent; devit **sequences existing skills** — it does not
@@ -135,6 +135,10 @@ skill): per-model blind review → apply the valid findings or **push back with
 justification** → commit after each model. Record every pushback for the Phase 7
 summary. cork's `preflight` picks the models available on this seat.
 
+(If `interactive_review` is on — the default — cork and the Copilot loop will pause after each
+reviewer for you to choose what to apply; devit inherits this, so expect to be prompted
+between reviewers.)
+
 ## Phase 5 — Open the PR
 
 Push the branch and open a PR with `gh`:
@@ -150,6 +154,10 @@ Run the `copilot-review-loop` skill on the PR. For each addressed item: leave a 
 comment and **mark the thread resolved**. Where a finding is wrong or out-of-scope,
 **push back with justification** and resolve. Record pushbacks for Phase 7. (The loop
 already handles request → poll → fix/push-back → re-request up to its max passes.)
+
+(If `interactive_review` is on — the default — cork and the Copilot loop will pause after each
+reviewer for you to choose what to apply; devit inherits this, so expect to be prompted
+between reviewers.)
 
 ## Phase 7 — Finish (surface pushbacks)
 

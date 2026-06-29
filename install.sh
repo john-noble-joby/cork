@@ -10,7 +10,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
 VERSION="$(tr -d '[:space:]' < "$REPO/VERSION")"
-SKILLS=(cork copilot-review-loop devit)
+SKILLS=(cork copilot-review-loop devit cork-setup)
 
 echo "Installing cork skills v$VERSION → $DEST"
 echo
@@ -57,4 +57,11 @@ else
 fi
 
 echo
-if [ "$rc" -eq 0 ]; then echo "Done."; else echo "Completed with warnings."; exit 1; fi
+if [ "$rc" -eq 0 ]; then
+  echo "Next: restart Claude Code, then say \"set up cork\" to finish configuration."
+  echo
+  echo "Done."
+else
+  echo "Completed with warnings."
+  exit 1
+fi

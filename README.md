@@ -35,14 +35,14 @@ token and MCP steps below are manual.
    ```bash
    cd ~/dev/cork && ./install.sh
    ```
-   Copies `cork`, `copilot-review-loop`, `devit` into `~/.claude/skills/` and
+   Copies `cork`, `copilot-review-loop`, `devit`, and `cork-setup` into `~/.claude/skills/` and
    `statusline.py` into `~/.claude/`, and verifies every version stamp matches `VERSION`.
    Re-run after a `git pull` to update. (`orchestrate.py` itself isn't copied — the skills
    run it straight from `$CORK_HOME`, so `git pull` updates the engine.)
 
 3. **Get a Copilot token** (required — this is what unlocks the review models):
    ```bash
-   python ~/dev/cork/orchestrate.py login
+   python3 ~/dev/cork/orchestrate.py login
    ```
    GitHub device flow → writes `~/.config/cork/auth.json` (chmod 600). Re-run if it expires
    (a 401 in a review means expired).
@@ -60,13 +60,17 @@ token and MCP steps below are manual.
 6. **(Optional) Customize the review models** — without a config, a built-in default is
    used:
    ```bash
-   python ~/dev/cork/orchestrate.py config init   # write a starter config you can edit
-   python ~/dev/cork/orchestrate.py preflight      # show which models your seat can use
+   python3 ~/dev/cork/orchestrate.py config init   # write a starter config you can edit
+   python3 ~/dev/cork/orchestrate.py preflight      # show which models your seat can use
    ```
 
 7. **Restart Claude Code** so it loads the new skills (and the status line).
 
 Then, in any repo: **`devit MXE-123`**.
+
+Most of steps 3–6 are handled for you by the **`cork-setup` skill** — after `install.sh` and a
+restart, just say **"set up cork"** and it walks you through the token, models, the
+pause-between-reviews preference, and the status line.
 
 ---
 
@@ -113,7 +117,7 @@ Two ways to run it:
 - **Session-driven (the skills):** the active Claude session implements/fixes and calls
   `orchestrate.py --review-model <provider/model>` once per model for a stateless blind
   review. This is what `cork`/`devit` use.
-- **Headless (legacy/unattended):** `python orchestrate.py <TICKET> <repo-path>
+- **Headless (legacy/unattended):** `python3 orchestrate.py <TICKET> <repo-path>
   [--base-branch <branch>]` runs the whole loop in subprocesses, checkpointing after each
   step (resume by re-running; `--reset` to start over).
 
@@ -146,6 +150,15 @@ and `anthropic` are supported but disabled by default; enable a provider in `con
 and supply its token via `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` (or keys `"openai"` /
 `"anthropic"` in `~/.config/cork/auth.json`). Secrets never go in `config.json`.
 
+### Interactive review (`interactive_review`, default on)
+
+When on, cork (full mode) and the Copilot review loop **pause after each reviewer**: the
+session presents that reviewer's findings plus its own recommendation and waits for you to
+choose — **fix all**, **pick specific**, **push back** (with a reason), or **proceed with no
+changes**. devit inherits this. Turn it off for fully autonomous runs:
+`python3 orchestrate.py config set interactive_review false` (or via `cork-setup`). It does
+not affect cork *review-only* or the headless pipeline.
+
 ### Status line
 
 `statusline.py` (deployed by `install.sh`) reads Claude Code's status JSON and prints the
@@ -156,8 +169,11 @@ blocks or errors to blank. Enable it via the `settings.json` snippet in Setup st
 
 ### Environment variables
 
-None are required if you clone to `~/dev/cork` and use `orchestrate.py login`. The rest
-are overrides:
+Tokens live in **`~/.config/cork/auth.json`** (written by `orchestrate.py login`; chmod 600) —
+`{"token": "<copilot>", "openai": "<key>", "anthropic": "<key>"}`. (For backward compat the
+Copilot token is also accepted in the legacy opencode shape `{"github-copilot": {"refresh":
+"..."}}`.) The env vars below are **overrides** (resolved first), not required. None are
+needed if you clone to `~/dev/cork` and run `login`.
 
 | Env var | Default | Purpose |
 |---------|---------|---------|

@@ -5,7 +5,7 @@ description: Use when the user says to run the Copilot review loop on a branch o
 
 # Copilot Review Loop
 
-**Version:** 0.6.2 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.7.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 ## Overview
 
@@ -105,6 +105,21 @@ for t in unresolved:
     print('---')
 "
 ```
+
+### 3b. Interactive review (default on)
+
+Read the preference once at loop start:
+
+Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it prints `true` (the default), pause as below; if `false`, behave autonomously.
+
+- **`true` (default):** after fetching this pass's unresolved comments (step 3), apply
+  NOTHING yet. (1) **Pre-pass:** form your recommendation per comment (fix / push back +
+  reason / out of scope). (2) **Present** the comments *and* your recommendation, numbered.
+  (3) **Wait** for the user to choose: **Fix all** · **Pick specific** · **Push back**
+  (reason → posted as the PR reply, then resolve) · **Proceed (no changes)** — leave the
+  threads unresolved this tick and make zero edits. Then carry out step 4 for the chosen
+  items only.
+- **`false`:** process every comment autonomously (step 4 as written).
 
 ### 4. Process each unresolved thread
 
