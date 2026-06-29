@@ -41,6 +41,12 @@ Ask: **"Pause between reviews so you can see each model's findings and choose wh
 (recommended — default yes)."** Persist it:
 `python3 "$CORK_HOME/orchestrate.py" config set interactive_review true`  (or `false`).
 
+## 3b. Default standards
+Ask: **"Use cork's built-in coding & review standards as a baseline for all repos?
+(recommended — default yes; a repo can opt out with `standards init --opt-out`)."**
+Persist: `python3 "$CORK_HOME/orchestrate.py" config set default_standards true` (or `false`).
+Mention: per-repo, `standards init` scaffolds a project file that extends the default.
+
 ## 4. Status line (optional)
 If `~/.claude/settings.json` has no `statusLine`, offer to add it (so a session shows its
 active ticket/branch):

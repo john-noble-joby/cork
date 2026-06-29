@@ -52,6 +52,7 @@ acceptance criteria, type/labels, and links.
 - **Type:** classify feature vs. bug — Linear issue type/label first; else infer
   from content ("bug", "fix", "regression", an error report). This decides the
   branch prefix in Phase 2.
+- **Standards check:** run `python3 "$CORK_HOME/orchestrate.py" standards status {WORKTREE}`; if unconfigured (no project file, default on), tell the user once they can `standards init` / `--opt-out` — non-blocking, proceed.
 
 ## Phase 1 — Story-size gate (before any code)
 
@@ -126,6 +127,7 @@ answered this line — STOP. That is the exact failure this gate exists to preve
   flag the user. Propose the smallest complete, mergeable slice; file the remainder
   as a follow-on Linear story (same propose → verify → write-to-Linear gate as
   Phase 1). Don't silently blow past the target.
+- Follow the **effective standards**: cork's universal default (`$CORK_HOME/standards/AGENTS.md`) plus this repo's `code-review/AGENTS.md` if present (`standards status` shows what applies).
 - Run the repo's tests before moving on.
 
 ## Phase 4 — cork review + fix
@@ -135,9 +137,7 @@ skill): per-model blind review → apply the valid findings or **push back with
 justification** → commit after each model. Record every pushback for the Phase 7
 summary. cork's `preflight` picks the models available on this seat.
 
-(If `interactive_review` is on — the default — cork and the Copilot loop will pause after each
-reviewer for you to choose what to apply; devit inherits this, so expect to be prompted
-between reviewers.)
+(Pauses per reviewer when `interactive_review` is on — see Notes.)
 
 ## Phase 5 — Open the PR
 
@@ -155,9 +155,7 @@ comment and **mark the thread resolved**. Where a finding is wrong or out-of-sco
 **push back with justification** and resolve. Record pushbacks for Phase 7. (The loop
 already handles request → poll → fix/push-back → re-request up to its max passes.)
 
-(If `interactive_review` is on — the default — cork and the Copilot loop will pause after each
-reviewer for you to choose what to apply; devit inherits this, so expect to be prompted
-between reviewers.)
+(Pauses per reviewer when `interactive_review` is on — see Notes.)
 
 ## Phase 7 — Finish (surface pushbacks)
 
@@ -177,3 +175,4 @@ the merge.
 - **Worktree cleanup** is the user's call (the PR branch worktree stays until they
   merge/close). Don't remove it automatically.
 - **Path config:** skills/orchestrator come from `$CORK_HOME` (default `~/dev/cork`).
+- **Interactive review:** when `interactive_review` is on (default), cork and the Copilot loop pause after each reviewer for you to choose what to apply; devit inherits this.

@@ -42,11 +42,14 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 python3 "$CORK_HOME/orchestrate.py" --version            # cork version — announce it (see below)
 python3 "$CORK_HOME/orchestrate.py" preflight            # probe & select models for this seat
+python3 "$CORK_HOME/orchestrate.py" standards status .   # show the active review-standards layers
 git rev-parse --abbrev-ref HEAD                         # current branch
 git rev-parse --abbrev-ref HEAD | grep -oP 'MXE-\d+'    # ticket ID, if branch follows convention
 pwd                                                     # worktree path
 git log {BASE}..HEAD --oneline                          # commits vs base
 ```
+
+If `standards status` shows *no project standards* and the default is on, mention once (non-blocking): the repo has no project standards layer — `standards init` adds one, `--opt-out` skips the default. Proceed regardless.
 
 Capture the `--version` output (e.g. `cork 0.5.0 (a1b2c3d)`) and lead the confirmation line with it, so every run announces exactly which cork the agent is using.
 
