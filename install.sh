@@ -10,7 +10,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
 VERSION="$(tr -d '[:space:]' < "$REPO/VERSION")"
-SKILLS=(cork copilot-review-loop devit cork-setup)
+SKILLS=(copilot-review-loop cork cork-setup devit)
 
 echo "Installing cork skills v$VERSION → $DEST"
 echo
@@ -54,6 +54,42 @@ if [ "$cork_home" != "$REPO" ]; then
   echo "    CORK_HOME at this clone, or run install.sh from the clone in use."
 else
   echo "CORK_HOME: $cork_home ✓ (skills run this repo's orchestrate.py)"
+fi
+
+# Offer to persist CORK_HOME so the skills resolve this clone (settings.json env is
+# what Claude Code sessions — and thus the skills' bash — inherit).
+SETTINGS="$HOME/.claude/settings.json"
+current="$(python3 - "$SETTINGS" <<'PY' 2>/dev/null
+import json, sys
+try:
+    print((json.load(open(sys.argv[1])).get("env") or {}).get("CORK_HOME", ""))
+except Exception:
+    print("")
+PY
+)"
+if [ "$current" = "$REPO" ]; then
+  echo "CORK_HOME already set to $REPO in $SETTINGS ✓"
+else
+  printf "Set CORK_HOME=%s in %s? [y/N] " "$REPO" "$SETTINGS"
+  read -r ans
+  if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
+    python3 - "$SETTINGS" "$REPO" <<'PY'
+import json, os, sys
+path, repo = sys.argv[1], sys.argv[2]
+try:
+    cfg = json.load(open(path)) if os.path.exists(path) else {}
+except Exception:
+    cfg = {}
+cfg.setdefault("env", {})["CORK_HOME"] = repo
+os.makedirs(os.path.dirname(path), exist_ok=True)
+tmp = path + ".tmp"
+open(tmp, "w").write(json.dumps(cfg, indent=2) + "\n")
+os.replace(tmp, path)
+print(f"  ✓ set env.CORK_HOME={repo} in {path} (restart Claude Code to apply)")
+PY
+  else
+    echo "  Skipped. (Or add 'export CORK_HOME=$REPO' to your shell profile.)"
+  fi
 fi
 
 echo
