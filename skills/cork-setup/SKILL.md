@@ -5,7 +5,7 @@ description: Use when the user says "set up cork", "cork setup", "configure cork
 
 # cork-setup — guided setup
 
-**Version:** 0.7.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.8.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 Walk the user through getting cork working. Resolve `CORK_HOME` (default `~/dev/cork`).
 Do the steps in order; confirm each before moving on.
