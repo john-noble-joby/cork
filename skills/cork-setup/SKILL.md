@@ -17,9 +17,19 @@ CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 ## 1. Copilot token
 Check whether a token resolves: `python "$CORK_HOME/orchestrate.py" preflight`.
 - If it lists models → a token is present; continue.
-- If it fails with an auth error / "no token" → run `python "$CORK_HOME/orchestrate.py" login`
-  and have the user approve the GitHub device code in their browser. It writes
-  `~/.config/cork/auth.json` (chmod 600). Re-run `preflight` to confirm.
+- If it fails with an auth error / "no token" → the user must mint one. `login` runs GitHub's
+  **device-authorization flow** (no secret pasted): it prints a verification URL + a user
+  code, the user approves in the browser, and it polls and writes the token to
+  `~/.config/cork/auth.json` (chmod 600).
+  **The user runs `login`, not you** — it blocks ~15 min polling and the device code must
+  stream to them live, so do NOT run it via your own tool calls. Tell the user to run it in
+  the Claude Code prompt with the `!` prefix (runs in-session, output shows inline) or in a
+  terminal:
+
+  `! python "$CORK_HOME/orchestrate.py" login`
+
+  Wait for them to confirm they've approved in the browser, then re-run `preflight` yourself
+  to confirm a token now resolves.
 
 ## 2. Review models
 If `~/.config/cork/config.json` doesn't exist, run `python "$CORK_HOME/orchestrate.py" config init`.
