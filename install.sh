@@ -57,6 +57,11 @@ else
 fi
 
 echo
-echo "Next: restart Claude Code, then say \"set up cork\" to finish configuration."
-echo
-if [ "$rc" -eq 0 ]; then echo "Done."; else echo "Completed with warnings."; exit 1; fi
+if [ "$rc" -eq 0 ]; then
+  echo "Next: restart Claude Code, then say \"set up cork\" to finish configuration."
+  echo
+  echo "Done."
+else
+  echo "Completed with warnings."
+  exit 1
+fi

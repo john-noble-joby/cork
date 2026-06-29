@@ -329,7 +329,9 @@ def load_config(quiet: bool = False) -> dict:
         return copy.deepcopy(DEFAULT_CONFIG)
     try:
         cfg = json.loads(CONFIG_PATH.read_text())
-    except (json.JSONDecodeError, OSError) as e:
+    except json.JSONDecodeError as e:
+        fail(f"Cannot parse {CONFIG_PATH}: {e}")
+    except OSError as e:
         fail(f"Cannot read {CONFIG_PATH}: {e}")
     _validate_config(cfg)
     return cfg
