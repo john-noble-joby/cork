@@ -125,6 +125,20 @@ class ConfigGetSetTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             orchestrate.load_config()
 
+    def test_get_default_standards_defaults_true(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            orchestrate.cmd_config_get("default_standards")
+        self.assertEqual(buf.getvalue().strip(), "true")
+
+    def test_set_default_standards_roundtrip(self):
+        orchestrate.cmd_config_set("default_standards", "false")
+        self.assertFalse(json.loads(self.path.read_text())["default_standards"])
+
+    def test_set_default_standards_rejects_non_bool(self):
+        with self.assertRaises(SystemExit):
+            orchestrate.cmd_config_set("default_standards", "yes")
+
 
 if __name__ == "__main__":
     unittest.main()

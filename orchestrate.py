@@ -73,6 +73,7 @@ DEFAULT_CONFIG = {
     "version": 1,
     "count": 3,
     "interactive_review": True,
+    "default_standards": True,
     "providers": {
         "copilot":   {"enabled": True},
         "openai":    {"enabled": False},
@@ -321,6 +322,8 @@ def _validate_config(cfg: dict) -> None:
         fail("config.count must be a positive integer")
     if not isinstance(cfg.get("interactive_review", True), bool):
         fail("config.interactive_review must be true or false (a JSON boolean)")
+    if not isinstance(cfg.get("default_standards", True), bool):
+        fail("config.default_standards must be true or false (a JSON boolean)")
 
 
 def load_config(quiet: bool = False) -> dict:
@@ -351,7 +354,7 @@ def cmd_config_show() -> None:
     print(json.dumps(load_config(), indent=2))
 
 
-_SETTABLE_KEYS = {"interactive_review"}  # scalar bool prefs settable via `config set`; structural fields are edited in config.json directly
+_SETTABLE_KEYS = {"interactive_review", "default_standards"}  # scalar bool prefs settable via `config set`; structural fields are edited in config.json directly
 
 
 def cmd_config_get(key: str) -> None:
