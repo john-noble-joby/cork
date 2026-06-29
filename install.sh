@@ -76,9 +76,16 @@ else
     python3 - "$SETTINGS" "$REPO" <<'PY'
 import json, os, sys
 path, repo = sys.argv[1], sys.argv[2]
-try:
-    cfg = json.load(open(path)) if os.path.exists(path) else {}
-except Exception:
+if os.path.exists(path):
+    try:
+        cfg = json.load(open(path))
+    except Exception:
+        # An existing-but-unparsable settings.json must NOT be clobbered — overwriting it
+        # with just {"env":...} would lose every other Claude Code setting. Leave it be.
+        print(f"  ✗ {path} exists but isn't valid JSON — leaving it untouched. "
+              f"Fix it, then set env.CORK_HOME={repo} manually.")
+        raise SystemExit(0)
+else:
     cfg = {}
 if not isinstance(cfg.get("env"), dict):   # tolerate a malformed "env": null / non-dict
     cfg["env"] = {}

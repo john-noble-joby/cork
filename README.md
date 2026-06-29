@@ -21,9 +21,10 @@ It ships three skills:
 
 ## Setup
 
-Python 3.10+ stdlib only — no `pip install`. **`install.sh` does not set env vars or
-fetch tokens** (it only deploys the skills + status line and checks versions), so the
-token and MCP steps below are manual.
+Python 3.10+ stdlib only — no `pip install`. **`install.sh` does not fetch tokens**
+(it deploys the skills + status line, checks versions, and — only if you accept its
+prompt — writes `CORK_HOME` into `~/.claude/settings.json`), so the token and MCP
+steps below are manual.
 
 1. **Clone** to the default location (`CORK_HOME` defaults to `~/dev/cork`):
    ```bash
@@ -111,8 +112,10 @@ Lower-level detail and the underlying `orchestrate.py` engine.
 | 5, 7, … | Claude Code (×N) | Apply findings, **commit** |
 
 Then Claude Code pushes the branch and opens a PR summarizing what each pass caught.
-Commits after each fix give a clear audit trail. Reviewers use `code-review/AGENTS.md` if
-present (else root `AGENTS.md` or `.github/AGENTS.md`).
+Commits after each fix give a clear audit trail. Reviewers and devit's implementer use
+the **effective standards** — cork's universal default plus the repo's own
+`code-review/AGENTS.md` (or root `AGENTS.md` / `.github/AGENTS.md`) if present — unless
+opted out (see below).
 
 ### Coding & review standards (layering)
 
