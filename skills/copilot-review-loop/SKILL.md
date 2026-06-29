@@ -110,10 +110,7 @@ for t in unresolved:
 
 Read the preference once at loop start:
 
-```bash
-CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-PAUSE=$(python "$CORK_HOME/orchestrate.py" config get interactive_review)   # true | false
-```
+Run `python "$CORK_HOME/orchestrate.py" config get interactive_review`. If it prints `true` (the default), pause as below; if `false`, behave autonomously.
 
 - **`true` (default):** after fetching this pass's unresolved comments (step 3), apply
   NOTHING yet. (1) **Pre-pass:** form your recommendation per comment (fix / push back +

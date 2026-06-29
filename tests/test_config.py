@@ -98,6 +98,21 @@ class ConfigGetSetTest(unittest.TestCase):
         self.assertEqual(cfg["interactive_review"], False)
         self.assertIn("rotation", cfg)   # seeded from DEFAULT_CONFIG
 
+    def test_set_rejects_unknown_key(self):
+        self.path.write_text(json.dumps({"rotation": [{"provider": "copilot", "model": "gpt-4.1"}]}))
+        before = self.path.read_text()
+        with self.assertRaises(SystemExit):
+            orchestrate.cmd_config_set("count", "5")
+        self.assertEqual(self.path.read_text(), before)   # unchanged
+
+    def test_set_rejects_non_bool_interactive_review(self):
+        with self.assertRaises(SystemExit):
+            orchestrate.cmd_config_set("interactive_review", "maybe")
+
+    def test_set_accepts_case_insensitive_bool(self):
+        orchestrate.cmd_config_set("interactive_review", "TRUE")
+        self.assertEqual(json.loads(self.path.read_text())["interactive_review"], True)
+
 
 if __name__ == "__main__":
     unittest.main()

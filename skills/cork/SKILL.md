@@ -80,9 +80,7 @@ Rotation — use the `provider/model` lines printed by `preflight` in Step 0, in
 
 **Interactive review (default on).** Read the preference once before the rotation:
 
-```bash
-PAUSE=$(python "$CORK_HOME/orchestrate.py" config get interactive_review)   # true | false
-```
+Run `python "$CORK_HOME/orchestrate.py" config get interactive_review`. If it prints `true` (the default), pause as below; if `false`, behave autonomously.
 
 - **`true` (default):** after fetching **each** model's review, apply NOTHING yet.
   (1) **Pre-pass:** read the findings and form your recommendation — which you'd fix, which

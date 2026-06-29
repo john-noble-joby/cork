@@ -4,7 +4,7 @@ Skills that drive the orchestrator from an interactive Claude Code session.
 
 ## Install
 
-Run the installer from the repo root — it copies both skills into
+Run the installer from the repo root — it copies the skills into
 `~/.claude/skills/`, prints the version, and warns on drift:
 
 ```bash
@@ -20,6 +20,8 @@ sync. Check what's installed any time with `python orchestrate.py --version`
 Then invoke by phrase in any session:
 - **cork** — "cork" / "run cork on this branch"
 - **copilot-review-loop** — "run the copilot review loop on this branch"
+- **devit** — "devit <TICKET>"
+- **cork-setup** — "set up cork"
 
 ## Skills
 

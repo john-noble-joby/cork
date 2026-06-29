@@ -35,7 +35,7 @@ token and MCP steps below are manual.
    ```bash
    cd ~/dev/cork && ./install.sh
    ```
-   Copies `cork`, `copilot-review-loop`, `devit` into `~/.claude/skills/` and
+   Copies `cork`, `copilot-review-loop`, `devit`, and `cork-setup` into `~/.claude/skills/` and
    `statusline.py` into `~/.claude/`, and verifies every version stamp matches `VERSION`.
    Re-run after a `git pull` to update. (`orchestrate.py` itself isn't copied — the skills
    run it straight from `$CORK_HOME`, so `git pull` updates the engine.)
