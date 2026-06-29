@@ -5,7 +5,7 @@ description: Use when the user says "devit <TICKET>", "run devit on <TICKET>", o
 
 # devit — Linear-story dev loop
 
-**Version:** 0.6.2 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.7.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 devit takes a Linear story and drives it from ticket to a reviewed PR. The active
 Claude Code session is the agent; devit **sequences existing skills** — it does not

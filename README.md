@@ -68,6 +68,10 @@ token and MCP steps below are manual.
 
 Then, in any repo: **`devit MXE-123`**.
 
+Most of steps 3–6 are handled for you by the **`cork-setup` skill** — after `install.sh` and a
+restart, just say **"set up cork"** and it walks you through the token, models, the
+pause-between-reviews preference, and the status line.
+
 ---
 
 ## Write detailed Linear tickets — it matters a lot
@@ -146,6 +150,15 @@ and `anthropic` are supported but disabled by default; enable a provider in `con
 and supply its token via `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` (or keys `"openai"` /
 `"anthropic"` in `~/.config/cork/auth.json`). Secrets never go in `config.json`.
 
+### Interactive review (`interactive_review`, default on)
+
+When on, cork (full mode) and the Copilot review loop **pause after each reviewer**: the
+session presents that reviewer's findings plus its own recommendation and waits for you to
+choose — **fix all**, **pick specific**, **push back** (with a reason), or **proceed with no
+changes**. devit inherits this. Turn it off for fully autonomous runs:
+`python orchestrate.py config set interactive_review false` (or via `cork-setup`). It does
+not affect cork *review-only* or the headless pipeline.
+
 ### Status line
 
 `statusline.py` (deployed by `install.sh`) reads Claude Code's status JSON and prints the
@@ -156,8 +169,10 @@ blocks or errors to blank. Enable it via the `settings.json` snippet in Setup st
 
 ### Environment variables
 
-None are required if you clone to `~/dev/cork` and use `orchestrate.py login`. The rest
-are overrides:
+Tokens live in **`~/.config/cork/auth.json`** (written by `orchestrate.py login`; chmod 600) —
+`{"token": "<copilot>", "openai": "<key>", "anthropic": "<key>"}`. The env vars below are
+**overrides** (resolved first), not required. None are needed if you clone to `~/dev/cork`
+and run `login`.
 
 | Env var | Default | Purpose |
 |---------|---------|---------|

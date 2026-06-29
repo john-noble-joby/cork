@@ -48,6 +48,12 @@ back to inline if the `superpowers` plugin isn't installed), runs cork review+fi
 PR (`<TICKET>:` title + "In plain terms" body), runs the `copilot-review-loop`, and
 surfaces all pushbacks. Orchestrates the other skills; does not auto-merge.
 
+### cork-setup
+Guided, interactive first-time setup. Say "set up cork" and it walks through the Copilot
+token (`login`), review models (`config init`/`preflight`), the pause-between-reviews
+preference (`interactive_review`), the status line, and Linear/mem0 MCP checks. Run it after
+`install.sh` + a restart.
+
 ## Configuration
 
 `cork` resolves the orchestrator location from the `CORK_HOME` environment variable,
