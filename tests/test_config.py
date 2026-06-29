@@ -1,4 +1,5 @@
-import json, os, unittest, tempfile
+import io, json, os, unittest, tempfile
+from contextlib import redirect_stdout
 from pathlib import Path
 import orchestrate
 
@@ -51,6 +52,51 @@ class ConfigTest(unittest.TestCase):
         }))
         with self.assertRaises(SystemExit):
             orchestrate.load_config()
+
+
+class ConfigGetSetTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "config.json"
+        self._orig = orchestrate.CONFIG_PATH
+        orchestrate.CONFIG_PATH = self.path
+
+    def tearDown(self):
+        orchestrate.CONFIG_PATH = self._orig
+        self.tmp.cleanup()
+
+    def test_get_interactive_review_defaults_true_when_no_file(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            orchestrate.cmd_config_get("interactive_review")
+        self.assertEqual(buf.getvalue().strip(), "true")
+
+    def test_get_interactive_review_defaults_true_when_key_absent(self):
+        self.path.write_text(json.dumps({
+            "rotation": [{"provider": "copilot", "model": "gpt-4.1"}],
+        }))
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            orchestrate.cmd_config_get("interactive_review")
+        self.assertEqual(buf.getvalue().strip(), "true")
+
+    def test_set_then_get_roundtrip(self):
+        self.path.write_text(json.dumps({
+            "rotation": [{"provider": "copilot", "model": "gpt-4.1"}],
+        }))
+        orchestrate.cmd_config_set("interactive_review", "false")
+        self.assertEqual(json.loads(self.path.read_text())["interactive_review"], False)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            orchestrate.cmd_config_get("interactive_review")
+        self.assertEqual(buf.getvalue().strip(), "false")
+
+    def test_set_creates_file_from_default(self):
+        orchestrate.cmd_config_set("interactive_review", "false")
+        self.assertTrue(self.path.exists())
+        cfg = json.loads(self.path.read_text())
+        self.assertEqual(cfg["interactive_review"], False)
+        self.assertIn("rotation", cfg)   # seeded from DEFAULT_CONFIG
 
 
 if __name__ == "__main__":

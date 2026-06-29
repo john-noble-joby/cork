@@ -72,6 +72,7 @@ PROVIDER_BASE = {
 DEFAULT_CONFIG = {
     "version": 1,
     "count": 3,
+    "interactive_review": True,
     "providers": {
         "copilot":   {"enabled": True},
         "openai":    {"enabled": False},
@@ -346,6 +347,47 @@ def cmd_config_init() -> None:
 
 def cmd_config_show() -> None:
     print(json.dumps(load_config(), indent=2))
+
+
+# Known top-level config defaults (used when the key is absent / no file).
+_CONFIG_DEFAULTS = {"interactive_review": True}
+
+
+def _load_config_quiet() -> dict:
+    # Like load_config() but without the "no config" stdout nudge — so `config get`
+    # output stays clean for callers that parse it.
+    if CONFIG_PATH.exists():
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            fail(f"Cannot read {CONFIG_PATH}: {e}")
+        _validate_config(cfg)
+        return cfg
+    return copy.deepcopy(DEFAULT_CONFIG)
+
+
+def cmd_config_get(key: str) -> None:
+    cfg = _load_config_quiet()
+    value = cfg.get(key, _CONFIG_DEFAULTS.get(key))
+    print(json.dumps(value))
+
+
+def _coerce(value: str) -> object:
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    if value.lstrip("-").isdigit():
+        return int(value)
+    return value
+
+
+def cmd_config_set(key: str, value: str) -> None:
+    cfg = _load_config_quiet()
+    cfg[key] = _coerce(value)
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(json.dumps(cfg, indent=2) + "\n")
+    print(f"Set {key} = {json.dumps(cfg[key])} in {CONFIG_PATH}")
 
 # ── Checkpoint ────────────────────────────────────────────────────────────────
 
@@ -1011,8 +1053,17 @@ def main() -> None:
         print(_version())
         return
     if len(sys.argv) >= 2 and sys.argv[1] == "config":
-        if len(sys.argv) >= 3 and sys.argv[2] == "init":
+        sub = sys.argv[2] if len(sys.argv) >= 3 else ""
+        if sub == "init":
             cmd_config_init()
+        elif sub == "get":
+            if len(sys.argv) < 4:
+                fail("usage: orchestrate.py config get <key>")
+            cmd_config_get(sys.argv[3])
+        elif sub == "set":
+            if len(sys.argv) < 5:
+                fail("usage: orchestrate.py config set <key> <value>")
+            cmd_config_set(sys.argv[3], sys.argv[4])
         else:
             cmd_config_show()
         return
