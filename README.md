@@ -127,7 +127,8 @@ devit's implementer and the blind review models. The **effective** rubric for a 
 - **Use the default** (on by default): nothing to do — every review/implementation carries
   the baseline.
 - **Add project specifics:** `python3 orchestrate.py standards init <repo>` scaffolds a
-  `code-review/AGENTS.md` that layers *under* the default; fill in your stack's conventions.
+  `code-review/AGENTS.md` that **extends** the default baseline (your specifics take
+  precedence); fill in your stack's conventions.
 - **Opt a repo out:** `standards init <repo> --opt-out` (writes `code-review/.cork-standards-off`).
 - **Opt out everywhere:** `python3 orchestrate.py config set default_standards false`.
 - **See what applies:** `python3 orchestrate.py standards status <repo>`.

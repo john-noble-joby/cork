@@ -62,7 +62,9 @@ SETTINGS="$HOME/.claude/settings.json"
 current="$(python3 - "$SETTINGS" <<'PY' 2>/dev/null
 import json, sys
 try:
-    print((json.load(open(sys.argv[1])).get("env") or {}).get("CORK_HOME", ""))
+    with open(sys.argv[1], encoding="utf-8") as f:
+        env = json.load(f).get("env") or {}
+    print(env.get("CORK_HOME", ""))
 except Exception:
     print("")
 PY
@@ -78,7 +80,8 @@ import json, os, sys
 path, repo = sys.argv[1], sys.argv[2]
 if os.path.exists(path):
     try:
-        cfg = json.load(open(path))
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
     except Exception:
         # An existing-but-unparsable settings.json must NOT be clobbered — overwriting it
         # with just {"env":...} would lose every other Claude Code setting. Leave it be.
@@ -92,7 +95,7 @@ if not isinstance(cfg.get("env"), dict):   # tolerate a malformed "env": null / 
 cfg["env"]["CORK_HOME"] = repo
 os.makedirs(os.path.dirname(path), exist_ok=True)
 tmp = path + ".tmp"
-with open(tmp, "w") as f:
+with open(tmp, "w", encoding="utf-8") as f:
     f.write(json.dumps(cfg, indent=2) + "\n")
 os.replace(tmp, path)
 print(f"  ✓ set env.CORK_HOME={repo} in {path} (restart Claude Code to apply)")

@@ -935,8 +935,9 @@ def prompt_push_pr(ticket_id: str, base: str, summary: str) -> str:
 _PROJECT_STANDARDS_TEMPLATE = """\
 # <Project> — Coding & Review Standards
 
-This file **extends cork's universal default standards** (it's layered underneath the
-default, not instead of it). Put this project's stack-specific conventions and checks here.
+This file **extends cork's universal default standards** — the default is the baseline,
+and your project-specific rules below sit on top of it and take precedence (they add to
+it, not replace it). Put this project's stack-specific conventions and checks here.
 
 ## Project conventions
 - Language/runtime, formatter, naming, file layout, result/error pattern, test framework.
@@ -978,7 +979,7 @@ def cmd_standards_init(repo: str, opt_out: bool = False) -> None:
         fail(f"{target} already exists — edit it directly (won't overwrite).")
     cr.mkdir(parents=True, exist_ok=True)
     target.write_text(_PROJECT_STANDARDS_TEMPLATE)
-    print(f"Scaffolded {target} — add project-specific conventions; it layers under cork's default.")
+    print(f"Scaffolded {target} — add project-specific conventions; they extend cork's default baseline.")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
