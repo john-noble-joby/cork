@@ -80,7 +80,9 @@ try:
     cfg = json.load(open(path)) if os.path.exists(path) else {}
 except Exception:
     cfg = {}
-cfg.setdefault("env", {})["CORK_HOME"] = repo
+if not isinstance(cfg.get("env"), dict):   # tolerate a malformed "env": null / non-dict
+    cfg["env"] = {}
+cfg["env"]["CORK_HOME"] = repo
 os.makedirs(os.path.dirname(path), exist_ok=True)
 tmp = path + ".tmp"
 with open(tmp, "w") as f:

@@ -741,8 +741,9 @@ def review(provider: str, model: str, instructions: str, story: str,
     system = (
         instructions + "\n\n---\n"
         "Note: you are a single-pass API reviewer — you cannot spawn "
-        "sub-agents or invoke skills. Apply §3–§7 in one pass and produce "
-        "the §8 output format. Do NOT apply fixes; report findings only."
+        "sub-agents or invoke skills. Apply the standards in one pass and "
+        "produce the output-format section. Do NOT apply fixes; report "
+        "findings only."
         if instructions else REVIEW_SYSTEM
     )
     fixed_chars = len(system) + len(story) + len(diff) + 500
@@ -955,7 +956,7 @@ def cmd_standards_status(repo: str) -> None:
     if not global_on:
         print("  universal default: OFF (global default_standards=false)")
     elif opted:
-        print(f"  universal default: OFF (opted out via code-review/.cork-standards-off)")
+        print("  universal default: OFF (opted out via code-review/.cork-standards-off)")
     else:
         print(f"  universal default: ON ({_DEFAULT_STANDARDS})")
     print(f"  project standards: {project or 'none — run `standards init` to add one'}")

@@ -52,7 +52,6 @@ acceptance criteria, type/labels, and links.
 - **Type:** classify feature vs. bug — Linear issue type/label first; else infer
   from content ("bug", "fix", "regression", an error report). This decides the
   branch prefix in Phase 2.
-- **Standards check:** run `python3 "$CORK_HOME/orchestrate.py" standards status {WORKTREE}`; if unconfigured (no project file, default on), tell the user once they can `standards init` / `--opt-out` — non-blocking, proceed.
 
 ## Phase 1 — Story-size gate (before any code)
 
@@ -88,6 +87,11 @@ BR="feature/<TICKET>-<slug>"   # or bugfix/<TICKET>-<slug>
 git worktree add ".worktrees/$BR" -b "$BR" origin/develop
 cd ".worktrees/$BR"
 ```
+
+**Standards check (non-blocking):** now that you're in the worktree, run
+`python3 "$CORK_HOME/orchestrate.py" standards status .`. If it reports no project
+standards (default on, no `code-review/AGENTS.md`), tell the user once that they can
+`standards init` / `--opt-out` — then proceed; this is never a gate.
 
 **Session naming — REQUIRED output of Phase 2, do not skip.** The user tracks which
 session is working on which ticket by its name, so this is not optional. Claude Code
