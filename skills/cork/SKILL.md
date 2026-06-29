@@ -40,8 +40,8 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-python "$CORK_HOME/orchestrate.py" --version            # cork version — announce it (see below)
-python "$CORK_HOME/orchestrate.py" preflight            # probe & select models for this seat
+python3 "$CORK_HOME/orchestrate.py" --version            # cork version — announce it (see below)
+python3 "$CORK_HOME/orchestrate.py" preflight            # probe & select models for this seat
 git rev-parse --abbrev-ref HEAD                         # current branch
 git rev-parse --abbrev-ref HEAD | grep -oP 'MXE-\d+'    # ticket ID, if branch follows convention
 pwd                                                     # worktree path
@@ -80,7 +80,7 @@ Rotation — use the `provider/model` lines printed by `preflight` in Step 0, in
 
 **Interactive review (default on).** Read the preference once before the rotation:
 
-Run `python "$CORK_HOME/orchestrate.py" config get interactive_review`. If it prints `true` (the default), pause as below; if `false`, behave autonomously.
+Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it prints `true` (the default), pause as below; if `false`, behave autonomously.
 
 - **`true` (default):** after fetching **each** model's review, apply NOTHING yet.
   (1) **Pre-pass:** read the findings and form your recommendation — which you'd fix, which
@@ -96,7 +96,7 @@ Run `python "$CORK_HOME/orchestrate.py" config get interactive_review`. If it pr
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-python "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch develop
+python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch develop
 ```
 
 `{MODEL}` is the full `provider/model` ref printed by `preflight` (e.g. `copilot/gpt-5.5`); `orchestrate.py` splits it (a bare id defaults to `copilot`).
@@ -129,7 +129,7 @@ CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 # PREFLIGHT_MODELS is the space-separated list of "provider/model" lines from Step 0 preflight
 for M in $PREFLIGHT_MODELS; do
   safe="${M//\//-}"
-  python "$CORK_HOME/orchestrate.py" "${TICKET:-REVIEW}" {WORKTREE} \
+  python3 "$CORK_HOME/orchestrate.py" "${TICKET:-REVIEW}" {WORKTREE} \
     --review-model "$M" --base-branch {BASE} --skip-validation \
     > "/tmp/cork-review-${safe}.txt" 2>&1 &
 done
@@ -154,7 +154,7 @@ Print the report and stop. If the user then wants fixes applied, that's a separa
 - **Base branch** is `develop` for edge-fmt. Pass `--base-branch develop` (local and origin are kept in sync; if in doubt `git fetch origin && git merge --ff-only origin/develop`).
 - **Run tests** after each fix before committing — don't commit a broken build. (Full mode only — review-only never writes code.)
 - **Review-only mode** is side-effect-free: parallel reviews → one consolidated report, nothing applied. Reach for it to review someone else's branch.
-- **Copilot token**: `--review-model` resolves a token in priority order — `CORK_COPILOT_TOKEN` env var → cork's own `~/.config/cork/auth.json` (`CORK_AUTH_FILE`) → opencode (`~/.local/share/opencode/auth.json`). To give cork its own token, run `python "$CORK_HOME/orchestrate.py" login` (GitHub device flow, writes the auth file automatically). A 401 means the token expired — re-run `login`.
+- **Copilot token**: `--review-model` resolves a token in priority order — `CORK_COPILOT_TOKEN` env var → cork's own `~/.config/cork/auth.json` (`CORK_AUTH_FILE`) → opencode (`~/.local/share/opencode/auth.json`). To give cork its own token, run `python3 "$CORK_HOME/orchestrate.py" login` (GitHub device flow, writes the auth file automatically). A 401 means the token expired — re-run `login`.
 - **Worktree**: all edits go in the PR's worktree, not the main checkout.
 - **Headless mode** still exists: `$CORK_HOME/orchestrate.py {TICKET} {WORKTREE}` runs the full `3 + 2×N` pipeline with `claude --print` subprocesses (N = preflight-selected count from config). Use that only for unattended/background runs; it resumes automatically from the checkpoint on re-run.
 - **Path config:** the orchestrator location comes from `$CORK_HOME` (default `~/dev/cork`). Set it in your shell profile or `~/.claude/settings.json` `env` block if your clone lives elsewhere.

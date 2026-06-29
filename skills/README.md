@@ -14,7 +14,7 @@ Run the installer from the repo root — it copies the skills into
 `orchestrate.py` itself isn't installed: the skills call it via `$CORK_HOME`
 (default `~/dev/cork`), so it runs from this clone directly — `git pull` updates
 it. Only the `SKILL.md` files are copies, which is what `install.sh` keeps in
-sync. Check what's installed any time with `python orchestrate.py --version`
+sync. Check what's installed any time with `python3 orchestrate.py --version`
 (also surfaced in the cork skill's Step 0 confirmation line).
 
 Then invoke by phrase in any session:
@@ -83,7 +83,7 @@ writes `~/.config/cork/auth.json` (chmod 600) for you, with no token copying and
 dependency on opencode:
 
 ```bash
-python "$CORK_HOME/orchestrate.py" login
+python3 "$CORK_HOME/orchestrate.py" login
 #   Open:  https://github.com/login/device
 #   Code:  FD65-A4B3
 # (authorize in the browser; cork polls and writes the token automatically)

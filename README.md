@@ -42,7 +42,7 @@ token and MCP steps below are manual.
 
 3. **Get a Copilot token** (required — this is what unlocks the review models):
    ```bash
-   python ~/dev/cork/orchestrate.py login
+   python3 ~/dev/cork/orchestrate.py login
    ```
    GitHub device flow → writes `~/.config/cork/auth.json` (chmod 600). Re-run if it expires
    (a 401 in a review means expired).
@@ -60,8 +60,8 @@ token and MCP steps below are manual.
 6. **(Optional) Customize the review models** — without a config, a built-in default is
    used:
    ```bash
-   python ~/dev/cork/orchestrate.py config init   # write a starter config you can edit
-   python ~/dev/cork/orchestrate.py preflight      # show which models your seat can use
+   python3 ~/dev/cork/orchestrate.py config init   # write a starter config you can edit
+   python3 ~/dev/cork/orchestrate.py preflight      # show which models your seat can use
    ```
 
 7. **Restart Claude Code** so it loads the new skills (and the status line).
@@ -117,7 +117,7 @@ Two ways to run it:
 - **Session-driven (the skills):** the active Claude session implements/fixes and calls
   `orchestrate.py --review-model <provider/model>` once per model for a stateless blind
   review. This is what `cork`/`devit` use.
-- **Headless (legacy/unattended):** `python orchestrate.py <TICKET> <repo-path>
+- **Headless (legacy/unattended):** `python3 orchestrate.py <TICKET> <repo-path>
   [--base-branch <branch>]` runs the whole loop in subprocesses, checkpointing after each
   step (resume by re-running; `--reset` to start over).
 
@@ -156,7 +156,7 @@ When on, cork (full mode) and the Copilot review loop **pause after each reviewe
 session presents that reviewer's findings plus its own recommendation and waits for you to
 choose — **fix all**, **pick specific**, **push back** (with a reason), or **proceed with no
 changes**. devit inherits this. Turn it off for fully autonomous runs:
-`python orchestrate.py config set interactive_review false` (or via `cork-setup`). It does
+`python3 orchestrate.py config set interactive_review false` (or via `cork-setup`). It does
 not affect cork *review-only* or the headless pipeline.
 
 ### Status line

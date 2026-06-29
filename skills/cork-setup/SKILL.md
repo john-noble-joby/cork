@@ -15,7 +15,7 @@ CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 ```
 
 ## 1. Copilot token
-Check whether a token resolves: `python "$CORK_HOME/orchestrate.py" preflight`.
+Check whether a token resolves: `python3 "$CORK_HOME/orchestrate.py" preflight`.
 - If it lists models → a token is present; continue.
 - If it fails with an auth error / "no token" → the user must mint one. `login` runs GitHub's
   **device-authorization flow** (no secret pasted): it prints a verification URL + a user
@@ -26,20 +26,20 @@ Check whether a token resolves: `python "$CORK_HOME/orchestrate.py" preflight`.
   the Claude Code prompt with the `!` prefix (runs in-session, output shows inline) or in a
   terminal:
 
-  `! python "$CORK_HOME/orchestrate.py" login`
+  `! python3 "$CORK_HOME/orchestrate.py" login`
 
   Wait for them to confirm they've approved in the browser, then re-run `preflight` yourself
   to confirm a token now resolves.
 
 ## 2. Review models
-If `~/.config/cork/config.json` doesn't exist, run `python "$CORK_HOME/orchestrate.py" config init`.
+If `~/.config/cork/config.json` doesn't exist, run `python3 "$CORK_HOME/orchestrate.py" config init`.
 Run `preflight` and show the selected `provider/model` list. Offer to edit `rotation`/`count`
 in the config if the user wants different/more models.
 
 ## 3. Pause-between-reviews preference
 Ask: **"Pause between reviews so you can see each model's findings and choose what to apply?
 (recommended — default yes)."** Persist it:
-`python "$CORK_HOME/orchestrate.py" config set interactive_review true`  (or `false`).
+`python3 "$CORK_HOME/orchestrate.py" config set interactive_review true`  (or `false`).
 
 ## 4. Status line (optional)
 If `~/.claude/settings.json` has no `statusLine`, offer to add it (so a session shows its
