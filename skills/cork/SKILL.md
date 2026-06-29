@@ -78,6 +78,24 @@ Review your own diff with subagents (dispatch parallel reviewers), apply fixes, 
 
 Rotation — use the `provider/model` lines printed by `preflight` in Step 0, in order. One review→fix cycle per model: (1) the model reviews the diff, (2) you apply/reject its findings and commit. Save the strongest model for last so it reviews after the others' fixes have landed. (`gpt-5.5`/`gpt-5.x` models are reached via Copilot's `/responses` endpoint; `orchestrate.py` routes them there automatically — nothing to configure.)
 
+**Interactive review (default on).** Read the preference once before the rotation:
+
+```bash
+PAUSE=$(python "$CORK_HOME/orchestrate.py" config get interactive_review)   # true | false
+```
+
+- **`true` (default):** after fetching **each** model's review, apply NOTHING yet.
+  (1) **Pre-pass:** read the findings and form your recommendation — which you'd fix, which
+  you'd push back on (with a reason), which are out of scope. (2) **Present** the model's
+  findings *and* your recommendation, numbered. (3) **Wait** for the user to choose:
+    - **Fix all** — apply every finding, run tests, commit, continue.
+    - **Pick specific** (e.g. "1, 3, 4") — apply those, commit; leave/push back the rest as they say.
+    - **Push back** — record won't-fix items + reasons for the final pushback summary.
+    - **Proceed (no changes)** — apply nothing from this model; make **zero edits/commits**; move on.
+  Do not apply anything or advance to the next model until they answer.
+- **`false`:** behave autonomously (you apply the valid findings, push back with reasoning
+  where wrong, and commit) — the flow described below.
+
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 python "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch develop
