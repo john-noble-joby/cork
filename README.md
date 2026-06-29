@@ -170,9 +170,10 @@ blocks or errors to blank. Enable it via the `settings.json` snippet in Setup st
 ### Environment variables
 
 Tokens live in **`~/.config/cork/auth.json`** (written by `orchestrate.py login`; chmod 600) —
-`{"token": "<copilot>", "openai": "<key>", "anthropic": "<key>"}`. The env vars below are
-**overrides** (resolved first), not required. None are needed if you clone to `~/dev/cork`
-and run `login`.
+`{"token": "<copilot>", "openai": "<key>", "anthropic": "<key>"}`. (For backward compat the
+Copilot token is also accepted in the legacy opencode shape `{"github-copilot": {"refresh":
+"..."}}`.) The env vars below are **overrides** (resolved first), not required. None are
+needed if you clone to `~/dev/cork` and run `login`.
 
 | Env var | Default | Purpose |
 |---------|---------|---------|

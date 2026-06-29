@@ -113,6 +113,18 @@ class ConfigGetSetTest(unittest.TestCase):
         orchestrate.cmd_config_set("interactive_review", "TRUE")
         self.assertEqual(json.loads(self.path.read_text())["interactive_review"], True)
 
+    def test_get_unknown_key_fails(self):
+        with self.assertRaises(SystemExit):
+            orchestrate.cmd_config_get("nope")
+
+    def test_load_rejects_non_bool_interactive_review(self):
+        self.path.write_text(json.dumps({
+            "rotation": [{"provider": "copilot", "model": "gpt-4.1"}],
+            "interactive_review": "true",   # string, not a JSON bool
+        }))
+        with self.assertRaises(SystemExit):
+            orchestrate.load_config()
+
 
 if __name__ == "__main__":
     unittest.main()

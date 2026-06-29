@@ -319,6 +319,8 @@ def _validate_config(cfg: dict) -> None:
     count = cfg.get("count", 3)
     if not isinstance(count, int) or count < 1:
         fail("config.count must be a positive integer")
+    if not isinstance(cfg.get("interactive_review", True), bool):
+        fail("config.interactive_review must be true or false (a JSON boolean)")
 
 
 def load_config(quiet: bool = False) -> dict:
@@ -354,6 +356,8 @@ _SETTABLE_KEYS = {"interactive_review"}  # scalar bool prefs settable via `confi
 
 def cmd_config_get(key: str) -> None:
     cfg = load_config(quiet=True)
+    if key not in cfg and key not in DEFAULT_CONFIG:
+        fail(f"unknown config key: {key!r}")
     print(json.dumps(cfg.get(key, DEFAULT_CONFIG.get(key))))
 
 

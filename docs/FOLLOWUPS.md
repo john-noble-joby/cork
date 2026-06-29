@@ -6,11 +6,8 @@ Items from the code review that are intentionally deferred — do not implement 
 SKILL.md command snippets and README use `python`; standardize to `python3` everywhere (portability on systems without a `python` symlink / where it's py2).
 
 ## Polish
-- `config get` prints JSON-encoded / `null` for unknown keys — document the contract or emit bare scalars.
-- Drop the unused `os` import in `tests/test_config.py` and use `assertTrue`/`assertFalse` for bools.
-- Sort the `SKILLS` array in `install.sh`.
-- The install "Next: set up cork" line prints even on rc=1 — gate on rc=0.
-- `auth.json` accepts both `{"token":...}` and `{"github-copilot":{"refresh":...}}` — cross-reference the shapes in the docs.
+- Use `assertTrue`/`assertFalse` for booleans in `tests/test_config.py` (currently `assertEqual(..., True/False)`).
+- Sort the `SKILLS` array in `install.sh` (currently appended in install order).
 - devit Phases 4 & 6 repeat the `interactive_review` note verbatim — move it to `## Notes` and reference once.
 
 ## Someday (not now)
