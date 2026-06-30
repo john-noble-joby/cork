@@ -5,7 +5,7 @@ description: Use when the user says "set up cork", "cork setup", "configure cork
 
 # cork-setup — guided setup
 
-**Version:** 0.7.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.8.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 Walk the user through getting cork working. Resolve `CORK_HOME` (default `~/dev/cork`).
 Do the steps in order; confirm each before moving on.
@@ -40,6 +40,12 @@ in the config if the user wants different/more models.
 Ask: **"Pause between reviews so you can see each model's findings and choose what to apply?
 (recommended — default yes)."** Persist it:
 `python3 "$CORK_HOME/orchestrate.py" config set interactive_review true`  (or `false`).
+
+## 3b. Default standards
+Ask: **"Use cork's built-in coding & review standards as a baseline for all repos?
+(recommended — default yes; a repo can opt out with `standards init --opt-out`)."**
+Persist: `python3 "$CORK_HOME/orchestrate.py" config set default_standards true` (or `false`).
+Mention: per-repo, `standards init` scaffolds a project file that extends the default.
 
 ## 4. Status line (optional)
 If `~/.claude/settings.json` has no `statusLine`, offer to add it (so a session shows its

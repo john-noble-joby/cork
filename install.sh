@@ -10,7 +10,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
 VERSION="$(tr -d '[:space:]' < "$REPO/VERSION")"
-SKILLS=(cork copilot-review-loop devit cork-setup)
+SKILLS=(copilot-review-loop cork cork-setup devit)
 
 echo "Installing cork skills v$VERSION → $DEST"
 echo
@@ -54,6 +54,55 @@ if [ "$cork_home" != "$REPO" ]; then
   echo "    CORK_HOME at this clone, or run install.sh from the clone in use."
 else
   echo "CORK_HOME: $cork_home ✓ (skills run this repo's orchestrate.py)"
+fi
+
+# Offer to persist CORK_HOME so the skills resolve this clone (settings.json env is
+# what Claude Code sessions — and thus the skills' bash — inherit).
+SETTINGS="$HOME/.claude/settings.json"
+current="$(python3 - "$SETTINGS" <<'PY' 2>/dev/null
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        env = json.load(f).get("env") or {}
+    print(env.get("CORK_HOME", ""))
+except Exception:
+    print("")
+PY
+)"
+if [ "$current" = "$REPO" ]; then
+  echo "CORK_HOME already set to $REPO in $SETTINGS ✓"
+else
+  printf "Set CORK_HOME=%s in %s? [y/N] " "$REPO" "$SETTINGS"
+  read -r ans || ans=""   # EOF / non-interactive stdin must not abort under set -e
+  if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
+    python3 - "$SETTINGS" "$REPO" <<'PY'
+import json, os, sys
+path, repo = sys.argv[1], sys.argv[2]
+if os.path.exists(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        # An existing-but-unparsable settings.json must NOT be clobbered — overwriting it
+        # with just {"env":...} would lose every other Claude Code setting. Leave it be.
+        print(f"  ✗ {path} exists but isn't valid JSON — leaving it untouched. "
+              f"Fix it, then set env.CORK_HOME={repo} manually.")
+        raise SystemExit(0)
+else:
+    cfg = {}
+if not isinstance(cfg.get("env"), dict):   # tolerate a malformed "env": null / non-dict
+    cfg["env"] = {}
+cfg["env"]["CORK_HOME"] = repo
+os.makedirs(os.path.dirname(path), exist_ok=True)
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    f.write(json.dumps(cfg, indent=2) + "\n")
+os.replace(tmp, path)
+print(f"  ✓ set env.CORK_HOME={repo} in {path} (restart Claude Code to apply)")
+PY
+  else
+    echo "  Skipped. (Or add 'export CORK_HOME=$REPO' to your shell profile.)"
+  fi
 fi
 
 echo

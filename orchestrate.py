@@ -73,6 +73,7 @@ DEFAULT_CONFIG = {
     "version": 1,
     "count": 3,
     "interactive_review": True,
+    "default_standards": True,
     "providers": {
         "copilot":   {"enabled": True},
         "openai":    {"enabled": False},
@@ -321,6 +322,8 @@ def _validate_config(cfg: dict) -> None:
         fail("config.count must be a positive integer")
     if not isinstance(cfg.get("interactive_review", True), bool):
         fail("config.interactive_review must be true or false (a JSON boolean)")
+    if not isinstance(cfg.get("default_standards", True), bool):
+        fail("config.default_standards must be true or false (a JSON boolean)")
 
 
 def load_config(quiet: bool = False) -> dict:
@@ -351,7 +354,7 @@ def cmd_config_show() -> None:
     print(json.dumps(load_config(), indent=2))
 
 
-_SETTABLE_KEYS = {"interactive_review"}  # scalar bool prefs settable via `config set`; structural fields are edited in config.json directly
+_SETTABLE_KEYS = {"interactive_review", "default_standards"}  # scalar bool prefs settable via `config set`; structural fields are edited in config.json directly
 
 
 def cmd_config_get(key: str) -> None:
@@ -537,18 +540,38 @@ def git_commit_all(cwd: str, message: str) -> bool:
     return False
 
 
+_DEFAULT_STANDARDS = Path(__file__).resolve().parent / "standards" / "AGENTS.md"
+
+_PROJECT_STANDARDS = [
+    "code-review/AGENTS.md", "code-review/agent.md",
+    "AGENTS.md", "agent.md", ".github/AGENTS.md",
+]
+
+
+def _repo_opted_out(repo: str) -> bool:
+    return (Path(repo) / "code-review" / ".cork-standards-off").exists()
+
+
 def load_agent_instructions(repo: str) -> tuple[str, str]:
-    candidates = [
-        Path(repo) / "code-review" / "AGENTS.md",
-        Path(repo) / "code-review" / "agent.md",
-        Path(repo) / "AGENTS.md",
-        Path(repo) / "agent.md",
-        Path(repo) / ".github" / "AGENTS.md",
-    ]
-    for p in candidates:
+    # Effective review/coding rubric = cork universal default (gated) + the repo's own.
+    project_text, project_path = "", ""
+    for rel in _PROJECT_STANDARDS:
+        p = Path(repo) / rel
         if p.exists():
-            return p.read_text(errors="replace"), str(p)
-    return "", ""
+            project_text, project_path = p.read_text(errors="replace"), str(p)
+            break
+    use_default = (load_config(quiet=True).get("default_standards", True)
+                   and not _repo_opted_out(repo))
+    universal_text = (_DEFAULT_STANDARDS.read_text(errors="replace")
+                      if use_default and _DEFAULT_STANDARDS.exists() else "")
+    parts, labels = [], []
+    if universal_text.strip():
+        parts.append(universal_text); labels.append("cork default")
+    if project_text.strip():
+        parts.append(project_text); labels.append(project_path)
+    if not parts:
+        return "", ""
+    return "\n\n---\n\n".join(parts), " + ".join(labels)
 
 
 def _budget_files(files: dict[str, str], budget_chars: int) -> tuple[str, int]:
@@ -718,8 +741,9 @@ def review(provider: str, model: str, instructions: str, story: str,
     system = (
         instructions + "\n\n---\n"
         "Note: you are a single-pass API reviewer — you cannot spawn "
-        "sub-agents or invoke skills. Apply §3–§7 in one pass and produce "
-        "the §8 output format. Do NOT apply fixes; report findings only."
+        "sub-agents or invoke skills. Apply the standards in one pass and "
+        "produce the output-format section. Do NOT apply fixes; report "
+        "findings only."
         if instructions else REVIEW_SYSTEM
     )
     fixed_chars = len(system) + len(story) + len(diff) + 500
@@ -908,6 +932,59 @@ def prompt_push_pr(ticket_id: str, base: str, summary: str) -> str:
     )
 
 
+_PROJECT_STANDARDS_TEMPLATE = """\
+# <Project> — Coding & Review Standards
+
+This file **extends cork's universal default standards** — the default is the baseline,
+and your project-specific rules below sit on top of it and take precedence (they add to
+it, not replace it). Put this project's stack-specific conventions and checks here.
+
+## Project conventions
+- Language/runtime, formatter, naming, file layout, result/error pattern, test framework.
+
+## Project-specific review checks
+- Things a reviewer must verify for THIS codebase (required update sites for a new type,
+  protocol/schema invariants, fixture conventions, etc.).
+"""
+
+
+def cmd_standards_status(repo: str) -> None:
+    global_on = load_config(quiet=True).get("default_standards", True)
+    opted = _repo_opted_out(repo)
+    project = next((str(Path(repo) / rel) for rel in _PROJECT_STANDARDS
+                    if (Path(repo) / rel).exists()), None)
+    print(f"standards for {repo}:")
+    if not global_on:
+        print("  universal default: OFF (global default_standards=false)")
+    elif opted:
+        print("  universal default: OFF (opted out via code-review/.cork-standards-off)")
+    elif not _DEFAULT_STANDARDS.exists():
+        # Mirror load_agent_instructions: a missing default file is effectively OFF.
+        print(f"  universal default: OFF (missing — {_DEFAULT_STANDARDS} not found)")
+    else:
+        print(f"  universal default: ON ({_DEFAULT_STANDARDS})")
+    print(f"  project standards: {project or 'none — run `standards init` to add one'}")
+
+
+def cmd_standards_init(repo: str, opt_out: bool = False) -> None:
+    cr = Path(repo) / "code-review"
+    if opt_out:
+        sentinel = cr / ".cork-standards-off"
+        if sentinel.exists():
+            print(f"{sentinel} already exists."); return
+        cr.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text("# This repo opts out of cork's universal default standards.\n"
+                            "# Delete this file to re-enable. See cork README.\n")
+        print(f"Wrote opt-out sentinel {sentinel}.")
+        return
+    target = cr / "AGENTS.md"
+    if target.exists():
+        fail(f"{target} already exists — edit it directly (won't overwrite).")
+    cr.mkdir(parents=True, exist_ok=True)
+    target.write_text(_PROJECT_STANDARDS_TEMPLATE)
+    print(f"Scaffolded {target} — add project-specific conventions; they extend cork's default baseline.")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def cmd_status(ticket_id: str) -> None:
@@ -1064,6 +1141,19 @@ def main() -> None:
         return
     if len(sys.argv) >= 2 and sys.argv[1] == "preflight":
         cmd_preflight()
+        return
+    if len(sys.argv) >= 2 and sys.argv[1] == "standards":
+        sub = sys.argv[2] if len(sys.argv) >= 3 else ""
+        rest = sys.argv[3:]
+        opt = "--opt-out" in rest
+        repo = next((a for a in rest if not a.startswith("--")), ".")
+        repo = str(Path(repo).expanduser().resolve())
+        if sub == "status":
+            cmd_standards_status(repo)
+        elif sub == "init":
+            cmd_standards_init(repo, opt_out=opt)
+        else:
+            fail("usage: orchestrate.py standards status|init [repo] [--opt-out]")
         return
 
     parser = argparse.ArgumentParser(

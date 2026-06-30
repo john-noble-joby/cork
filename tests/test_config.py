@@ -85,7 +85,7 @@ class ConfigGetSetTest(unittest.TestCase):
             "rotation": [{"provider": "copilot", "model": "gpt-4.1"}],
         }))
         orchestrate.cmd_config_set("interactive_review", "false")
-        self.assertEqual(json.loads(self.path.read_text())["interactive_review"], False)
+        self.assertFalse(json.loads(self.path.read_text())["interactive_review"])
         buf = io.StringIO()
         with redirect_stdout(buf):
             orchestrate.cmd_config_get("interactive_review")
@@ -95,7 +95,7 @@ class ConfigGetSetTest(unittest.TestCase):
         orchestrate.cmd_config_set("interactive_review", "false")
         self.assertTrue(self.path.exists())
         cfg = json.loads(self.path.read_text())
-        self.assertEqual(cfg["interactive_review"], False)
+        self.assertFalse(cfg["interactive_review"])
         self.assertIn("rotation", cfg)   # seeded from DEFAULT_CONFIG
 
     def test_set_rejects_unknown_key(self):
@@ -111,7 +111,7 @@ class ConfigGetSetTest(unittest.TestCase):
 
     def test_set_accepts_case_insensitive_bool(self):
         orchestrate.cmd_config_set("interactive_review", "TRUE")
-        self.assertEqual(json.loads(self.path.read_text())["interactive_review"], True)
+        self.assertTrue(json.loads(self.path.read_text())["interactive_review"])
 
     def test_get_unknown_key_fails(self):
         with self.assertRaises(SystemExit):
@@ -124,6 +124,20 @@ class ConfigGetSetTest(unittest.TestCase):
         }))
         with self.assertRaises(SystemExit):
             orchestrate.load_config()
+
+    def test_get_default_standards_defaults_true(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            orchestrate.cmd_config_get("default_standards")
+        self.assertEqual(buf.getvalue().strip(), "true")
+
+    def test_set_default_standards_roundtrip(self):
+        orchestrate.cmd_config_set("default_standards", "false")
+        self.assertFalse(json.loads(self.path.read_text())["default_standards"])
+
+    def test_set_default_standards_rejects_non_bool(self):
+        with self.assertRaises(SystemExit):
+            orchestrate.cmd_config_set("default_standards", "yes")
 
 
 if __name__ == "__main__":

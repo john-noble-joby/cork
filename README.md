@@ -21,9 +21,10 @@ It ships three skills:
 
 ## Setup
 
-Python 3.10+ stdlib only — no `pip install`. **`install.sh` does not set env vars or
-fetch tokens** (it only deploys the skills + status line and checks versions), so the
-token and MCP steps below are manual.
+Python 3.10+ stdlib only — no `pip install`. **`install.sh` does not fetch tokens**
+(it deploys the skills + status line, checks versions, and — only if you accept its
+prompt — writes `CORK_HOME` into `~/.claude/settings.json`), so the token and MCP
+steps below are manual.
 
 1. **Clone** to the default location (`CORK_HOME` defaults to `~/dev/cork`):
    ```bash
@@ -38,7 +39,8 @@ token and MCP steps below are manual.
    Copies `cork`, `copilot-review-loop`, `devit`, and `cork-setup` into `~/.claude/skills/` and
    `statusline.py` into `~/.claude/`, and verifies every version stamp matches `VERSION`.
    Re-run after a `git pull` to update. (`orchestrate.py` itself isn't copied — the skills
-   run it straight from `$CORK_HOME`, so `git pull` updates the engine.)
+   run it straight from `$CORK_HOME`, so `git pull` updates the engine.) `install.sh` can also
+   write `CORK_HOME` into `~/.claude/settings.json` if you clone to a non-default path.
 
 3. **Get a Copilot token** (required — this is what unlocks the review models):
    ```bash
@@ -110,8 +112,26 @@ Lower-level detail and the underlying `orchestrate.py` engine.
 | 5, 7, … | Claude Code (×N) | Apply findings, **commit** |
 
 Then Claude Code pushes the branch and opens a PR summarizing what each pass caught.
-Commits after each fix give a clear audit trail. Reviewers use `code-review/AGENTS.md` if
-present (else root `AGENTS.md` or `.github/AGENTS.md`).
+Commits after each fix give a clear audit trail. Reviewers and devit's implementer use
+the **effective standards** — cork's universal default plus the repo's own
+`code-review/AGENTS.md` (or root `AGENTS.md` / `.github/AGENTS.md`) if present — unless
+opted out (see below).
+
+### Coding & review standards (layering)
+
+cork ships a generalized **coding & review rubric** (`standards/AGENTS.md`) used by both
+devit's implementer and the blind review models. The **effective** rubric for a repo is:
+
+  cork's universal default  +  that repo's own `code-review/AGENTS.md` (if present)
+
+- **Use the default** (on by default): nothing to do — every review/implementation carries
+  the baseline.
+- **Add project specifics:** `python3 orchestrate.py standards init <repo>` scaffolds a
+  `code-review/AGENTS.md` that **extends** the default baseline (your specifics take
+  precedence); fill in your stack's conventions.
+- **Opt a repo out:** `standards init <repo> --opt-out` (writes `code-review/.cork-standards-off`).
+- **Opt out everywhere:** `python3 orchestrate.py config set default_standards false`.
+- **See what applies:** `python3 orchestrate.py standards status <repo>`.
 
 Two ways to run it:
 - **Session-driven (the skills):** the active Claude session implements/fixes and calls
