@@ -78,13 +78,16 @@ read `totalCount`.)
 gh api graphql -f query='
 { repository(owner: "{owner}", name: "{repo}") {
     pullRequest(number: {pr}) {
-      reviews(last: 10) { nodes { author { login } state comments(first: 0) { totalCount } } }
+      reviews(last: 50) { nodes { author { login } state comments(first: 0) { totalCount } } }
     }
   }
 }' | python3 -c "
 import json, sys
 revs = json.load(sys.stdin)['data']['repository']['pullRequest']['reviews']['nodes']
-cop = [r for r in revs if r['author']['login'].startswith('copilot-pull-request-reviewer')]
+# author can be null (ghost/deleted user); guard before .login. last:50 so the latest
+# Copilot review isn't pushed out of the window by reply-wrapped reviews on busy PRs.
+cop = [r for r in revs
+       if r.get('author') and r['author']['login'].startswith('copilot-pull-request-reviewer')]
 if not cop:
     print('NONE 0')
 else:
@@ -109,15 +112,17 @@ and miss the rest):
    poll because the review is already in (both stay within the 5-min cache window). In a
    `/loop` run, do it as a reschedule carrying the prior count as `settle_count=N`, not a
    blocking wait.
-3. Proceed to step 3 once the count is **stable across two consecutive reads** *and* has
-   reached `totalCount` (minus any threads already resolved on earlier passes). Stability
-   **plus** matching the known count is the signal — never act while the count is still
-   rising, and never treat "stopped rising" alone as settled.
+3. Proceed to step 3 once the thread count is **stable across two consecutive reads** — that
+   is the settle signal. Don't equate it to `totalCount`: `totalCount` counts review
+   *comments* and step 3 counts *threads*, and they aren't 1:1 (a thread can hold several
+   comments), so requiring `threads == totalCount` could never settle. Use `totalCount` only
+   for the step-2 gate (`0` → clean pass; `>0` → there's something to wait for); use
+   thread-count stability for *when* it's safe to process.
 
 **Watch the page cap.** Step 3 fetches `reviewThreads(first: 100)`. If the count plateaus at
-the cap while still below `totalCount`, that's a capped artifact, not a settled index —
-paginate (`pageInfo`/`endCursor`) before trusting it. Copilot rarely exceeds 100 inline
-comments, but don't let the cap masquerade as "settled".
+exactly 100 and step 3's `pageInfo.hasNextPage` is true, that's a capped artifact, not a
+settled index — page through with `endCursor` before trusting it. Copilot rarely exceeds 100
+inline comments, but don't let the cap masquerade as "settled".
 
 ### 3. Get unresolved Copilot threads
 
@@ -126,6 +131,7 @@ gh api graphql -f query='
 { repository(owner: "{owner}", name: "{repo}") {
     pullRequest(number: {pr}) {
       reviewThreads(first: 100) {
+        pageInfo { hasNextPage endCursor }
         nodes { id isResolved comments(first:1){ nodes { databaseId body author { login } } } }
       }
     }
