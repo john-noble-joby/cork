@@ -104,15 +104,20 @@ You now know `totalCount > 0` comments exist on this review. Poll the step-3 thr
 until the index catches up — don't process a partial set (you'd resolve a few, re-request,
 and miss the rest):
 
-1. Run the step-3 query; count the unresolved Copilot threads this pass produced.
-2. Reschedule ~60s out (don't block the tick) and re-count.
-3. Proceed to step 3 once the count **stops rising across two consecutive reads** (the index
-   has settled). Carry the prior count in the loop prompt (e.g. `settle_count=N`) to compare
-   on the next tick.
+1. Run the step-3 query; count the currently-unresolved Copilot threads.
+2. Re-check after a short delay — ~60s, deliberately tighter than the 3-min review-wait
+   poll because the review is already in (both stay within the 5-min cache window). In a
+   `/loop` run, do it as a reschedule carrying the prior count as `settle_count=N`, not a
+   blocking wait.
+3. Proceed to step 3 once the count is **stable across two consecutive reads** *and* has
+   reached `totalCount` (minus any threads already resolved on earlier passes). Stability
+   **plus** matching the known count is the signal — never act while the count is still
+   rising, and never treat "stopped rising" alone as settled.
 
-(A pass can leave fewer *unresolved* threads than `totalCount` if some were already resolved
-across iterations — so wait for the count to *stabilize*, not to exactly equal `totalCount`.
-The point is never to act while it's still rising.)
+**Watch the page cap.** Step 3 fetches `reviewThreads(first: 100)`. If the count plateaus at
+the cap while still below `totalCount`, that's a capped artifact, not a settled index —
+paginate (`pageInfo`/`endCursor`) before trusting it. Copilot rarely exceeds 100 inline
+comments, but don't let the cap masquerade as "settled".
 
 ### 3. Get unresolved Copilot threads
 
@@ -120,7 +125,7 @@ The point is never to act while it's still rising.)
 gh api graphql -f query='
 { repository(owner: "{owner}", name: "{repo}") {
     pullRequest(number: {pr}) {
-      reviewThreads(first: 20) {
+      reviewThreads(first: 100) {
         nodes { id isResolved comments(first:1){ nodes { databaseId body author { login } } } }
       }
     }
