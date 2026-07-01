@@ -144,6 +144,7 @@ unresolved = [
     t for t in threads
     if not t['isResolved']
     and t['comments']['nodes']
+    and t['comments']['nodes'][0].get('author')   # author can be null (ghost/deleted user)
     and t['comments']['nodes'][0]['author']['login'].startswith('copilot-pull-request-reviewer')
 ]
 for t in unresolved:
