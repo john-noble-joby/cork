@@ -5,7 +5,7 @@ description: Use when the user says to run the Copilot review loop on a branch o
 
 # Copilot Review Loop
 
-**Version:** 0.8.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.8.1 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 ## Overview
 
@@ -64,19 +64,65 @@ COPILOT_REVIEW_LOOP pr={PR_NUMBER} repo={owner/repo} max={MAX} worktree={WORKTRE
 
 Extract: `pr`, `repo`, `max`, `worktree`, `iteration`.
 
-### 2. Check Copilot review state
+### 2. Check Copilot review state *and* its comment count
+
+Read the latest Copilot review's `state` **and its own `comments.totalCount`** in one call.
+`totalCount` is the authoritative number of inline comments on that review — it is set when
+the review is submitted, so it's correct *before* the separate `reviewThreads` index
+finishes propagating. (Naively fetching threads on `COMMENTED` and seeing an empty list is
+the bug: the review really has comments, the thread index just hasn't caught up — so you'd
+declare a false "clean pass" and stop. Don't infer "clean" from an empty thread fetch;
+read `totalCount`.)
 
 ```bash
-gh api repos/{repo}/pulls/{pr}/reviews | python3 -c "
+gh api graphql -f query='
+{ repository(owner: "{owner}", name: "{repo}") {
+    pullRequest(number: {pr}) {
+      reviews(last: 50) { nodes { author { login } state comments(first: 0) { totalCount } } }
+    }
+  }
+}' | python3 -c "
 import json, sys
-reviews = json.load(sys.stdin)
-copilot = [r for r in reviews if r['user']['login'].startswith('copilot-pull-request-reviewer')]
-print(copilot[-1]['state'] if copilot else 'NONE')
+revs = json.load(sys.stdin)['data']['repository']['pullRequest']['reviews']['nodes']
+# author can be null (ghost/deleted user); guard before .login. last:50 so the latest
+# Copilot review isn't pushed out of the window by reply-wrapped reviews on busy PRs.
+cop = [r for r in revs
+       if r.get('author') and r['author']['login'].startswith('copilot-pull-request-reviewer')]
+if not cop:
+    print('NONE 0')
+else:
+    print(cop[-1]['state'], cop[-1]['comments']['totalCount'])
 "
 ```
 
-- `NONE` or `PENDING` → reschedule and wait, do nothing else this tick
-- `COMMENTED` or `APPROVED` → proceed
+Output is `STATE TOTALCOUNT`. Route on it:
+
+- `state` is `NONE`/`PENDING` (review not submitted yet) → reschedule and wait, nothing else this tick.
+- `state` completed (`COMMENTED`/`APPROVED`) and `totalCount == 0` → **deterministic clean pass**, no race: no comments exist. Skip to step 6 (stop / re-request per iteration).
+- `state` completed and `totalCount > 0` → that many comments exist; go to **2b** to wait for the thread index, then process.
+
+### 2b. Wait for the thread index to surface the known comments
+
+You now know `totalCount > 0` comments exist on this review. Poll the step-3 thread query
+until the index catches up — don't process a partial set (you'd resolve a few, re-request,
+and miss the rest):
+
+1. Run the step-3 query; count the currently-unresolved Copilot threads.
+2. Re-check after a short delay — ~60s, deliberately tighter than the 3-min review-wait
+   poll because the review is already in (both stay within the 5-min cache window). In a
+   `/loop` run, do it as a reschedule carrying the prior count as `settle_count=N`, not a
+   blocking wait.
+3. Proceed to step 3 once the thread count is **stable across two consecutive reads** — that
+   is the settle signal. Don't equate it to `totalCount`: `totalCount` counts review
+   *comments* and step 3 counts *threads*, and they aren't 1:1 (a thread can hold several
+   comments), so requiring `threads == totalCount` could never settle. Use `totalCount` only
+   for the step-2 gate (`0` → clean pass; `>0` → there's something to wait for); use
+   thread-count stability for *when* it's safe to process.
+
+**Watch the page cap.** Step 3 fetches `reviewThreads(first: 100)`. If the count plateaus at
+exactly 100 and step 3's `pageInfo.hasNextPage` is true, that's a capped artifact, not a
+settled index — page through with `endCursor` before trusting it. Copilot rarely exceeds 100
+inline comments, but don't let the cap masquerade as "settled".
 
 ### 3. Get unresolved Copilot threads
 
@@ -84,7 +130,8 @@ print(copilot[-1]['state'] if copilot else 'NONE')
 gh api graphql -f query='
 { repository(owner: "{owner}", name: "{repo}") {
     pullRequest(number: {pr}) {
-      reviewThreads(first: 20) {
+      reviewThreads(first: 100) {
+        pageInfo { hasNextPage endCursor }
         nodes { id isResolved comments(first:1){ nodes { databaseId body author { login } } } }
       }
     }
@@ -97,6 +144,7 @@ unresolved = [
     t for t in threads
     if not t['isResolved']
     and t['comments']['nodes']
+    and t['comments']['nodes'][0].get('author')   # author can be null (ghost/deleted user)
     and t['comments']['nodes'][0]['author']['login'].startswith('copilot-pull-request-reviewer')
 ]
 for t in unresolved:
@@ -149,9 +197,13 @@ Push any commits, then evaluate stop conditions.
 
 | Condition | Action |
 |---|---|
-| Copilot review complete, zero threads, `iteration == max` | **STOP** |
-| Copilot review complete, zero threads, Copilot had no comments at all this pass | **STOP** — satisfied |
-| Copilot review complete, all resolved, `iteration < max` | Re-request, increment, reschedule |
+| Review complete, `totalCount == 0` this pass (step 2 — not an empty thread fetch) | **STOP** — satisfied, clean pass |
+| Review complete, comments all processed/resolved, `iteration == max` | **STOP** |
+| Review complete, comments all processed/resolved, `iteration < max` | Re-request, increment, reschedule |
+
+Judge "clean pass" from step 2's `totalCount == 0`, **never** from an empty `reviewThreads`
+fetch — the index lags the review, so an empty fetch on a fresh `COMMENTED` is the race, not
+a clean pass.
 
 Print final summary on stop: iterations run, commits made, PR URL.
 
@@ -169,6 +221,7 @@ Update loop prompt with `iteration={N+1}` and reschedule.
 ## Notes
 
 - **Polling interval:** 3 minutes — stays within the 5-minute cache window.
+- **Review state flips before its threads are indexed.** A review reaches `COMMENTED`/`APPROVED`, but its inline comments take seconds-to-longer to appear in `reviewThreads` / the pulls-comments API — so a thread fetch right at the transition can return an empty or partial list and trick the loop into a false "clean pass" + early STOP. The review's *own* `comments.totalCount` (GraphQL, step 2) is set atomically at submission and is the authoritative "are there comments?" signal; gate on it, and for `totalCount > 0` wait for the thread count to stabilize before processing (confirmed on cork PR #6, 2026-06: pass-3 clean review reported `totalCount=0`, comment-bearing passes reported their exact counts).
 - **Run tests** after every fix commit before pushing. Don't push broken builds.
 - **Worktree:** all edits go in the PR's worktree, not the main checkout.
 - **Re-request works** once Copilot has completed a review — same POST endpoint.
