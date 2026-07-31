@@ -100,6 +100,21 @@ class AuthRefreshTest(unittest.TestCase):
         self.assertEqual(saved["openai"], "OA")     # never lost to a racing writer
         self.assertTrue(saved["token"].startswith("T"))
 
+    def test_non_object_json_auth_file_fails_loudly(self):
+        # A valid-JSON-but-non-object file (list/string) is not a legitimate auth
+        # file — fail like malformed rather than silently resetting to {}.
+        self.cork.write_text(json.dumps(["not", "a", "dict"]))
+        with self.assertRaises(SystemExit):
+            orchestrate._copilot_token()
+
+    def test_refreshed_token_is_stripped(self):
+        orchestrate._now = lambda: 10000.0
+        self.cork.write_text(json.dumps(
+            {"token": "OLD", "refresh_token": "R1", "expires_at": 5000}))
+        orchestrate._post_form = lambda *a, **k: {
+            "access_token": "  NEW  ", "refresh_token": "R2", "expires_in": 28800}
+        self.assertEqual(orchestrate._copilot_token(), "NEW")
+
     def test_opencode_fallback_reads_access_not_refresh(self):
         # No cork file → fall through to opencode; must read `access`, not `refresh`.
         self.oc.write_text(json.dumps(

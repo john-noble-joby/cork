@@ -150,9 +150,11 @@ def _read_cork_auth() -> dict:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
+        data = None
+    if not isinstance(data, dict):  # malformed OR valid-but-not-an-object → fail loudly
         fail(f"Refusing to use malformed auth file {_CORK_AUTH} — it may hold other "
              "provider tokens. Fix or delete it, then re-run `login`.")
-    return data if isinstance(data, dict) else {}
+    return data
 
 
 def _merge_and_write_auth(fields: dict) -> None:
@@ -209,7 +211,7 @@ def _refresh_and_store(refresh_token: str) -> str:
         payload = _auth_payload_from_token_response(
             _refresh_copilot_token(cur.get("refresh_token") or refresh_token))
         _merge_and_write_auth(payload)  # already under the lock
-        return payload["token"]
+        return payload["token"].strip()
 
 
 def _cork_access_token(data: dict) -> str | None:
@@ -253,12 +255,9 @@ def _copilot_token() -> str:
     if env_tok:
         return env_tok.strip()
 
-    if _CORK_AUTH.exists():
-        try:
-            data = json.loads(_CORK_AUTH.read_text())
-        except json.JSONDecodeError as e:
-            fail(f"Cannot parse Copilot token file {_CORK_AUTH}: {e}")
-        tok = _cork_access_token(data)
+    cork_data = _read_cork_auth()  # {} if absent; fails loudly on malformed/non-object
+    if cork_data:
+        tok = _cork_access_token(cork_data)
         if tok:
             return tok
 
