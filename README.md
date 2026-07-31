@@ -190,11 +190,14 @@ blocks or errors to blank. Enable it via the `settings.json` snippet in Setup st
 
 ### Environment variables
 
-Tokens live in **`~/.config/cork/auth.json`** (written by `orchestrate.py login`; chmod 600) —
-`{"token": "<copilot>", "openai": "<key>", "anthropic": "<key>"}`. (For backward compat the
-Copilot token is also accepted in the legacy opencode shape `{"github-copilot": {"refresh":
-"..."}}`.) The env vars below are **overrides** (resolved first), not required. None are
-needed if you clone to `~/dev/cork` and run `login`.
+Tokens live in **`~/.config/cork/auth.json`** (written by `orchestrate.py login`; chmod 600).
+`login` writes the Copilot token plus its refresh metadata —
+`{"token": "<copilot>", "refresh_token": "<refresh>", "expires_at": <unix-ts>}` — and cork
+refreshes it in place; native-provider keys live alongside and are preserved across refreshes:
+`{"token": …, "refresh_token": …, "expires_at": …, "openai": "<key>", "anthropic": "<key>"}`.
+(For backward compat a bare `{"token": "<copilot>"}` and the legacy opencode shape
+`{"github-copilot": {"access": "…"}}` are also accepted.) The env vars below are **overrides**
+(resolved first), not required. None are needed if you clone to `~/dev/cork` and run `login`.
 
 | Env var | Default | Purpose |
 |---------|---------|---------|

@@ -31,6 +31,7 @@ Requirements:
 """
 
 import argparse
+import contextlib
 import copy
 import fcntl
 import json
@@ -38,6 +39,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -114,7 +116,7 @@ def _auth_payload_from_token_response(resp: dict) -> dict:
     out = {"token": resp["access_token"]}
     if resp.get("refresh_token"):
         out["refresh_token"] = resp["refresh_token"]
-    if resp.get("expires_in"):
+    if resp.get("expires_in") is not None:  # 0 → immediate expiry, not "no expiry"
         out["expires_at"] = int(_now()) + int(resp["expires_in"])
     return out
 
@@ -122,35 +124,62 @@ def _auth_payload_from_token_response(resp: dict) -> dict:
 _COPILOT_AUTH_KEYS = ("token", "refresh_token", "expires_at")  # keys a refresh owns
 
 
-def _write_cork_auth(fields: dict) -> None:
-    # Merge the Copilot fields into the existing file so unrelated secrets (e.g.
-    # "openai"/"anthropic" provider tokens) survive a refresh, and create the temp
-    # file 0o600 from the start so the token is never briefly world-readable.
+@contextlib.contextmanager
+def _auth_lock():
+    # One exclusive lock for every read-merge-write of the auth file, so cork's
+    # parallel review fan-out (or an overlapping login) can't race the one-use
+    # refresh token or cross-write the temp file.
+    lock = _CORK_AUTH.with_name(_CORK_AUTH.name + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock, os.O_WRONLY | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        yield
+
+
+def _read_cork_auth() -> dict:
+    # Absent → {} (first login). Malformed/unreadable → fail: the file may hold
+    # other provider tokens, and callers must not silently clobber or, worse,
+    # burn a one-use refresh token and then be unable to persist the result.
     try:
         raw = _CORK_AUTH.read_text()
     except FileNotFoundError:
-        data = {}
+        return {}
     except OSError as e:
         fail(f"Cannot read {_CORK_AUTH}: {e}")
-    else:
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            fail(f"Refusing to overwrite malformed auth file {_CORK_AUTH} — it may "
-                 "hold other provider tokens. Fix or delete it, then re-run `login`.")
-        if not isinstance(data, dict):
-            data = {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        fail(f"Refusing to use malformed auth file {_CORK_AUTH} — it may hold other "
+             "provider tokens. Fix or delete it, then re-run `login`.")
+    return data if isinstance(data, dict) else {}
+
+
+def _merge_and_write_auth(fields: dict) -> None:
+    # Caller must hold _auth_lock(). Merge the Copilot fields into the existing
+    # file (preserving unrelated secrets) and swap atomically via a unique
+    # 0o600 temp file.
+    data = _read_cork_auth()
     for k in _COPILOT_AUTH_KEYS:
         if k in fields:
             data[k] = fields[k]
         else:
             data.pop(k, None)  # a token-only response clears a stale refresh/expiry
     _CORK_AUTH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _CORK_AUTH.with_name(_CORK_AUTH.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(json.dumps(data, indent=2) + "\n")
-    os.replace(tmp, _CORK_AUTH)
+    fd, tmp = tempfile.mkstemp(dir=str(_CORK_AUTH.parent),
+                               prefix=_CORK_AUTH.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(data, indent=2) + "\n")
+        os.replace(tmp, _CORK_AUTH)  # mkstemp already created it 0o600
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _write_cork_auth(fields: dict) -> None:
+    with _auth_lock():
+        _merge_and_write_auth(fields)
 
 
 def _refresh_copilot_token(refresh_token: str) -> dict:
@@ -171,23 +200,15 @@ def _token_fresh(data: dict) -> bool:
 
 
 def _refresh_and_store(refresh_token: str) -> str:
-    # Serialize refresh across concurrent cork processes (parallel review fan-out):
-    # only one exchanges the one-use refresh token; the others wait, then re-read
-    # the fresh token it wrote instead of exchanging a now-consumed token.
-    lock = _CORK_AUTH.with_name(_CORK_AUTH.name + ".lock")
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    lock_fd = os.open(lock, os.O_WRONLY | os.O_CREAT, 0o600)
-    with os.fdopen(lock_fd, "w") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
-        try:
-            cur = json.loads(_CORK_AUTH.read_text())
-        except (OSError, json.JSONDecodeError):
-            cur = {}
+    # Serialize refresh across concurrent cork processes: only one exchanges the
+    # one-use refresh token; the others wait, then re-read the fresh token it wrote.
+    with _auth_lock():
+        cur = _read_cork_auth()  # fails on a malformed file BEFORE any exchange
         if _token_fresh(cur):
             return cur["token"].strip()  # another process already refreshed
         payload = _auth_payload_from_token_response(
             _refresh_copilot_token(cur.get("refresh_token") or refresh_token))
-        _write_cork_auth(payload)
+        _merge_and_write_auth(payload)  # already under the lock
         return payload["token"]
 
 

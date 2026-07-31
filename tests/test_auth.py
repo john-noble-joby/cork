@@ -67,6 +67,39 @@ class AuthRefreshTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             orchestrate._copilot_token()
 
+    def test_expires_in_zero_persists_immediate_expiry(self):
+        # A zero-lifetime response must store expires_at (→ refresh next time), not
+        # be treated as "no expiry" (which would pin an unusable token forever).
+        orchestrate._now = lambda: 1000.0
+        out = orchestrate._auth_payload_from_token_response(
+            {"access_token": "A", "expires_in": 0})
+        self.assertEqual(out.get("expires_at"), 1000)
+
+    def test_malformed_file_fails_before_consuming_refresh_token(self):
+        # If the locked re-read finds a malformed file, fail BEFORE the network
+        # exchange — otherwise a one-use refresh token is burned then unsaveable.
+        orchestrate._now = lambda: 10000.0
+        self.cork.write_text("{ corrupt,,,")
+        orchestrate._post_form = lambda *a, **k: self.fail(
+            "must not exchange the refresh token when the file is malformed")
+        stale = {"token": "OLD", "refresh_token": "R1", "expires_at": 1}
+        with self.assertRaises(SystemExit):
+            orchestrate._cork_access_token(stale)
+
+    def test_concurrent_writes_preserve_keys_and_stay_valid(self):
+        import threading
+        self.cork.write_text(json.dumps({"openai": "OA"}))
+        def w(i):
+            orchestrate._write_cork_auth({"token": f"T{i}"})
+        ts = [threading.Thread(target=w, args=(i,)) for i in range(12)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        saved = json.loads(self.cork.read_text())  # must remain valid JSON
+        self.assertEqual(saved["openai"], "OA")     # never lost to a racing writer
+        self.assertTrue(saved["token"].startswith("T"))
+
     def test_opencode_fallback_reads_access_not_refresh(self):
         # No cork file → fall through to opencode; must read `access`, not `refresh`.
         self.oc.write_text(json.dumps(
