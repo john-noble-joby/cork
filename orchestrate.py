@@ -127,11 +127,19 @@ def _write_cork_auth(fields: dict) -> None:
     # "openai"/"anthropic" provider tokens) survive a refresh, and create the temp
     # file 0o600 from the start so the token is never briefly world-readable.
     try:
-        data = json.loads(_CORK_AUTH.read_text())
+        raw = _CORK_AUTH.read_text()
+    except FileNotFoundError:
+        data = {}
+    except OSError as e:
+        fail(f"Cannot read {_CORK_AUTH}: {e}")
+    else:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            fail(f"Refusing to overwrite malformed auth file {_CORK_AUTH} — it may "
+                 "hold other provider tokens. Fix or delete it, then re-run `login`.")
         if not isinstance(data, dict):
             data = {}
-    except (OSError, json.JSONDecodeError):
-        data = {}
     for k in _COPILOT_AUTH_KEYS:
         if k in fields:
             data[k] = fields[k]
@@ -168,7 +176,8 @@ def _refresh_and_store(refresh_token: str) -> str:
     # the fresh token it wrote instead of exchanging a now-consumed token.
     lock = _CORK_AUTH.with_name(_CORK_AUTH.name + ".lock")
     lock.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock, "w") as lf:
+    lock_fd = os.open(lock, os.O_WRONLY | os.O_CREAT, 0o600)
+    with os.fdopen(lock_fd, "w") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         try:
             cur = json.loads(_CORK_AUTH.read_text())
@@ -203,8 +212,8 @@ def _opencode_access_token(data: dict) -> str | None:
     # it if opencode's copy has already expired. (opencode stores `expires` in ms.)
     gh = data.get("github-copilot", {})
     access = gh.get("access")
-    expires = gh.get("expires")
-    if access and not (expires is not None and _now() * 1000 >= expires):
+    expires = gh.get("expires")  # ms epoch; apply the same skew as the cork path
+    if access and not (expires is not None and _now() * 1000 >= expires - _TOKEN_SKEW * 1000):
         return access.strip()
     # access absent or stale → fall back to the (typically non-expiring) refresh
     # token, so cork never does worse than its prior refresh-only behavior.

@@ -106,6 +106,15 @@ class AuthRefreshTest(unittest.TestCase):
         orchestrate._write_cork_auth({"token": "X"})
         self.assertEqual(self.cork.stat().st_mode & 0o777, 0o600)
 
+    def test_write_refuses_to_clobber_malformed_existing_file(self):
+        # A hand-corrupted file may still hold openai/anthropic secrets — refuse
+        # to silently overwrite it (symmetric with _copilot_token's hard fail).
+        self.cork.write_text("{ not valid json,,,")
+        before = self.cork.read_text()
+        with self.assertRaises(SystemExit):
+            orchestrate._write_cork_auth({"token": "X"})
+        self.assertEqual(self.cork.read_text(), before)
+
     def test_opencode_falls_back_to_refresh_when_access_expired(self):
         # If opencode's access is stale (cork can't run opencode's refresh flow),
         # fall back to the non-expiring refresh token — never worse than before.
