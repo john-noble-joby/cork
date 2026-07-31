@@ -99,32 +99,105 @@ style consistency with surrounding code, test coverage.\
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
-def _copilot_token() -> str:
-    """Resolve the Copilot API token from (in priority order):
+_TOKEN_SKEW = 300  # refresh this many seconds before the stored expiry
 
-    1. CORK_COPILOT_TOKEN env var — the token used directly. Best for CI or a
-       dedicated token; cork is fully decoupled from opencode.
-    2. cork's own auth file (CORK_AUTH_FILE, default ~/.config/cork/auth.json) —
-       JSON with either {"token": "..."} or the opencode shape
-       {"github-copilot": {"refresh": "..."}}.
-    3. opencode's auth.json (legacy fallback) — {"github-copilot": {"refresh"}}.
+
+def _now() -> float:  # seam so tests can control time without patching the time module
+    return time.time()
+
+
+def _auth_payload_from_token_response(resp: dict) -> dict:
+    # GitHub's device-flow / refresh exchange returns access_token and, for
+    # expiring GitHub-App tokens, refresh_token + expires_in. Persist all three
+    # so cork can refresh silently instead of forcing an interactive re-login.
+    out = {"token": resp["access_token"]}
+    if resp.get("refresh_token"):
+        out["refresh_token"] = resp["refresh_token"]
+    if resp.get("expires_in"):
+        out["expires_at"] = int(_now()) + int(resp["expires_in"])
+    return out
+
+
+def _write_cork_auth(data: dict) -> None:
+    _CORK_AUTH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _CORK_AUTH.with_name(_CORK_AUTH.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    tmp.chmod(0o600)
+    os.replace(tmp, _CORK_AUTH)
+
+
+def _refresh_copilot_token(refresh_token: str) -> dict:
+    resp = _post_form("https://github.com/login/oauth/access_token", {
+        "client_id": _COPILOT_CLIENT_ID,
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+    })
+    if not resp.get("access_token"):
+        fail(f"Copilot token refresh failed ({resp.get('error') or resp}). "
+             "Re-run `orchestrate.py login`.")
+    return resp
+
+
+def _cork_access_token(data: dict) -> str | None:
+    # Self-refreshing schema: {"token", "refresh_token", "expires_at"}. When the
+    # stored access token is within _TOKEN_SKEW of expiry, exchange the refresh
+    # token for a fresh one (GitHub rotates both) and rewrite the file.
+    refresh = data.get("refresh_token")
+    expires_at = data.get("expires_at")
+    if refresh and expires_at is not None and _now() >= expires_at - _TOKEN_SKEW:
+        payload = _auth_payload_from_token_response(_refresh_copilot_token(refresh))
+        _write_cork_auth(payload)
+        return payload["token"]
+    token = data.get("token")
+    if token:
+        return token.strip()
+    legacy = data.get("github-copilot", {}).get("refresh")  # legacy opencode-shape file
+    return legacy.strip() if legacy else None
+
+
+def _opencode_access_token(data: dict) -> str | None:
+    # opencode maintains access + expires + refresh so IT can refresh silently;
+    # cork can't refresh opencode's token, so read the current `access` and skip
+    # it if opencode's copy has already expired. (opencode stores `expires` in ms.)
+    gh = data.get("github-copilot", {})
+    access = gh.get("access")
+    expires = gh.get("expires")
+    if access and not (expires is not None and _now() * 1000 >= expires):
+        return access.strip()
+    # access absent or stale → fall back to the (typically non-expiring) refresh
+    # token, so cork never does worse than its prior refresh-only behavior.
+    legacy = gh.get("refresh")
+    return legacy.strip() if legacy else None
+
+
+def _copilot_token() -> str:
+    """Resolve the Copilot API token, refreshing cork's own token when it expires.
+
+    Priority: 1. CORK_COPILOT_TOKEN env var. 2. cork's own auth file
+    (CORK_AUTH_FILE) — self-refreshes when it carries a refresh_token + expires_at.
+    3. opencode's auth.json (read-only fallback; cork can't refresh it).
     """
-    # 1. Explicit env var.
     env_tok = os.environ.get("CORK_COPILOT_TOKEN")
     if env_tok:
         return env_tok.strip()
 
-    # 2. cork's own auth file, then 3. opencode's — same parse logic.
-    for src in (_CORK_AUTH, _OPENCODE_AUTH):
-        if not src.exists():
-            continue
+    if _CORK_AUTH.exists():
         try:
-            data = json.loads(src.read_text())
+            data = json.loads(_CORK_AUTH.read_text())
         except json.JSONDecodeError as e:
-            fail(f"Cannot parse Copilot token file {src}: {e}")
-        tok = data.get("token") or data.get("github-copilot", {}).get("refresh")
+            fail(f"Cannot parse Copilot token file {_CORK_AUTH}: {e}")
+        tok = _cork_access_token(data)
         if tok:
-            return tok.strip()
+            return tok
+
+    if _OPENCODE_AUTH.exists():
+        try:
+            data = json.loads(_OPENCODE_AUTH.read_text())
+        except json.JSONDecodeError as e:
+            fail(f"Cannot parse Copilot token file {_OPENCODE_AUTH}: {e}")
+        tok = _opencode_access_token(data)
+        if tok:
+            return tok
 
     fail(
         "No Copilot API token found. Set one of:\n"
@@ -1052,11 +1125,13 @@ def cmd_login() -> None:
             "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
         })
         if tok.get("access_token"):
-            _CORK_AUTH.parent.mkdir(parents=True, exist_ok=True)
-            _CORK_AUTH.write_text(json.dumps({"token": tok["access_token"]}, indent=2))
-            _CORK_AUTH.chmod(0o600)
+            _write_cork_auth(_auth_payload_from_token_response(tok))
             print(f"\n✓ Authorized. Token written to {_CORK_AUTH} (chmod 600).")
-            print("  cork will now use this token before falling back to opencode.")
+            if tok.get("refresh_token"):
+                print("  cork will refresh this token automatically — no need to re-run "
+                      "login until the refresh token itself expires (~6 months).")
+            else:
+                print("  cork will now use this token before falling back to opencode.")
             return
         err = tok.get("error")
         if err == "authorization_pending":

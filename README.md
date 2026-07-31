@@ -46,8 +46,9 @@ steps below are manual.
    ```bash
    python3 ~/dev/cork/orchestrate.py login
    ```
-   GitHub device flow → writes `~/.config/cork/auth.json` (chmod 600). Re-run if it expires
-   (a 401 in a review means expired).
+   GitHub device flow → writes `~/.config/cork/auth.json` (chmod 600). cork **refreshes this
+   token automatically** (it persists the refresh token, good ~6 months), so you rarely need
+   to re-run `login` — only if the refresh token expires or is revoked.
 
 4. **Connect Linear + mem0 in Claude Code** (MCP): `devit` fetches the story from Linear
    (and files split sub-stories there); cork pulls codebase context from mem0. Configure
@@ -211,3 +212,9 @@ The headless pipeline checkpoints after every step (model-keyed, under
 `~/.local/share/code-orchestrator/`). Re-run the same command to resume; `--reset` discards
 the checkpoint. Copilot API calls retry 3× with exponential backoff on timeouts/connection
 errors/5xx; 429s wait 5× longer.
+
+### Versioning
+
+cork follows [Semantic Versioning](https://semver.org/); the `VERSION` file is the source of
+truth and every skill stamp + `orchestrate.py --version` tracks it (`install.sh` warns on
+drift). See [`CHANGELOG.md`](CHANGELOG.md) for the release history and the bump policy.
