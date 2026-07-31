@@ -74,6 +74,38 @@ class AuthRefreshTest(unittest.TestCase):
                                 "expires": 9_999_999_999_000}}))
         self.assertEqual(orchestrate._copilot_token(), "OC_ACCESS")
 
+    def test_refresh_preserves_other_provider_keys(self):
+        # auth.json also holds openai/anthropic tokens — a Copilot refresh must
+        # not clobber them (it rewrites the whole file).
+        orchestrate._now = lambda: 10000.0
+        self.cork.write_text(json.dumps(
+            {"openai": "OA", "anthropic": "AN",
+             "token": "OLD", "refresh_token": "R1", "expires_at": 5000}))
+        orchestrate._post_form = lambda *a, **k: {
+            "access_token": "NEW", "refresh_token": "R2", "expires_in": 28800}
+        self.assertEqual(orchestrate._copilot_token(), "NEW")
+        saved = json.loads(self.cork.read_text())
+        self.assertEqual(saved["openai"], "OA")
+        self.assertEqual(saved["anthropic"], "AN")
+        self.assertEqual(saved["token"], "NEW")
+        self.assertEqual(saved["refresh_token"], "R2")
+
+    def test_refresh_uses_already_refreshed_file_without_exchanging(self):
+        # Concurrency: another process already refreshed the on-disk file while our
+        # in-memory snapshot was stale. We must use the fresh token, not re-exchange
+        # the (now one-use-consumed) refresh token.
+        orchestrate._now = lambda: 10000.0
+        self.cork.write_text(json.dumps(
+            {"token": "FRESH", "refresh_token": "R2", "expires_at": 99999}))
+        stale = {"token": "OLD", "refresh_token": "R1", "expires_at": 1}
+        orchestrate._post_form = lambda *a, **k: self.fail(
+            "must not exchange when the on-disk token is already fresh")
+        self.assertEqual(orchestrate._cork_access_token(stale), "FRESH")
+
+    def test_written_auth_file_is_chmod_600(self):
+        orchestrate._write_cork_auth({"token": "X"})
+        self.assertEqual(self.cork.stat().st_mode & 0o777, 0o600)
+
     def test_opencode_falls_back_to_refresh_when_access_expired(self):
         # If opencode's access is stale (cork can't run opencode's refresh flow),
         # fall back to the non-expiring refresh token — never worse than before.

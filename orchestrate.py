@@ -32,6 +32,7 @@ Requirements:
 
 import argparse
 import copy
+import fcntl
 import json
 import os
 import re
@@ -118,11 +119,29 @@ def _auth_payload_from_token_response(resp: dict) -> dict:
     return out
 
 
-def _write_cork_auth(data: dict) -> None:
+_COPILOT_AUTH_KEYS = ("token", "refresh_token", "expires_at")  # keys a refresh owns
+
+
+def _write_cork_auth(fields: dict) -> None:
+    # Merge the Copilot fields into the existing file so unrelated secrets (e.g.
+    # "openai"/"anthropic" provider tokens) survive a refresh, and create the temp
+    # file 0o600 from the start so the token is never briefly world-readable.
+    try:
+        data = json.loads(_CORK_AUTH.read_text())
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    for k in _COPILOT_AUTH_KEYS:
+        if k in fields:
+            data[k] = fields[k]
+        else:
+            data.pop(k, None)  # a token-only response clears a stale refresh/expiry
     _CORK_AUTH.parent.mkdir(parents=True, exist_ok=True)
     tmp = _CORK_AUTH.with_name(_CORK_AUTH.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n")
-    tmp.chmod(0o600)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps(data, indent=2) + "\n")
     os.replace(tmp, _CORK_AUTH)
 
 
@@ -138,6 +157,31 @@ def _refresh_copilot_token(refresh_token: str) -> dict:
     return resp
 
 
+def _token_fresh(data: dict) -> bool:
+    exp = data.get("expires_at")
+    return bool(data.get("token")) and (exp is None or _now() < exp - _TOKEN_SKEW)
+
+
+def _refresh_and_store(refresh_token: str) -> str:
+    # Serialize refresh across concurrent cork processes (parallel review fan-out):
+    # only one exchanges the one-use refresh token; the others wait, then re-read
+    # the fresh token it wrote instead of exchanging a now-consumed token.
+    lock = _CORK_AUTH.with_name(_CORK_AUTH.name + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        try:
+            cur = json.loads(_CORK_AUTH.read_text())
+        except (OSError, json.JSONDecodeError):
+            cur = {}
+        if _token_fresh(cur):
+            return cur["token"].strip()  # another process already refreshed
+        payload = _auth_payload_from_token_response(
+            _refresh_copilot_token(cur.get("refresh_token") or refresh_token))
+        _write_cork_auth(payload)
+        return payload["token"]
+
+
 def _cork_access_token(data: dict) -> str | None:
     # Self-refreshing schema: {"token", "refresh_token", "expires_at"}. When the
     # stored access token is within _TOKEN_SKEW of expiry, exchange the refresh
@@ -145,9 +189,7 @@ def _cork_access_token(data: dict) -> str | None:
     refresh = data.get("refresh_token")
     expires_at = data.get("expires_at")
     if refresh and expires_at is not None and _now() >= expires_at - _TOKEN_SKEW:
-        payload = _auth_payload_from_token_response(_refresh_copilot_token(refresh))
-        _write_cork_auth(payload)
-        return payload["token"]
+        return _refresh_and_store(refresh)
     token = data.get("token")
     if token:
         return token.strip()
