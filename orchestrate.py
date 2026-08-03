@@ -1257,7 +1257,7 @@ def _classify_reviews(reviews: list) -> str:
     # `approve` comes from state==APPROVED or a LINE-ANCHORED 'ready to approve' so a
     # phrase like 'not quite ready to approve' can't false-positive into a clean stop.
     cop = [r for r in reviews
-           if r.get("author") and r["author"]["login"].startswith("copilot-pull-request-reviewer")]
+           if ((r.get("author") or {}).get("login") or "").startswith("copilot-pull-request-reviewer")]
     if not cop:
         return "state=NONE tc=0 verdict=none suppressed=0"
     r = cop[-1]
@@ -1275,8 +1275,13 @@ def _classify_reviews(reviews: list) -> str:
 
 def cmd_review_classify() -> None:
     # Reads the step-2 GraphQL reviews JSON on stdin; prints the classification line.
-    data = json.load(sys.stdin)
-    nodes = data["data"]["repository"]["pullRequest"]["reviews"]["nodes"]
+    # This drives the review loop, so a GraphQL error payload / non-JSON stdin must
+    # fail clearly, not with a traceback.
+    try:
+        data = json.load(sys.stdin)
+        nodes = data["data"]["repository"]["pullRequest"]["reviews"]["nodes"]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        fail(f"review-classify: expected the reviews GraphQL payload on stdin, got {e}")
     print(_classify_reviews(nodes))
 
 

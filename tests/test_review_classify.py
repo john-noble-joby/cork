@@ -1,3 +1,5 @@
+import io
+import sys
 import unittest
 import orchestrate
 
@@ -64,6 +66,31 @@ class ClassifyReviewsTest(unittest.TestCase):
                        _cop(state="APPROVED"))
         self.assertEqual(orchestrate._classify_reviews(nodes),
                          "state=APPROVED tc=0 verdict=approve suppressed=0")
+
+
+    def test_author_object_without_login(self):
+        nodes = [{"author": {}, "state": "COMMENTED"},
+                 {"author": {"login": None}, "state": "COMMENTED"}]
+        self.assertEqual(orchestrate._classify_reviews(nodes),
+                         "state=NONE tc=0 verdict=none suppressed=0")
+
+
+class ReviewClassifyCliTest(unittest.TestCase):
+    def _run_with_stdin(self, text):
+        orig = sys.stdin
+        sys.stdin = io.StringIO(text)
+        try:
+            orchestrate.cmd_review_classify()
+        finally:
+            sys.stdin = orig
+
+    def test_bad_stdin_fails_cleanly(self):
+        with self.assertRaises(SystemExit):
+            self._run_with_stdin("not json at all")
+
+    def test_wrong_shape_fails_cleanly(self):
+        with self.assertRaises(SystemExit):
+            self._run_with_stdin('{"message": "API rate limit exceeded"}')
 
 
 if __name__ == "__main__":
