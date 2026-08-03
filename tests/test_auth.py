@@ -115,6 +115,21 @@ class AuthRefreshTest(unittest.TestCase):
             "access_token": "  NEW  ", "refresh_token": "R2", "expires_in": 28800}
         self.assertEqual(orchestrate._copilot_token(), "NEW")
 
+    def test_opencode_non_object_json_fails_loudly(self):
+        # A valid-JSON-but-non-object opencode file must fail with a clear message,
+        # not crash with AttributeError inside _opencode_access_token.
+        self.oc.write_text(json.dumps(["not", "a", "dict"]))
+        with self.assertRaises(SystemExit):
+            orchestrate._copilot_token()
+
+    def test_expired_token_without_refresh_fails_with_guidance(self):
+        # expires_at is past and there's no refresh_token — returning the token
+        # guarantees a downstream 401; fail early with re-login guidance instead.
+        orchestrate._now = lambda: 10000.0
+        self.cork.write_text(json.dumps({"token": "OLD", "expires_at": 5000}))
+        with self.assertRaises(SystemExit):
+            orchestrate._copilot_token()
+
     def test_opencode_fallback_reads_access_not_refresh(self):
         # No cork file → fall through to opencode; must read `access`, not `refresh`.
         self.oc.write_text(json.dumps(

@@ -224,6 +224,11 @@ def _cork_access_token(data: dict) -> str | None:
         return _refresh_and_store(refresh)
     token = data.get("token")
     if token:
+        if expires_at is not None and _now() >= expires_at - _TOKEN_SKEW and not refresh:
+            # Known-expired with nothing to refresh — fail now rather than hand out a
+            # token that's guaranteed to 401 downstream.
+            fail(f"Copilot token in {_CORK_AUTH} has expired and has no refresh token. "
+                 "Re-run `orchestrate.py login`.")
         return token.strip()
     legacy = data.get("github-copilot", {}).get("refresh")  # legacy opencode-shape file
     return legacy.strip() if legacy else None
@@ -266,6 +271,8 @@ def _copilot_token() -> str:
             data = json.loads(_OPENCODE_AUTH.read_text())
         except json.JSONDecodeError as e:
             fail(f"Cannot parse Copilot token file {_OPENCODE_AUTH}: {e}")
+        if not isinstance(data, dict):
+            fail(f"Malformed opencode auth file {_OPENCODE_AUTH} — expected a JSON object.")
         tok = _opencode_access_token(data)
         if tok:
             return tok
