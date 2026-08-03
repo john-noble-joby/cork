@@ -95,8 +95,11 @@ cop = [r for r in revs
 if not cop:
     print('state=NONE tc=0 verdict=none suppressed=0'); raise SystemExit
 r = cop[-1]; low = (r.get('body') or '').lower()
+# 'block' is load-bearing (checked first); approval comes from state, or a LINE-ANCHORED
+# 'ready to approve' so a phrase like 'not quite ready to approve' can't false-positive.
 verdict = ('block' if 'not ready to approve' in low
-           else 'approve' if r['state'] == 'APPROVED' or 'ready to approve' in low else 'none')
+           else 'approve' if r['state'] == 'APPROVED' or re.search(r'(?m)^\W*ready to approve', low)
+           else 'none')
 m = re.search(r'suppressed comments \((\d+)\)', low)
 print(f\"state={r['state']} tc={r['comments']['totalCount']} verdict={verdict} suppressed={m.group(1) if m else 0}\")
 "
@@ -160,11 +163,18 @@ print(cop[-1]['body'] if cop else '')
 "
 ```
 
+(The body is set **atomically** when the review is submitted — like `totalCount`, not like the
+`reviewThreads` index — so 2c needs **no** settle wait of its own; 2b exists only for the
+lagging thread index.)
+
 Each suppressed item is a `**path:line**` header + a description bullet + a code snippet. For
 each: **fix it (run tests, commit, push) or push back with reasoning** — same judgement as any
-comment. There is no thread to reply to/resolve, so instead post **one PR comment**
-(`gh pr comment {pr} --body "…"`) summarizing what you fixed (with the SHA) and what you pushed
-back on. Then re-request review (step 7) and rely on the next pass's **verdict** to confirm.
+comment. **Honor `interactive_review` here too** (step 3b): when it's on, present the suppressed
+findings + your recommendation and **wait** for the user before editing — the 3b pause covers
+inline threads, and suppressed findings must not slip past it. There is no thread to
+reply to/resolve, so instead post **one PR comment** (`gh pr comment {pr} --body "…"`)
+summarizing what you fixed (with the SHA) and what you pushed back on. Then re-request review
+(step 7) and rely on the next pass's **verdict** to confirm.
 
 Also compare against the prior pass: a suppressed note you already addressed in an earlier
 commit is done — acknowledge it as already-fixed rather than re-doing it.
