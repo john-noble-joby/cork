@@ -130,6 +130,18 @@ class AuthRefreshTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             orchestrate._copilot_token()
 
+    def test_non_utf8_cork_file_fails_loudly(self):
+        # Non-UTF8 bytes raise UnicodeDecodeError (not OSError) — must fail cleanly,
+        # not surface as a traceback.
+        self.cork.write_bytes(b"\xff\xfe not utf8")
+        with self.assertRaises(SystemExit):
+            orchestrate._read_cork_auth()
+
+    def test_non_utf8_opencode_file_fails_loudly(self):
+        self.oc.write_bytes(b"\xff\xfe not utf8")
+        with self.assertRaises(SystemExit):
+            orchestrate._copilot_token()
+
     def test_opencode_fallback_reads_access_not_refresh(self):
         # No cork file → fall through to opencode; must read `access`, not `refresh`.
         self.oc.write_text(json.dumps(

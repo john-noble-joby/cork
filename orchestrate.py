@@ -44,6 +44,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import NoReturn
@@ -125,7 +126,7 @@ _COPILOT_AUTH_KEYS = ("token", "refresh_token", "expires_at")  # keys a refresh 
 
 
 @contextlib.contextmanager
-def _auth_lock():
+def _auth_lock() -> Iterator[None]:
     # One exclusive lock for every read-merge-write of the auth file, so cork's
     # parallel review fan-out (or an overlapping login) can't race the one-use
     # refresh token or cross-write the temp file.
@@ -145,7 +146,7 @@ def _read_cork_auth() -> dict:
         raw = _CORK_AUTH.read_text()
     except FileNotFoundError:
         return {}
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:  # non-UTF8 bytes → loud fail, not a traceback
         fail(f"Cannot read {_CORK_AUTH}: {e}")
     try:
         data = json.loads(raw)
@@ -269,8 +270,8 @@ def _copilot_token() -> str:
     if _OPENCODE_AUTH.exists():
         try:
             data = json.loads(_OPENCODE_AUTH.read_text())
-        except json.JSONDecodeError as e:
-            fail(f"Cannot parse Copilot token file {_OPENCODE_AUTH}: {e}")
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+            fail(f"Cannot read Copilot token file {_OPENCODE_AUTH}: {e}")
         if not isinstance(data, dict):
             fail(f"Malformed opencode auth file {_OPENCODE_AUTH} — expected a JSON object.")
         tok = _opencode_access_token(data)

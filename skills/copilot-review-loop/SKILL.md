@@ -5,7 +5,7 @@ description: Use when the user says to run the Copilot review loop on a branch o
 
 # Copilot Review Loop
 
-**Version:** 0.8.2 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.8.3 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 ## Overview
 
@@ -64,42 +64,51 @@ COPILOT_REVIEW_LOOP pr={PR_NUMBER} repo={owner/repo} max={MAX} worktree={WORKTRE
 
 Extract: `pr`, `repo`, `max`, `worktree`, `iteration`.
 
-### 2. Check Copilot review state *and* its comment count
+### 2. Check the review's state, comment count, **verdict, and suppressed comments**
 
-Read the latest Copilot review's `state` **and its own `comments.totalCount`** in one call.
-`totalCount` is the authoritative number of inline comments on that review — it is set when
-the review is submitted, so it's correct *before* the separate `reviewThreads` index
-finishes propagating. (Naively fetching threads on `COMMENTED` and seeing an empty list is
-the bug: the review really has comments, the thread index just hasn't caught up — so you'd
-declare a false "clean pass" and stop. Don't infer "clean" from an empty thread fetch;
-read `totalCount`.)
+Read the latest Copilot review's `state`, its own `comments.totalCount`, **and its `body`** in
+one call. Two things gate a clean pass, and `totalCount == 0` alone is **not** one of them:
+
+- `totalCount` — inline comments on this review. It's set at submission, so it's correct
+  *before* the `reviewThreads` index finishes propagating; an empty thread fetch on a fresh
+  `COMMENTED` is the index lagging, not a clean pass.
+- **The body carries the verdict and any *suppressed* comments.** Copilot's *Lite* effort
+  often posts **zero inline comments** (`totalCount == 0`) yet renders a `🟡 Not ready to
+  approve` verdict with findings under a `### Suppressed comments (N)` section in the body.
+  Gating on `totalCount`/threads alone misses these entirely and declares a false clean pass.
+  **Clean = the verdict approves AND `totalCount == 0` AND zero suppressed comments.**
 
 ```bash
 gh api graphql -f query='
 { repository(owner: "{owner}", name: "{repo}") {
     pullRequest(number: {pr}) {
-      reviews(last: 50) { nodes { author { login } state comments(first: 0) { totalCount } } }
+      reviews(last: 50) { nodes { author { login } state body comments(first: 0) { totalCount } } }
     }
   }
 }' | python3 -c "
-import json, sys
+import json, sys, re
 revs = json.load(sys.stdin)['data']['repository']['pullRequest']['reviews']['nodes']
 # author can be null (ghost/deleted user); guard before .login. last:50 so the latest
 # Copilot review isn't pushed out of the window by reply-wrapped reviews on busy PRs.
 cop = [r for r in revs
        if r.get('author') and r['author']['login'].startswith('copilot-pull-request-reviewer')]
 if not cop:
-    print('NONE 0')
-else:
-    print(cop[-1]['state'], cop[-1]['comments']['totalCount'])
+    print('state=NONE tc=0 verdict=none suppressed=0'); raise SystemExit
+r = cop[-1]; low = (r.get('body') or '').lower()
+verdict = ('block' if 'not ready to approve' in low
+           else 'approve' if r['state'] == 'APPROVED' or 'ready to approve' in low else 'none')
+m = re.search(r'suppressed comments \((\d+)\)', low)
+print(f\"state={r['state']} tc={r['comments']['totalCount']} verdict={verdict} suppressed={m.group(1) if m else 0}\")
 "
 ```
 
-Output is `STATE TOTALCOUNT`. Route on it:
+Route on `state tc verdict suppressed`:
 
-- `state` is `NONE`/`PENDING` (review not submitted yet) → reschedule and wait, nothing else this tick.
-- `state` completed (`COMMENTED`/`APPROVED`) and `totalCount == 0` → **deterministic clean pass**, no race: no comments exist. Skip to step 6 (stop / re-request per iteration).
-- `state` completed and `totalCount > 0` → that many comments exist; go to **2b** to wait for the thread index, then process.
+- `state=NONE`/`PENDING` (review not submitted yet) → reschedule and wait, nothing else this tick.
+- **`verdict=approve` AND `tc=0` AND `suppressed=0`** → clean pass → step 6 (stop / re-request per iteration). This is the only clean case.
+- `tc > 0` → inline comments exist; go to **2b** to wait for the thread index, then step 3.
+- `suppressed > 0` (or `verdict=block` with `tc=0`) → the findings are in the body, not
+  threads; go to **2c** to process them.
 
 ### 2b. Wait for the thread index to surface the known comments
 
@@ -123,6 +132,26 @@ and miss the rest):
 exactly 100 and step 3's `pageInfo.hasNextPage` is true, that's a capped artifact, not a
 settled index — page through with `endCursor` before trusting it. Copilot rarely exceeds 100
 inline comments, but don't let the cap masquerade as "settled".
+
+### 2c. Process suppressed (body-level) comments
+
+`suppressed > 0` means Copilot put its findings in the review **body**, not as inline threads
+— there is nothing for step 3 to fetch and nothing to `resolveReviewThread`. Read the body and
+extract the `### Suppressed comments (N)` section:
+
+```bash
+gh api repos/{owner}/{repo}/pulls/{pr}/reviews \
+  --jq '[.[] | select(.user.login|startswith("copilot-pull-request-reviewer"))] | last | .body'
+```
+
+Each suppressed item is a `**path:line**` header + a description bullet + a code snippet. For
+each: **fix it (run tests, commit, push) or push back with reasoning** — same judgement as any
+comment. There is no thread to reply to/resolve, so instead post **one PR comment**
+(`gh pr comment {pr} --body "…"`) summarizing what you fixed (with the SHA) and what you pushed
+back on. Then re-request review (step 7) and rely on the next pass's **verdict** to confirm.
+
+Also compare against the prior pass: a suppressed note you already addressed in an earlier
+commit is done — acknowledge it as already-fixed rather than re-doing it.
 
 ### 3. Get unresolved Copilot threads
 
@@ -197,13 +226,13 @@ Push any commits, then evaluate stop conditions.
 
 | Condition | Action |
 |---|---|
-| Review complete, `totalCount == 0` this pass (step 2 — not an empty thread fetch) | **STOP** — satisfied, clean pass |
-| Review complete, comments all processed/resolved, `iteration == max` | **STOP** |
-| Review complete, comments all processed/resolved, `iteration < max` | Re-request, increment, reschedule |
+| `verdict=approve` AND `tc=0` AND `suppressed=0` this pass | **STOP** — satisfied, clean pass |
+| Comments (inline + suppressed) all processed/resolved, `iteration == max` | **STOP** |
+| Comments (inline + suppressed) all processed/resolved, `iteration < max` | Re-request, increment, reschedule |
 
-Judge "clean pass" from step 2's `totalCount == 0`, **never** from an empty `reviewThreads`
-fetch — the index lags the review, so an empty fetch on a fresh `COMMENTED` is the race, not
-a clean pass.
+Judge "clean pass" from step 2's **verdict + `tc` + `suppressed`** together — **never** from an
+empty `reviewThreads` fetch (the index lags a fresh `COMMENTED`) and **never** from `tc == 0`
+alone (Lite-mode reviews suppress findings into the body with `tc=0` but a `block` verdict).
 
 Print final summary on stop: iterations run, commits made, PR URL.
 
@@ -221,6 +250,14 @@ Update loop prompt with `iteration={N+1}` and reschedule.
 ## Notes
 
 - **Polling interval:** 3 minutes — stays within the 5-minute cache window.
+- **Lite-mode reviews suppress findings into the body.** Copilot's *Lite* effort often posts
+  `totalCount = 0` inline comments yet renders a `🟡 Not ready to approve` verdict with findings
+  under a `### Suppressed comments (N)` section in the review **body**. A loop that gates only on
+  threads/`totalCount` reads this as a clean pass and stops while the PR is unapproved. Gate on
+  the **verdict + `tc` + `suppressed`** (step 2 reads `review.body`), and process suppressed
+  items from the body — there's no thread to resolve, so acknowledge via a PR comment
+  (confirmed on cork PR #8, 2026-07: two passes were `Not ready to approve` with `tc=0` and 1–2
+  suppressed comments each).
 - **Review state flips before its threads are indexed.** A review reaches `COMMENTED`/`APPROVED`, but its inline comments take seconds-to-longer to appear in `reviewThreads` / the pulls-comments API — so a thread fetch right at the transition can return an empty or partial list and trick the loop into a false "clean pass" + early STOP. The review's *own* `comments.totalCount` (GraphQL, step 2) is set atomically at submission and is the authoritative "are there comments?" signal; gate on it, and for `totalCount > 0` wait for the thread count to stabilize before processing (confirmed on cork PR #6, 2026-06: pass-3 clean review reported `totalCount=0`, comment-bearing passes reported their exact counts).
 - **Run tests** after every fix commit before pushing. Don't push broken builds.
 - **Worktree:** all edits go in the PR's worktree, not the main checkout.

@@ -21,6 +21,19 @@ change, and add a section here.
 
 ## [Unreleased]
 
+## [0.8.3] — 2026-08-03
+
+### Fixed
+- **copilot-review-loop now gates on the review verdict + suppressed comments**, not just
+  inline `reviewThreads`/`totalCount`. Copilot's *Lite* effort posts findings into the review
+  *body* under `### Suppressed comments (N)` with `totalCount == 0`; the loop previously read
+  that as a clean pass and stopped while the PR was still `Not ready to approve`. Step 2 now
+  reads `review.body` for the verdict and suppressed count; clean = verdict approves AND
+  `tc == 0` AND zero suppressed.
+- Auth reads (`_read_cork_auth`, opencode fallback) now catch `UnicodeDecodeError`/`OSError`
+  and fail with a clear message instead of a traceback on non-UTF8/unreadable files; add the
+  missing `_auth_lock` return annotation. (Surfaced by the fixed loop on PR #8's post-merge review.)
+
 ## [0.8.2] — 2026-07-31
 
 ### Fixed
