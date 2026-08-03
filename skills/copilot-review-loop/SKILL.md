@@ -147,7 +147,7 @@ gh api graphql -f query='
 }' | python3 -c "
 import json, sys
 revs = json.load(sys.stdin)['data']['repository']['pullRequest']['reviews']['nodes']
-cop = [r for r in revs if r.get('author') and r['author']['login'].startswith('copilot-pull-request-reviewer')]
+cop = [r for r in revs if ((r.get('author') or {}).get('login') or '').startswith('copilot-pull-request-reviewer')]
 print(cop[-1]['body'] if cop else '')
 "
 ```

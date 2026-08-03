@@ -271,7 +271,7 @@ def _copilot_token() -> str:
         try:
             data = json.loads(_OPENCODE_AUTH.read_text())
         except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
-            fail(f"Cannot read Copilot token file {_OPENCODE_AUTH}: {e}")
+            fail(f"Cannot read or parse Copilot token file {_OPENCODE_AUTH}: {e}")
         if not isinstance(data, dict):
             fail(f"Malformed opencode auth file {_OPENCODE_AUTH} — expected a JSON object.")
         tok = _opencode_access_token(data)
@@ -1282,6 +1282,8 @@ def cmd_review_classify() -> None:
         nodes = data["data"]["repository"]["pullRequest"]["reviews"]["nodes"]
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         fail(f"review-classify: expected the reviews GraphQL payload on stdin, got {e}")
+    if not isinstance(nodes, list):  # e.g. reviews.nodes: null
+        fail("review-classify: expected reviews.nodes to be a list")
     print(_classify_reviews(nodes))
 
 

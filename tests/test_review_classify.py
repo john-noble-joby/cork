@@ -92,6 +92,12 @@ class ReviewClassifyCliTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self._run_with_stdin('{"message": "API rate limit exceeded"}')
 
+    def test_null_nodes_fails_cleanly(self):
+        # Shape is correct but reviews.nodes is null → must fail, not TypeError in _classify.
+        with self.assertRaises(SystemExit):
+            self._run_with_stdin(
+                '{"data":{"repository":{"pullRequest":{"reviews":{"nodes":null}}}}}')
+
 
 if __name__ == "__main__":
     unittest.main()
