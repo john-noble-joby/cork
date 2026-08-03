@@ -1181,7 +1181,8 @@ def cmd_login() -> None:
     cork's own auth file (CORK_AUTH_FILE, default ~/.config/cork/auth.json).
 
     Makes cork self-sufficient: no manual token copying and no dependency on
-    opencode's auth.json. Re-run any time the token expires.
+    opencode's auth.json. cork refreshes the token automatically, so re-running is
+    only needed if the refresh token expires/is revoked (or none was issued).
     """
     print(f"Requesting device code (client_id={_COPILOT_CLIENT_ID})…", flush=True)
     dc = _post_form("https://github.com/login/device/code",
