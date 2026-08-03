@@ -1,0 +1,67 @@
+# Changelog
+
+All notable changes to cork are recorded here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## Versioning
+
+cork uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) —
+`MAJOR.MINOR.PATCH`:
+
+- **MAJOR** — incompatible changes to the config schema, CLI, or the
+  orchestrate.py↔skill contract.
+- **MINOR** — new backward-compatible capability (a new subcommand, skill, or
+  config option that defaults to today's behavior).
+- **PATCH** — backward-compatible bug fixes and doc/prompt corrections.
+
+The **single source of truth is the `VERSION` file**. Every skill's
+`**Version:**` stamp and `orchestrate.py --version` must match it — `install.sh`
+warns on drift. Bump `VERSION` and all four skill stamps together in the same
+change, and add a section here.
+
+## [Unreleased]
+
+## [0.8.2] — 2026-07-31
+
+### Fixed
+- **Copilot token self-refreshes.** `login` now persists the `refresh_token` and
+  `expires_at` returned by GitHub's device flow, and `_copilot_token()` exchanges
+  an expired access token for a fresh one automatically (`grant_type=refresh_token`),
+  rewriting the auth file. Previously `login` kept only the `access_token`, so when
+  it expired (GitHub-App user-to-server tokens last ~8h) there was nothing to
+  refresh with — forcing a full interactive re-login. Because cork's own auth file
+  takes priority over opencode's non-expiring token, running `login` once turned
+  re-auth into a once-or-twice-a-day chore; that regression is fixed and `login` is
+  safe to run again (the refresh token lasts ~6 months).
+- **opencode fallback reads `access`** (honouring `expires`) instead of `refresh`,
+  matching how opencode maintains its token.
+
+### Added
+- `CHANGELOG.md` and a documented semantic-versioning policy (this file).
+
+## [0.8.1] — 2026-06-30
+
+### Fixed
+- **copilot-review-loop** gates on the review's own `comments.totalCount` rather
+  than an empty thread fetch. A review reaches `COMMENTED`/`APPROVED` before its
+  inline comments are indexed, so an empty thread fetch at that moment used to be
+  misread as a "clean pass" and stop the loop early. Settle now keys off
+  thread-count stability, with a null-author guard and a paginated thread query. (#7)
+
+## [0.8.0] — 2026-06-30
+
+### Added
+- **Shared, layered coding & review standards.** A shipped `standards/AGENTS.md`
+  universal default is layered under each repo's own `code-review/AGENTS.md`, gated
+  by a global `default_standards` toggle and a per-repo `code-review/.cork-standards-off`
+  sentinel. New `standards status` / `standards init [--opt-out]` subcommands; the
+  effective standards drive both devit's implementer and the blind review models.
+- **`install.sh` offers to set `CORK_HOME`** in `~/.claude/settings.json` (additive,
+  refuses to clobber a malformed file). SKILLS array sorted; FOLLOWUPS polish. (#6)
+
+## [0.7.0] — 2026-06-29
+
+### Added
+- **Interactive `cork-setup` skill** and pause-between-reviews (`interactive_review`,
+  on by default): cork and the Copilot loop pause after each reviewer so you can
+  choose what to apply. (#5)
