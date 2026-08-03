@@ -44,6 +44,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import NoReturn
@@ -125,7 +126,7 @@ _COPILOT_AUTH_KEYS = ("token", "refresh_token", "expires_at")  # keys a refresh 
 
 
 @contextlib.contextmanager
-def _auth_lock():
+def _auth_lock() -> Iterator[None]:
     # One exclusive lock for every read-merge-write of the auth file, so cork's
     # parallel review fan-out (or an overlapping login) can't race the one-use
     # refresh token or cross-write the temp file.
@@ -145,7 +146,7 @@ def _read_cork_auth() -> dict:
         raw = _CORK_AUTH.read_text()
     except FileNotFoundError:
         return {}
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:  # non-UTF8 bytes → loud fail, not a traceback
         fail(f"Cannot read {_CORK_AUTH}: {e}")
     try:
         data = json.loads(raw)
@@ -269,8 +270,8 @@ def _copilot_token() -> str:
     if _OPENCODE_AUTH.exists():
         try:
             data = json.loads(_OPENCODE_AUTH.read_text())
-        except json.JSONDecodeError as e:
-            fail(f"Cannot parse Copilot token file {_OPENCODE_AUTH}: {e}")
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+            fail(f"Cannot read or parse Copilot token file {_OPENCODE_AUTH}: {e}")
         if not isinstance(data, dict):
             fail(f"Malformed opencode auth file {_OPENCODE_AUTH} — expected a JSON object.")
         tok = _opencode_access_token(data)
@@ -1250,6 +1251,42 @@ def cmd_preflight() -> None:
         print(f"{s['provider']}/{s['model']}")
 
 
+def _classify_reviews(reviews: list) -> str:
+    # Latest Copilot review → "state=… tc=… verdict=… suppressed=…" for the
+    # copilot-review-loop skill. `block` (Not ready to approve) is checked first;
+    # `approve` comes from state==APPROVED or a LINE-ANCHORED 'ready to approve' so a
+    # phrase like 'not quite ready to approve' can't false-positive into a clean stop.
+    cop = [r for r in reviews
+           if ((r.get("author") or {}).get("login") or "").startswith("copilot-pull-request-reviewer")]
+    if not cop:
+        return "state=NONE tc=0 verdict=none suppressed=0"
+    r = cop[-1]
+    low = (r.get("body") or "").lower()
+    if "not ready to approve" in low:
+        verdict = "block"
+    elif r.get("state") == "APPROVED" or re.search(r"(?m)^\W*ready to approve", low):
+        verdict = "approve"
+    else:
+        verdict = "none"
+    m = re.search(r"suppressed comments \((\d+)\)", low)
+    tc = (r.get("comments") or {}).get("totalCount", 0)
+    return f"state={r.get('state')} tc={tc} verdict={verdict} suppressed={m.group(1) if m else 0}"
+
+
+def cmd_review_classify() -> None:
+    # Reads the step-2 GraphQL reviews JSON on stdin; prints the classification line.
+    # This drives the review loop, so a GraphQL error payload / non-JSON stdin must
+    # fail clearly, not with a traceback.
+    try:
+        data = json.load(sys.stdin)
+        nodes = data["data"]["repository"]["pullRequest"]["reviews"]["nodes"]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        fail(f"review-classify: expected the reviews GraphQL payload on stdin, got {e}")
+    if not isinstance(nodes, list):  # e.g. reviews.nodes: null
+        fail("review-classify: expected reviews.nodes to be a list")
+    print(_classify_reviews(nodes))
+
+
 def _version() -> str:
     here = Path(__file__).resolve().parent
     vfile = here / "VERSION"
@@ -1296,6 +1333,10 @@ def main() -> None:
     if len(sys.argv) >= 2 and sys.argv[1] == "preflight":
         cmd_preflight()
         return
+    if len(sys.argv) >= 2 and sys.argv[1] == "review-classify":
+        cmd_review_classify()
+        return
+
     if len(sys.argv) >= 2 and sys.argv[1] == "standards":
         sub = sys.argv[2] if len(sys.argv) >= 3 else ""
         rest = sys.argv[3:]
