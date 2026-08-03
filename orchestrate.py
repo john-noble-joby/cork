@@ -1251,6 +1251,35 @@ def cmd_preflight() -> None:
         print(f"{s['provider']}/{s['model']}")
 
 
+def _classify_reviews(reviews: list) -> str:
+    # Latest Copilot review → "state=… tc=… verdict=… suppressed=…" for the
+    # copilot-review-loop skill. `block` (Not ready to approve) is checked first;
+    # `approve` comes from state==APPROVED or a LINE-ANCHORED 'ready to approve' so a
+    # phrase like 'not quite ready to approve' can't false-positive into a clean stop.
+    cop = [r for r in reviews
+           if r.get("author") and r["author"]["login"].startswith("copilot-pull-request-reviewer")]
+    if not cop:
+        return "state=NONE tc=0 verdict=none suppressed=0"
+    r = cop[-1]
+    low = (r.get("body") or "").lower()
+    if "not ready to approve" in low:
+        verdict = "block"
+    elif r.get("state") == "APPROVED" or re.search(r"(?m)^\W*ready to approve", low):
+        verdict = "approve"
+    else:
+        verdict = "none"
+    m = re.search(r"suppressed comments \((\d+)\)", low)
+    tc = (r.get("comments") or {}).get("totalCount", 0)
+    return f"state={r.get('state')} tc={tc} verdict={verdict} suppressed={m.group(1) if m else 0}"
+
+
+def cmd_review_classify() -> None:
+    # Reads the step-2 GraphQL reviews JSON on stdin; prints the classification line.
+    data = json.load(sys.stdin)
+    nodes = data["data"]["repository"]["pullRequest"]["reviews"]["nodes"]
+    print(_classify_reviews(nodes))
+
+
 def _version() -> str:
     here = Path(__file__).resolve().parent
     vfile = here / "VERSION"
@@ -1297,6 +1326,10 @@ def main() -> None:
     if len(sys.argv) >= 2 and sys.argv[1] == "preflight":
         cmd_preflight()
         return
+    if len(sys.argv) >= 2 and sys.argv[1] == "review-classify":
+        cmd_review_classify()
+        return
+
     if len(sys.argv) >= 2 and sys.argv[1] == "standards":
         sub = sys.argv[2] if len(sys.argv) >= 3 else ""
         rest = sys.argv[3:]

@@ -85,25 +85,14 @@ gh api graphql -f query='
       reviews(last: 50) { nodes { author { login } state body comments(first: 0) { totalCount } } }
     }
   }
-}' | python3 -c "
-import json, sys, re
-revs = json.load(sys.stdin)['data']['repository']['pullRequest']['reviews']['nodes']
-# author can be null (ghost/deleted user); guard before .login. last:50 so the latest
-# Copilot review isn't pushed out of the window by reply-wrapped reviews on busy PRs.
-cop = [r for r in revs
-       if r.get('author') and r['author']['login'].startswith('copilot-pull-request-reviewer')]
-if not cop:
-    print('state=NONE tc=0 verdict=none suppressed=0'); raise SystemExit
-r = cop[-1]; low = (r.get('body') or '').lower()
-# 'block' is load-bearing (checked first); approval comes from state, or a LINE-ANCHORED
-# 'ready to approve' so a phrase like 'not quite ready to approve' can't false-positive.
-verdict = ('block' if 'not ready to approve' in low
-           else 'approve' if r['state'] == 'APPROVED' or re.search(r'(?m)^\W*ready to approve', low)
-           else 'none')
-m = re.search(r'suppressed comments \((\d+)\)', low)
-print(f\"state={r['state']} tc={r['comments']['totalCount']} verdict={verdict} suppressed={m.group(1) if m else 0}\")
-"
+}' | python3 "$CORK_HOME/orchestrate.py" review-classify
 ```
+
+`review-classify` picks the latest Copilot review (`last: 50`, null-author-safe) and classifies
+it — `block` (Not ready to approve) is checked first; `approve` comes from `state==APPROVED` or a
+line-anchored `ready to approve` (so `not quite ready to approve` can't false-positive). The
+logic is unit-tested in `tests/test_review_classify.py`, so a wording tweak can't silently
+restore the false-clean bug.
 
 Route on `state tc verdict suppressed`:
 
@@ -171,10 +160,15 @@ Each suppressed item is a `**path:line**` header + a description bullet + a code
 each: **fix it (run tests, commit, push) or push back with reasoning** — same judgement as any
 comment. **Honor `interactive_review` here too** (step 3b): when it's on, present the suppressed
 findings + your recommendation and **wait** for the user before editing — the 3b pause covers
-inline threads, and suppressed findings must not slip past it. There is no thread to
-reply to/resolve, so instead post **one PR comment** (`gh pr comment {pr} --body "…"`)
-summarizing what you fixed (with the SHA) and what you pushed back on. Then re-request review
-(step 7) and rely on the next pass's **verdict** to confirm.
+inline threads, and suppressed findings must not slip past it. If the user chooses **Proceed
+(no changes)**, make **zero** edits/comments, keep the **same iteration**, and reschedule
+**without** re-requesting (there's no thread to leave "unresolved") until they later choose fix
+or push back. There is no thread to reply to/resolve, so acknowledge what you *did* fix via
+**one PR comment** (`gh pr comment {pr} --body "…"`) with the SHA and any push-backs.
+
+Do **not** re-request from here — return to step 5. Re-requesting is step 6/7's job, only
+after **every** active channel (inline threads *and* suppressed findings) is processed and the
+max-pass condition is evaluated.
 
 Also compare against the prior pass: a suppressed note you already addressed in an earlier
 commit is done — acknowledge it as already-fixed rather than re-doing it.
