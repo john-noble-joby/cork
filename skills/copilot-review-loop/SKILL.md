@@ -105,10 +105,16 @@ print(f\"state={r['state']} tc={r['comments']['totalCount']} verdict={verdict} s
 Route on `state tc verdict suppressed`:
 
 - `state=NONE`/`PENDING` (review not submitted yet) → reschedule and wait, nothing else this tick.
-- **`verdict=approve` AND `tc=0` AND `suppressed=0`** → clean pass → step 6 (stop / re-request per iteration). This is the only clean case.
-- `tc > 0` → inline comments exist; go to **2b** to wait for the thread index, then step 3.
-- `suppressed > 0` (or `verdict=block` with `tc=0`) → the findings are in the body, not
-  threads; go to **2c** to process them.
+- **`verdict=approve` AND `tc=0` AND `suppressed=0`** → clean pass → step 6 (stop / re-request per iteration). This is the ONLY clean case.
+- Otherwise the review has findings — **process every channel that is non-zero this pass, not
+  just one** (a Lite review can post some inline *and* suppress others; they are not
+  mutually exclusive):
+  - if `tc > 0` → **2b** (settle the thread index) → step 3 → step 4 (inline threads);
+  - if `suppressed > 0` → **2c** (body findings);
+  - do **both** when both are non-zero, then continue to step 5/6.
+
+Never treat inline and suppressed as either/or — "all processed" in step 6 means inline
+threads **and** suppressed body findings from this pass are all handled.
 
 ### 2b. Wait for the thread index to surface the known comments
 
@@ -136,12 +142,22 @@ inline comments, but don't let the cap masquerade as "settled".
 ### 2c. Process suppressed (body-level) comments
 
 `suppressed > 0` means Copilot put its findings in the review **body**, not as inline threads
-— there is nothing for step 3 to fetch and nothing to `resolveReviewThread`. Read the body and
-extract the `### Suppressed comments (N)` section:
+— there is nothing for step 3 to fetch and nothing to `resolveReviewThread`. Fetch the body
+with the **same null-safe, `last: 50` GraphQL** as step 2 (the REST `reviews` endpoint is
+paginated and can return a stale review on a busy PR), and extract the
+`### Suppressed comments (N)` section:
 
 ```bash
-gh api repos/{owner}/{repo}/pulls/{pr}/reviews \
-  --jq '[.[] | select(.user.login|startswith("copilot-pull-request-reviewer"))] | last | .body'
+gh api graphql -f query='
+{ repository(owner: "{owner}", name: "{repo}") {
+    pullRequest(number: {pr}) { reviews(last: 50) { nodes { author { login } body } } }
+  }
+}' | python3 -c "
+import json, sys
+revs = json.load(sys.stdin)['data']['repository']['pullRequest']['reviews']['nodes']
+cop = [r for r in revs if r.get('author') and r['author']['login'].startswith('copilot-pull-request-reviewer')]
+print(cop[-1]['body'] if cop else '')
+"
 ```
 
 Each suppressed item is a `**path:line**` header + a description bullet + a code snippet. For
