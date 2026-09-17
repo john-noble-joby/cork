@@ -37,6 +37,7 @@ import fcntl
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -73,6 +74,33 @@ PROVIDER_BASE = {
     "anthropic": "https://api.anthropic.com",
 }
 
+# Locally installed coding-agent CLIs used as independent, READ-ONLY reviewers.
+# Adding a lane is a data-only change: `argv` is the harness's own flag set
+# ({model}/{repo} substituted), `read_only` is the subset that enforces
+# no-write/no-shell, `system_flag` is how the standards travel (None = prepend
+# to the prompt body), `prompt_via` is "stdin" or "arg". Never include a shell
+# tool: a reviewer with Bash could read the other reviewers' /tmp/cork-review-*
+# files and break blindness.
+HARNESSES: dict[str, dict] = {
+    "claude": {  # claude 2.1.x — verified against `claude --help`
+        "bin": "claude", "bin_env": "CORK_CLAUDE_BIN",
+        "argv": ["-p", "--no-session-persistence", "--output-format", "text",
+                 "--model", "{model}"],
+        "read_only": ["--tools", "Read,Grep,Glob", "--permission-mode", "plan"],
+        "system_flag": "--system-prompt", "prompt_via": "stdin", "timeout": 900,
+    },
+    "codex": {  # codex-cli 0.146.x — verified against `codex exec --help`
+        "bin": "codex", "bin_env": "CORK_CODEX_BIN",
+        "argv": ["exec", "-m", "{model}", "--ephemeral", "--skip-git-repo-check",
+                 "-C", "{repo}", "--color", "never", "-"],
+        "read_only": ["-s", "read-only"],
+        "system_flag": None, "prompt_via": "stdin", "timeout": 900,
+    },
+}
+# `claude --bare` also skips CLAUDE.md/hooks — but it refuses OAuth logins, so it
+# is only safe to add when the seat authenticates with an API key.
+_CLAUDE_BARE_ENV = "ANTHROPIC_API_KEY"
+
 DEFAULT_CONFIG = {
     "version": 1,
     "count": 3,
@@ -82,6 +110,8 @@ DEFAULT_CONFIG = {
         "copilot":   {"enabled": True},
         "openai":    {"enabled": False},
         "anthropic": {"enabled": False},
+        "claude":    {"enabled": False},
+        "codex":     {"enabled": False},
     },
     "rotation": [
         {"provider": "copilot", "model": "gpt-5.5"},
@@ -315,6 +345,8 @@ def _provider_token(provider: str) -> str:
 
 
 def _provider_token_available(provider: str) -> bool:
+    if provider in HARNESSES:  # no token — the binary on PATH is the credential
+        return shutil.which(_harness_bin(provider)) is not None
     match provider:
         case "copilot":
             if os.environ.get("CORK_COPILOT_TOKEN"):
@@ -462,9 +494,9 @@ def _validate_config(cfg: dict) -> None:
     for entry in rotation:
         if not isinstance(entry, dict) or "provider" not in entry or "model" not in entry:
             fail(f"config.rotation entry needs provider+model: {entry}")
-        if entry["provider"] not in PROVIDER_BASE:
+        if entry["provider"] not in PROVIDER_BASE and entry["provider"] not in HARNESSES:
             fail(f"unknown provider '{entry['provider']}' "
-                 f"(known: {', '.join(PROVIDER_BASE)})")
+                 f"(known: {', '.join([*PROVIDER_BASE, *HARNESSES])})")
         key = f"{entry['provider']}/{entry['model']}"
         if key in seen:
             fail(f"duplicate rotation entry: {key}")
@@ -770,9 +802,59 @@ def _openai_compatible_call(provider: str, model: str, system: str,
     return _http_post_json(f"{base}/chat/completions", headers, payload, timeout)
 
 
+def _harness_settings(provider: str) -> dict:
+    # Table defaults, then config.json `providers.<harness>` (bin/extra_args/timeout),
+    # then the CORK_*_BIN env var for the binary.
+    spec = {**HARNESSES[provider], "extra_args": []}
+    spec.update(load_config(quiet=True).get("providers", {}).get(provider, {}))
+    spec["bin"] = os.environ.get(spec["bin_env"]) or spec["bin"]
+    return spec
+
+
+def _harness_bin(provider: str) -> str:
+    return _harness_settings(provider)["bin"]
+
+
+def _harness_argv(provider: str, spec: dict, model: str, repo: str, system: str) -> list[str]:
+    sub = {"model": model, "repo": repo}
+    argv = [spec["bin"], *(a.format(**sub) for a in spec["argv"]), *spec["read_only"]]
+    if provider == "claude" and os.environ.get(_CLAUDE_BARE_ENV):
+        argv.append("--bare")
+    if spec["system_flag"] and system:
+        argv += [spec["system_flag"], system]
+    return argv + list(spec["extra_args"])
+
+
+def _harness_call(provider: str, model: str, system: str, user_msg: str,
+                  repo: str, timeout: int | None = None) -> tuple[int, str]:
+    # Exit 0 -> (200, stdout). Anything else -> (non-200, diagnostic). One attempt.
+    spec = _harness_settings(provider)
+    timeout = timeout or spec["timeout"]
+    prompt = user_msg if spec["system_flag"] else (
+        f"{system}\n\n=== END OF REVIEW STANDARDS — REVIEW TASK FOLLOWS ===\n\n{user_msg}")
+    argv = _harness_argv(provider, spec, model, repo, system)
+    if spec["prompt_via"] == "stdin":
+        run_kw: dict = {"input": prompt}
+    else:
+        argv.append(prompt); run_kw = {"stdin": subprocess.DEVNULL}
+    try:
+        r = subprocess.run(argv, cwd=repo or None, capture_output=True, text=True,
+                           timeout=timeout, **run_kw)
+    except subprocess.TimeoutExpired:
+        return 504, f"{provider} timed out after {timeout}s"
+    except OSError as e:  # binary vanished between preflight and review
+        return 404, f"cannot run {spec['bin']}: {e}"
+    if r.returncode != 0:
+        return 500, f"{provider} exited {r.returncode}: {r.stderr.strip()[-2000:]}"
+    return 200, r.stdout.strip()
+
+
 def _call_and_extract(provider: str, model: str, system: str,
-                      user_msg: str, max_out: int | None = None) -> tuple[int, str]:
+                      user_msg: str, max_out: int | None = None,
+                      repo: str = "") -> tuple[int, str]:
     # Returns (status, extracted_text) on 200, or (status, raw_body) on non-200.
+    if provider in HARNESSES:
+        return _harness_call(provider, model, system, user_msg, repo)
     if provider == "anthropic":
         status, body = _anthropic_call(model, system, user_msg, max_tokens=max_out or 8000)
         if status == 200:
@@ -803,6 +885,8 @@ def _classify_preflight(status: int, body: str) -> str:
 
 
 def _probe(provider: str, model: str) -> str:
+    if provider in HARNESSES:  # presence check only — never spends a harness turn
+        return "ok" if shutil.which(_harness_bin(provider)) else "no binary"
     # A cheap availability probe — cap output hard so it can't burn review-sized
     # quota (the classification only needs the HTTP status, not the content).
     try:
@@ -823,7 +907,8 @@ def _eligible_rotation(cfg: dict) -> list[dict]:
             print(f"  ✗ {provider}/{model} skipped (provider disabled)", flush=True)
             continue
         if not _provider_token_available(provider):
-            print(f"  ✗ {provider}/{model} skipped (no {provider} token)", flush=True)
+            why = "binary not on PATH" if provider in HARNESSES else f"no {provider} token"
+            print(f"  ✗ {provider}/{model} skipped ({why})", flush=True)
             continue
         kept.append(entry)
     return kept
@@ -889,7 +974,7 @@ def _split_model_ref(ref: str) -> tuple[str, str]:
 def review(provider: str, model: str, instructions: str, story: str,
            diff: str, files: dict[str, str],
            char_budget: int = _DEFAULT_CHAR_BUDGET,
-           max_attempts: int = 3) -> str:
+           max_attempts: int = 3, repo: str = "") -> str:
     system = (
         instructions + "\n\n---\n"
         "Note: you are a single-pass API reviewer — you cannot spawn "
@@ -906,6 +991,13 @@ def review(provider: str, model: str, instructions: str, story: str,
     user_msg = (f"## Story / Task\n{story}\n\n"
                 f"## Changed Files (current state)\n{file_block}\n\n"
                 f"## Branch Diff\n```diff\n{diff}\n```")
+
+    if provider in HARNESSES:  # one shot; a dead harness is a skipped reviewer, never a traceback
+        status, text = _call_and_extract(provider, model, system, user_msg, repo=repo)
+        if status == 200 and text:
+            return text
+        print(f"  → {provider}/{model}: {text or 'empty output'}"[:600], flush=True)
+        return f"[{provider}/{model} returned no usable content — skipped]"
 
     for attempt in range(max_attempts):
         try:
@@ -1241,7 +1333,8 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
              or f"Review the branch changes for {tid}.")
     print(f"\n── Review: {provider}/{model} — {len(files)} files, "
           f"{len(diff.splitlines())} diff lines vs {base}\n", flush=True)
-    print(review(provider, model, instructions, story, diff, files, _DEFAULT_CHAR_BUDGET))
+    print(review(provider, model, instructions, story, diff, files, _DEFAULT_CHAR_BUDGET,
+                 repo=repo))
 
 
 def cmd_preflight() -> None:
@@ -1548,7 +1641,7 @@ def main() -> None:
             print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {key}")
             review_out = review(
                 entry["provider"], entry["model"],
-                instructions, summary, diff, files, _DEFAULT_CHAR_BUDGET,
+                instructions, summary, diff, files, _DEFAULT_CHAR_BUDGET, repo=repo,
             )
             print(f"  {review_out[:300]}…")
             _save_model(tid, state, key, "review", review_out)
