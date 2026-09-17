@@ -17,12 +17,14 @@ CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 ## 1. Copilot token
 Run `python3 "$CORK_HOME/orchestrate.py" auth status --json` and parse its JSON stdout
 (it intentionally exits 1 when no token resolves or the probe fails).
-- Continue only when `source == "cork"`, `refreshable == true`, and `probe == "ok"`.
-- If `source != "cork"` or `refreshable == false`, prompt the user to run `login` even when
-  the probe succeeds. An opencode fallback or token-only/legacy cork file is not cork-owned,
-  refreshable auth. If the source is `env`, first tell the user to unset
-  `CORK_COPILOT_TOKEN`, otherwise that override will continue to win after login.
-- If no token resolves or the probe fails, the user must mint one. `login` runs GitHub's
+- If `source == "none"` or `probe.reason == "auth"`, the user must mint a token.
+- If `probe.status == "fail"` for any other reason, relay the command's stderr recovery
+  guidance and stop; a model, integrator, or timeout failure is not fixed by logging in.
+- Once the probe succeeds, continue only when `source == "cork"` and `refreshable == true`.
+  Otherwise prompt the user to run `login`: an opencode fallback or token-only/legacy cork
+  file is not cork-owned, refreshable auth. If the source is `env`, first tell the user to
+  unset `CORK_COPILOT_TOKEN`, otherwise that override will continue to win after login.
+  `login` runs GitHub's
   **device-authorization flow** (no secret pasted): it prints a verification URL + a user
   code, the user approves in the browser, and it polls and writes the token to
   `~/.config/cork/auth.json` (chmod 600).
@@ -34,7 +36,8 @@ Run `python3 "$CORK_HOME/orchestrate.py" auth status --json` and parse its JSON 
   `! python3 "$CORK_HOME/orchestrate.py" login`
 
   Wait for them to confirm they've approved in the browser, then re-run `auth status --json`
-  yourself and require `source == "cork"`, `refreshable == true`, and `probe == "ok"`.
+  yourself and require `source == "cork"`, `refreshable == true`, and
+  `probe.status == "ok"`.
 
 ## 2. Review models
 If `~/.config/cork/config.json` doesn't exist, run `python3 "$CORK_HOME/orchestrate.py" config init`.

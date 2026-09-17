@@ -363,6 +363,8 @@ def _format_expiry(expires_at: float | None) -> str:
 def _copilot_auth_summary(source: str, expires_at: float | None, refreshable: bool) -> str:
     path = _display_path(_auth_path(source))
     expiry = _format_expiry(expires_at)
+    if source == "none":
+        return f"Copilot token: none — run `{_LOGIN_COMMAND}`"
     if source == "opencode":
         return (f"WARNING: Copilot token: opencode fallback ({path}), "
                 f"{'no expiry' if expires_at is None else f'expires {expiry}'}, not refreshable — "
@@ -909,7 +911,7 @@ def _probe(provider: str, model: str) -> str:
     return _classify_preflight(status, text)
 
 
-def _eligible_rotation(cfg: dict) -> list[dict]:
+def _eligible_rotation(cfg: dict, keep_unavailable_copilot: bool = False) -> list[dict]:
     kept: list[dict] = []
     providers_cfg = cfg.get("providers", {})
     for entry in cfg.get("rotation", []):
@@ -918,6 +920,9 @@ def _eligible_rotation(cfg: dict) -> list[dict]:
         enabled  = providers_cfg.get(provider, {}).get("enabled", True)
         if not enabled:
             print(f"  ✗ {provider}/{model} skipped (provider disabled)", flush=True)
+            continue
+        if keep_unavailable_copilot and provider == "copilot":
+            kept.append(entry)
             continue
         if not _provider_token_available(provider):
             print(f"  ✗ {provider}/{model} skipped (no {provider} token)", flush=True)
@@ -933,14 +938,17 @@ def preflight(rotation: list[dict], count: int) -> list[dict]:
     copilot_auth: tuple[str | None, str, float | None, bool] | None = None
     if any(entry["provider"] == "copilot" for entry in rotation):
         copilot_auth = _resolve_copilot_auth()
-        token, source, expires_at, refreshable = copilot_auth
-        if token is None:
-            fail(_unusable_copilot_token_message(source))
+        _token, source, expires_at, refreshable = copilot_auth
         print(_copilot_auth_summary(source, expires_at, refreshable), flush=True)
     for entry in rotation:
         if len(selected) >= count:
             break
         provider, model = entry["provider"], entry["model"]
+        if provider == "copilot":
+            assert copilot_auth is not None
+            if copilot_auth[0] is None:
+                print(f"  ✗ {provider}/{model} skipped (no copilot token)")
+                continue
         verdict = _probe(provider, model)
         if verdict == "ok":
             selected.append({"provider": provider, "model": model})
@@ -1340,7 +1348,9 @@ def _print_auth_status(result: dict, as_json: bool) -> None:
     print(f"  path: {result['path'] or 'none'}")
     print(f"  expiry: {result['expiry'] or 'none'}")
     print(f"  refreshable: {'yes' if result['refreshable'] else 'no'}")
-    print(f"  probe: {result['probe']}")
+    probe = result["probe"]
+    reason = f" ({probe['reason']})" if probe["status"] == "fail" else ""
+    print(f"  probe: {probe['status']}{reason}")
 
 
 def _auth_probe_model() -> str:
@@ -1362,7 +1372,7 @@ def cmd_auth_status(as_json: bool = False) -> None:
             "path": str(_auth_path(source)) if _auth_path(source) else None,
             "expiry": _format_expiry(expires_at) if expires_at is not None else None,
             "refreshable": False,
-            "probe": "fail",
+            "probe": {"status": "fail", "reason": "missing" if source == "none" else "expired"},
         }
         _print_auth_status(result, as_json)
         fail(_unusable_copilot_token_message(source))
@@ -1374,7 +1384,7 @@ def cmd_auth_status(as_json: bool = False) -> None:
         "path": str(_auth_path(source)) if _auth_path(source) else None,
         "expiry": _format_expiry(expires_at) if expires_at is not None else None,
         "refreshable": refreshable,
-        "probe": "ok" if verdict == "ok" else "fail",
+        "probe": {"status": "ok" if verdict == "ok" else "fail", "reason": verdict},
     }
     _print_auth_status(result, as_json)
     if verdict == "auth":
@@ -1412,7 +1422,8 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
 
 def cmd_preflight() -> None:
     cfg = load_config()
-    selected = preflight(_eligible_rotation(cfg), cfg.get("count", 3))
+    selected = preflight(
+        _eligible_rotation(cfg, keep_unavailable_copilot=True), cfg.get("count", 3))
     for s in selected:
         print(f"{s['provider']}/{s['model']}")
 
@@ -1624,7 +1635,8 @@ def main() -> None:
         if args.skip_validation:
             sel = _eligible_rotation(cfg)[:cfg.get("count", 3)]
         else:
-            sel = preflight(_eligible_rotation(cfg), cfg.get("count", 3))
+            sel = preflight(
+                _eligible_rotation(cfg, keep_unavailable_copilot=True), cfg.get("count", 3))
         if not sel:
             fail("No eligible models in rotation — check providers.enabled and tokens in config.json/auth.json.")
         state["rotation"] = sel

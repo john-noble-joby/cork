@@ -213,9 +213,11 @@ refreshes it in place; native-provider keys live alongside and are preserved acr
 (resolved first), not required. None are needed if you clone to `~/dev/cork` and run `login`.
 
 Run `python3 orchestrate.py auth status` to see which source actually won, whether it can
-refresh, its expiry, and a one-request probe result. Add `--json` for scripting. A token-only
-cork file and the read-only opencode fallback are not refreshable; run
-`python3 "$CORK_HOME/orchestrate.py" login` to replace either with cork's own credential.
+refresh, its expiry, and a one-request probe result. Add `--json` for scripting; its `probe`
+field is `{"status": "ok|fail", "reason": "<verdict>"}` so callers can distinguish auth
+failures from model, integrator, and timeout failures. A token-only cork file and the read-only
+opencode fallback are not refreshable; run `python3 "$CORK_HOME/orchestrate.py" login` to
+replace either with cork's own credential.
 
 | Env var | Default | Purpose |
 |---------|---------|---------|

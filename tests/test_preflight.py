@@ -105,12 +105,14 @@ class AuthVisibilityTest(unittest.TestCase):
         self.opencode = Path(self.tmp.name) / "opencode.json"
         self._cork, self._opencode = orchestrate._CORK_AUTH, orchestrate._OPENCODE_AUTH
         self._probe, self._now = orchestrate._probe, orchestrate._now
+        self._load_config = orchestrate.load_config
         self._env = os.environ.pop("CORK_COPILOT_TOKEN", None)
         orchestrate._CORK_AUTH, orchestrate._OPENCODE_AUTH = self.cork, self.opencode
 
     def tearDown(self):
         orchestrate._CORK_AUTH, orchestrate._OPENCODE_AUTH = self._cork, self._opencode
         orchestrate._probe, orchestrate._now = self._probe, self._now
+        orchestrate.load_config = self._load_config
         if self._env is not None:
             os.environ["CORK_COPILOT_TOKEN"] = self._env
         self.tmp.cleanup()
@@ -153,16 +155,50 @@ class AuthVisibilityTest(unittest.TestCase):
         self.assertIn("delete it and re-login", err.getvalue())
         self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
 
-    def test_preflight_rejects_expired_token_before_probe(self):
+    def test_preflight_reports_expired_token_without_probing(self):
         orchestrate._now = lambda: 10000.0
         self.cork.write_text(json.dumps({"token": "OLD", "expires_at": 5000}))
         orchestrate._probe = lambda provider, model: self.fail("must not probe expired auth")
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit):
             orchestrate.preflight(
                 [{"provider": "copilot", "model": "gpt-4.1"}], count=1)
-        self.assertIn("expired and has no refresh token", err.getvalue())
-        self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
+        self.assertIn("WARNING: Copilot token: cork", out.getvalue())
+        self.assertIn(orchestrate._LOGIN_COMMAND, out.getvalue())
+        self.assertIn("No usable models", err.getvalue())
+
+    def test_cmd_preflight_no_token_prints_source_aware_login_guidance(self):
+        orchestrate.load_config = lambda quiet=False: {
+            "count": 1,
+            "providers": {"copilot": {"enabled": True}},
+            "rotation": [{"provider": "copilot", "model": "model"}],
+        }
+        orchestrate._probe = lambda provider, model: self.fail("must not probe without auth")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit):
+            orchestrate.cmd_preflight()
+        self.assertIn(f"Copilot token: none — run `{orchestrate._LOGIN_COMMAND}`", out.getvalue())
+        self.assertIn("No usable models", err.getvalue())
+
+    def test_normal_preflight_keeps_native_fallback_when_copilot_missing(self):
+        cfg = {
+            "providers": {"copilot": {"enabled": True}, "openai": {"enabled": True}},
+            "rotation": [
+                {"provider": "copilot", "model": "copilot-model"},
+                {"provider": "openai", "model": "native-model"},
+            ],
+        }
+        original = orchestrate._provider_token_available
+        orchestrate._provider_token_available = lambda provider: provider == "openai"
+        orchestrate._probe = lambda provider, model: "ok"
+        try:
+            selected = orchestrate.preflight(
+                orchestrate._eligible_rotation(cfg, keep_unavailable_copilot=True), count=1)
+        finally:
+            orchestrate._provider_token_available = original
+        self.assertEqual(selected, [{"provider": "openai", "model": "native-model"}])
 
 
 class EligibleRotationTest(unittest.TestCase):

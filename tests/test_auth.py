@@ -339,7 +339,7 @@ class AuthRefreshTest(unittest.TestCase):
             "path": str(self.cork),
             "expiry": "1970-01-01T01:23:20Z",
             "refreshable": True,
-            "probe": "ok",
+            "probe": {"status": "ok", "reason": "ok"},
         })
 
     def test_auth_status_json_exits_one_when_nothing_resolves(self):
@@ -353,7 +353,8 @@ class AuthRefreshTest(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertEqual(json.loads(out.getvalue()), {
             "source": "none", "path": None, "expiry": None,
-            "refreshable": False, "probe": "fail",
+            "refreshable": False,
+            "probe": {"status": "fail", "reason": "missing"},
         })
         self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
 
@@ -367,7 +368,8 @@ class AuthRefreshTest(unittest.TestCase):
             orchestrate.cmd_auth_status(as_json=True)
         self.assertEqual(raised.exception.code, 1)
         self.assertEqual(len(calls), 1)
-        self.assertEqual(json.loads(out.getvalue())["probe"], "fail")
+        self.assertEqual(json.loads(out.getvalue())["probe"],
+                         {"status": "fail", "reason": "auth"})
         self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
 
     def test_non_auth_probe_failures_do_not_recommend_login(self):
@@ -386,6 +388,8 @@ class AuthRefreshTest(unittest.TestCase):
                         self.assertRaises(SystemExit) as raised:
                     orchestrate.cmd_auth_status(as_json=True)
                 self.assertEqual(raised.exception.code, 1)
+                self.assertEqual(json.loads(out.getvalue())["probe"],
+                                 {"status": "fail", "reason": verdict})
                 self.assertIn(message, err.getvalue())
                 self.assertNotIn(orchestrate._LOGIN_COMMAND, err.getvalue())
 
@@ -404,7 +408,7 @@ class AuthRefreshTest(unittest.TestCase):
             "path": str(self.cork),
             "expiry": "1970-01-01T01:23:20Z",
             "refreshable": False,
-            "probe": "fail",
+            "probe": {"status": "fail", "reason": "expired"},
         })
         self.assertIn("expired", err.getvalue())
 
