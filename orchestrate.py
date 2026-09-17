@@ -1038,15 +1038,18 @@ def prompt_initial(ticket_id: str) -> str:
     )
 
 
-def prompt_claude_review(base: str, instructions_path: str) -> str:
+def prompt_claude_review(base: str, instructions_path: str, summary: str) -> str:
     review_src = (
         f"Read and follow the review instructions in {instructions_path}."
         if instructions_path
         else "Perform a thorough multi-agent code review."
     )
     return (
+        f"## Story / Task\n{summary}\n\n"
         f"Review the current feature branch against {base}. "
-        f"The full branch diff is available via: git diff {base}...HEAD\n\n"
+        f"The full branch diff is available via: git diff {base}...HEAD\n"
+        "Judge spec conformance against the Story / Task above; if it states no "
+        "checkable requirements, say so.\n\n"
         f"{review_src}\n\n"
         "Output ONLY a structured findings report. "
         "Do NOT apply any fixes. Do NOT edit any files."
@@ -1532,7 +1535,9 @@ def main() -> None:
     # ── Step 2: Claude multi-agent self-review ────────────────────────────────
     if rem["self_review"]:
         step(2, total, "Claude Code: multi-agent self-review", ticket_id=tid)
-        self_review_out = run_claude(prompt_claude_review(base, instructions_path), cwd=repo)
+        self_review_out = run_claude(
+            prompt_claude_review(base, instructions_path, summary), cwd=repo
+        )
         print(f"  {self_review_out[:300]}…")
         state["done"]["self_review"] = self_review_out
         mark_done_v2(tid, state)

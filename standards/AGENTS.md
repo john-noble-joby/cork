@@ -8,7 +8,9 @@ with `config set default_standards false`.
 
 This is the condensed, reviewer-injected form. The canonical, fuller treatment is the
 `coding-standards` skill in this repo (`skills/coding-standards/SKILL.md` +
-`references/review-checklist.md`) — keep the two in step: a rule added there gets a line here.
+`references/review-checklist.md`) — keep the two in step: every defect class and every
+material rule in the skill has a condensed line here; only stack-specific elaboration and
+the long-form review protocol stay in the skill.
 
 ## Reviewer stance
 You are a reviewer **and** the standard an implementer codes to. As a reviewer you report
@@ -55,6 +57,16 @@ out good patterns by name — affirmation matters.
 - **Error handling:** swallowed/empty catches; catching everything without a filter
   (hides cancellation); rethrowing in a way that loses the stack/cause; generic error types
   for domain failures.
+- **Error attribution:** errors carry a precise, structured location (line/column,
+  JSON-pointer or path), not just a message.
+- **Boundary parsing:** prefer non-throwing Try-style parse APIs at input boundaries; a
+  throwing parse turns expected bad input into exception flow control.
+- **Locale/culture:** every parse/format of numbers, dates, and URIs pinned to an invariant
+  or explicit culture.
+- **Nullability escape hatches:** every null-forgiving assertion (`!` and equivalents)
+  needs a justification or a refactor that removes it.
+- **Public surface docs:** public library APIs get doc comments — coverage, not only
+  freshness.
 - **Type design:** primitive obsession (raw string/int for IDs, money, paths) where a small
   wrapper carries the invariant; "fat" constructors with many deps (usually an SRP split).
 - **Readability:** chains/pipelines too long to set a breakpoint in; allocations inside hot
@@ -109,6 +121,12 @@ Each recurs across real review history; when a diff fixes one instance, verify t
 - Helpers (equality, parsing) get their own edge-case tests.
 - Every new conditional has a mutation test: delete or invert the clause and some test must
   fail; if the suite stays green the gate is unproven.
+- Test the wire, not the internals: a set-then-read verification exercises the real protocol
+  path (send the packet, decode the response bytes) — reading internal state passes even
+  when the read path is broken.
+- Every new dispatch path (new command type, parameter, route) is exercised by at least one
+  scenario/integration test, or its omission is noted as intentional in the change
+  description.
 
 ## Adversarial lens (find wrong behavior, not style)
 Boundary values (0, min, max, just-past-max; empty/whitespace/one/many); partial-failure in

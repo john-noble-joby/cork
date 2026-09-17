@@ -48,6 +48,9 @@ change, and add a section here.
   requirements; never auto-delete unrequested behaviour). `standards/AGENTS.md` gains a
   condensed `Recurring defect classes` section so the injected rubric carries the skill's
   defect classes.
+- The pipeline's self-review prompt now carries the implementer's summary as `## Story / Task`
+  so the spec-conformance axis is actionable there; `standards/AGENTS.md` mirrors the skill's
+  remaining universal smells and test rules.
 
 ### Fixed
 - Review diffs are now merge-base (`git diff <base>...HEAD`) in `orchestrate.py` and the cork skill's self-review, and the base ref (and its merge base with HEAD) is validated up front in every mode (review-only, full run, seed-only) — a bad `--base-branch` fails before any implementation step runs, and a base branch that advanced after forking no longer leaks base-only changes into the review.

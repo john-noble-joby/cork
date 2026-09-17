@@ -99,9 +99,14 @@ class ReviewDiffTest(unittest.TestCase):
         run_claude.assert_not_called()
 
     def test_review_prompts_use_merge_base_and_fix_spec_findings(self):
-        review_prompt = orchestrate.prompt_claude_review("origin/main", "/review.md")
+        review_prompt = orchestrate.prompt_claude_review(
+            "origin/main", "/review.md", "Implement the requested widget"
+        )
         fix_prompt = orchestrate.prompt_fix("summary", "origin/main", "review", "TEST-1")
 
+        self.assertIn(
+            "## Story / Task\nImplement the requested widget\n\n", review_prompt
+        )
         self.assertIn("git diff origin/main...HEAD", review_prompt)
         self.assertIn("git diff origin/main...HEAD", fix_prompt)
         self.assertIn("Spec conformance sections", fix_prompt)
