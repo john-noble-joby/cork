@@ -13,17 +13,25 @@ Run the installer from the repo root — it copies the skills into
 
 `orchestrate.py` itself isn't installed: the skills call it via `$CORK_HOME`
 (default `~/dev/cork`), so it runs from this clone directly — `git pull` updates
-it. Only the `SKILL.md` files are copies, which is what `install.sh` keeps in
-sync. Check what's installed any time with `python3 orchestrate.py --version`
+it. Only the skill directories (each `SKILL.md` plus any `references/`) are copies, which is
+what `install.sh` keeps in sync. Check what's installed any time with
+`python3 orchestrate.py --version`
 (also surfaced in the cork skill's Step 0 confirmation line).
 
 Then invoke by phrase in any session:
+- **coding-standards** — auto-loaded when writing or reviewing code; no phrase needed. Not
+  governed by cork's standards opt-out (that gates orchestrator-injected prompts only).
 - **cork** — "cork" / "run cork on this branch"
 - **copilot-review-loop** — "run the copilot review loop on this branch"
 - **devit** — "devit <TICKET>"
 - **cork-setup** — "set up cork"
 
 ## Skills
+
+### coding-standards
+The canonical coding & review rubric: priorities, recurring defect classes, Fowler smells,
+and a separate spec-conformance axis. `standards/AGENTS.md` is its condensed,
+reviewer-injected copy. Codex shares it via symlink, and Pi via its `skills` path.
 
 ### cork
 Session-driven multi-model review pipeline. The active Claude session implements and
@@ -38,8 +46,8 @@ with nothing applied; for reviewing someone else's branch).
 ### copilot-review-loop
 Iterative GitHub Copilot PR review: request review → poll → fix/push-back each comment
 → reply + resolve → re-request → repeat up to N passes, stopping when Copilot has no
-comments or the max is reached. Reviewer login is `Copilot` for requesting,
-`copilot-pull-request-reviewer[bot]` for filtering comments.
+comments or the max is reached. Request and filter with the bot login
+`copilot-pull-request-reviewer[bot]` (the display name `Copilot` silently assigns nobody).
 
 ### devit
 Linear-story dev loop. `devit <TICKET>` verifies the story (asking for clarity if

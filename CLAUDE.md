@@ -17,7 +17,7 @@ The pipeline is `3 + 2×N` committed steps (N = number of preflight-selected mod
 orchestrate.py          # single entry point
 docs/plan.md            # design decisions and rationale (historical record)
 README.md               # usage and setup
-skills/                 # Claude Code skills: cork (session-driven), copilot-review-loop
+skills/                 # Claude Code skills: coding-standards, cork, copilot-review-loop, devit, cork-setup
 ```
 
 No frameworks. No classes. No abstractions beyond what the task requires.

@@ -94,11 +94,21 @@ DEFAULT_CONFIG = {
 }
 
 REVIEW_SYSTEM = """\
-You are a senior code reviewer. For each issue output exactly:
+You are a senior code reviewer. For each issue in the main list output exactly:
 FILE: <path> | LINE: <n> | ISSUE: <description> | FIX: <suggestion>
 Be specific. Reference exact file paths and line numbers.
 Cover: correctness, error handling, edge cases,
 style consistency with surrounding code, test coverage.\
+"""
+
+SPEC_CONFORMANCE_SUFFIX = """\
+Add a separate, free-form `## Spec conformance` section of its own (not issue records).
+Under it, list
+(a) requirements in the Story / Task that are missing or partial, (b) behaviour in
+the diff that wasn't asked for, (c) requirements that look implemented but wrong —
+quoting the story line for each. If the Story / Task states no checkable requirements,
+write the single line `no spec available`. Never merge these findings into the findings
+above; keep them under their own heading.\
 """
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -637,15 +647,32 @@ def run_claude(prompt: str, cwd: str) -> str:
     return result.stdout.strip()
 
 
+def require_base_ref(repo: str, base: str) -> None:
+    base_check = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"],
+        cwd=repo, capture_output=True, text=True,
+    )
+    if base_check.returncode != 0:
+        fail(f"Base ref {base!r} does not resolve")
+    merge_base_check = subprocess.run(
+        ["git", "merge-base", base, "HEAD"],
+        cwd=repo, capture_output=True, text=True,
+    )
+    if merge_base_check.returncode != 0:
+        reason = merge_base_check.stderr.strip()
+        suffix = f": {reason}" if reason else ""
+        fail(f"No merge base between {base!r} and HEAD{suffix}")
+
+
 def git_diff_branch(cwd: str, base: str) -> str:
     return subprocess.check_output(
-        ["git", "diff", f"{base}..HEAD"], cwd=cwd, text=True
+        ["git", "diff", f"{base}...HEAD"], cwd=cwd, text=True
     )
 
 
 def changed_files_branch(cwd: str, base: str) -> dict[str, str]:
     names = subprocess.check_output(
-        ["git", "diff", f"{base}..HEAD", "--name-only"], cwd=cwd, text=True
+        ["git", "diff", f"{base}...HEAD", "--name-only"], cwd=cwd, text=True
     ).strip().splitlines()
     contents: dict[str, str] = {}
     for name in names:
@@ -890,7 +917,7 @@ def review(provider: str, model: str, instructions: str, story: str,
            diff: str, files: dict[str, str],
            char_budget: int = _DEFAULT_CHAR_BUDGET,
            max_attempts: int = 3) -> str:
-    system = (
+    review_system = (
         instructions + "\n\n---\n"
         "Note: you are a single-pass API reviewer — you cannot spawn "
         "sub-agents or invoke skills. Apply the standards in one pass and "
@@ -898,6 +925,7 @@ def review(provider: str, model: str, instructions: str, story: str,
         "findings only."
         if instructions else REVIEW_SYSTEM
     )
+    system = review_system + "\n\n" + SPEC_CONFORMANCE_SUFFIX
     fixed_chars = len(system) + len(story) + len(diff) + 500
     file_block, n_included = _budget_files(files, max(0, char_budget - fixed_chars))
     if n_included < len(files):
@@ -1023,16 +1051,18 @@ def prompt_initial(ticket_id: str) -> str:
     )
 
 
-def prompt_claude_review(base: str, instructions_path: str) -> str:
+def prompt_claude_review(base: str, instructions_path: str, summary: str) -> str:
     review_src = (
         f"Read and follow the review instructions in {instructions_path}."
         if instructions_path
         else "Perform a thorough multi-agent code review."
     )
     return (
+        f"## Story / Task\n{summary}\n\n"
         f"Review the current feature branch against {base}. "
-        f"The full branch diff is available via: git diff {base}..HEAD\n\n"
+        f"The full branch diff is available via: git diff {base}...HEAD\n"
         f"{review_src}\n\n"
+        f"{SPEC_CONFORMANCE_SUFFIX}\n\n"
         "Output ONLY a structured findings report. "
         "Do NOT apply any fixes. Do NOT edit any files."
     )
@@ -1048,10 +1078,13 @@ def prompt_fix(summary: str, base: str, review: str, ticket_id: str,
     return (
         f"## Story Summary\n{summary}\n\n"
         "## Current Branch State\n"
-        f"Run `git diff {base}..HEAD` to see all changes on this branch.\n\n"
+        f"Run `git diff {base}...HEAD` to see all changes on this branch.\n\n"
         f"## Code Review Findings\n{review}\n\n"
-        "Address findings in the Critical, Important, Minor, Cross-cutting, and "
-        "Promotion candidates sections. Make targeted fixes — don't rewrite what works. "
+        "Address findings in the Critical, Important, Minor, Cross-cutting, Promotion "
+        "candidates, and Spec conformance sections. For Spec conformance: implement missing "
+        "or partial requirements; do NOT delete behaviour flagged as unrequested — leave it "
+        "and call it out in your summary for the human to decide. Make targeted fixes — "
+        "don't rewrite what works. "
         "Search mem0 if you need context about patterns or past decisions.\n\n"
         "DO NOT attempt to resolve items in 'Uncertain', 'needs human judgment', or "
         "'Out of scope' sections — those are flagged for human review, not automated fixing.\n\n"
@@ -1224,6 +1257,10 @@ def cmd_login() -> None:
 
 
 def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True) -> None:
+    require_base_ref(repo, base)
+    diff = git_diff_branch(repo, base)
+    if not diff.strip():
+        fail(f"No diff vs {base} — nothing to review.")
     provider, model = _split_model_ref(model_ref)
     if validate:
         verdict = _probe(provider, model)
@@ -1232,9 +1269,6 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     instructions, instructions_path = load_agent_instructions(repo)
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
-    diff = git_diff_branch(repo, base)
-    if not diff.strip():
-        fail(f"No diff vs {base} — nothing to review.")
     files = changed_files_branch(repo, base)
     _st = load_state(tid)
     story = (_st.get("done", {}).get("summary") or _st.get("summary")
@@ -1397,6 +1431,8 @@ def main() -> None:
         cmd_review(tid, repo, base, args.review_model, validate=not args.skip_validation)
         return
 
+    require_base_ref(repo, base)
+
     if args.reset:
         clear_state(tid)
 
@@ -1511,7 +1547,9 @@ def main() -> None:
     # ── Step 2: Claude multi-agent self-review ────────────────────────────────
     if rem["self_review"]:
         step(2, total, "Claude Code: multi-agent self-review", ticket_id=tid)
-        self_review_out = run_claude(prompt_claude_review(base, instructions_path), cwd=repo)
+        self_review_out = run_claude(
+            prompt_claude_review(base, instructions_path, summary), cwd=repo
+        )
         print(f"  {self_review_out[:300]}…")
         state["done"]["self_review"] = self_review_out
         mark_done_v2(tid, state)

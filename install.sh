@@ -3,14 +3,135 @@
 #
 # orchestrate.py is NOT installed: the skills invoke it via $CORK_HOME
 # (default ~/dev/cork), so it runs from this repo clone directly — a git pull
-# is all it takes to update the script. Only the SKILL.md files are copies that
-# can drift, which is what this script keeps in sync and version-checks.
+# is all it takes to update the script. The skill directories are copies that
+# this script replaces in full and version-checks on each run.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
 VERSION="$(tr -d '[:space:]' < "$REPO/VERSION")"
-SKILLS=(copilot-review-loop cork cork-setup devit)
+SKILLS=(coding-standards copilot-review-loop cork cork-setup devit)
+: "${DEST:?DEST must not be empty}"
+
+dest_logical="$DEST"
+case "$dest_logical" in
+  /*) ;;
+  *) dest_logical="$PWD/$dest_logical" ;;
+esac
+while :; do
+  previous_dest_logical="$dest_logical"
+  dest_logical="${dest_logical//\/\//\/}"
+  case "$dest_logical" in
+    /|/.) dest_logical="/" ;;
+    */.) dest_logical="${dest_logical%/.}" ;;
+    */) dest_logical="${dest_logical%/}" ;;
+  esac
+  [ "$dest_logical" = "$previous_dest_logical" ] && break
+done
+DEST="$dest_logical"
+statusline_dir="${dest_logical%/*}"
+[ -n "$statusline_dir" ] || statusline_dir="/"
+statusline_path="$statusline_dir/statusline.py"
+
+resolve_before_create() {
+  local candidate="$1" probe part tail ancestor
+  case "/$candidate/" in
+    */../*)
+      echo "✗ refusing to install into $DEST — '..' components are not allowed" >&2
+      return 1
+      ;;
+  esac
+  case "$candidate" in
+    /*) ;;
+    *) candidate="$PWD/$candidate" ;;
+  esac
+  while [ "$candidate" != "/" ] && [ "${candidate%/}" != "$candidate" ]; do
+    candidate="${candidate%/}"
+  done
+  probe="$candidate"
+  tail=""
+  while [ ! -e "$probe" ] && [ ! -L "$probe" ]; do
+    part="${probe##*/}"
+    tail="/$part$tail"
+    probe="${probe%/*}"
+    [ -n "$probe" ] || probe="/"
+  done
+  if [ -L "$probe" ] && [ ! -e "$probe" ]; then
+    echo "✗ refusing to install into $DEST — path traverses a dangling symlink ($probe)" >&2
+    return 1
+  fi
+  ancestor="$(cd -P -- "$probe" && pwd -P)" || {
+    echo "✗ could not resolve destination $DEST (ancestor: $probe)" >&2
+    return 1
+  }
+  printf '%s\n' "$ancestor$tail" | awk -F/ '
+    {
+      count = 0
+      for (i = 1; i <= NF; i++) {
+        if ($i == "" || $i == ".") continue
+        if ($i == "..") { if (count > 0) count--; continue }
+        parts[++count] = $i
+      }
+      if (count == 0) { print "/"; next }
+      result = ""
+      for (i = 1; i <= count; i++) result = result "/" parts[i]
+      print result
+    }
+  '
+}
+
+repo_root="$(cd -- "$REPO" && pwd -P)"
+src_root="$(cd -- "$REPO/skills" && pwd -P)"
+dest_root="$(resolve_before_create "$DEST")" || exit 1
+[ -n "$dest_root" ] || { echo "✗ could not resolve destination $DEST"; exit 1; }
+dest_ancestor="$dest_root"
+while [ ! -e "$dest_ancestor" ] && [ ! -L "$dest_ancestor" ]; do
+  dest_ancestor="${dest_ancestor%/*}"
+  [ -n "$dest_ancestor" ] || dest_ancestor="/"
+done
+
+# Two layers are deliberate: -ef catches identity the string compare cannot: bind
+# mounts and case-insensitive equivalence (symlink aliases are resolved by pwd -P).
+# The string case remains a readable second check before any mkdir.
+identity_path="$dest_ancestor"
+identity_overlap=0
+while :; do
+  if [ "$identity_path" -ef "$src_root" ]; then
+    identity_overlap=1
+    break
+  fi
+  [ "$identity_path" = "/" ] && break
+  identity_path="${identity_path%/*}"
+  [ -n "$identity_path" ] || identity_path="/"
+done
+if [ "$dest_root" = "$dest_ancestor" ] && [ "$dest_ancestor" -ef "$repo_root" ]; then
+  identity_overlap=1
+fi
+if [ "$identity_overlap" -eq 1 ]; then
+  echo "✗ refusing to install into $DEST — it overlaps this repo's skills/ (source tree)"
+  exit 1
+fi
+
+case "$dest_root/" in
+  "$src_root/"*|"$repo_root/")
+    echo "✗ refusing to install into $DEST — it overlaps this repo's skills/ (source tree)"
+    exit 1
+    ;;
+esac
+mkdir -p -- "$dest_root"
+DEST="$dest_root"
+lock="$DEST/.cork-install.lock"
+lock_held=0
+trap '[ "$lock_held" = 1 ] && rmdir -- "$lock" 2>/dev/null' EXIT
+if mkdir -- "$lock" 2>/dev/null; then
+  lock_held=1
+elif [ -d "$lock" ]; then
+  echo "✗ another cork install is running (lock: $lock) — remove it if stale"
+  exit 1
+else
+  echo "✗ cannot create lock $lock (permissions?)"
+  exit 1
+fi
 
 echo "Installing cork skills v$VERSION → $DEST"
 echo
@@ -28,8 +149,59 @@ for s in "${SKILLS[@]}"; do
     rc=1
   fi
 
-  mkdir -p "$DEST/$s"
-  cp -r "$REPO/skills/$s/." "$DEST/$s/"
+  : "${s:?skill name must not be empty}"
+  rm -rf -- "$DEST/.$s.tmp."*
+  if [ -L "$DEST/$s" ] && [ ! -e "$DEST/$s" ]; then
+    echo "  ⚠ $s: $DEST/$s is a dangling symlink — removing it"
+    rm -f -- "$DEST/$s"
+  fi
+  if [ ! -e "$DEST/$s" ] && [ ! -L "$DEST/$s" ]; then
+    newest_prev=""
+    # Glob order is lexical, so equal mtimes keep the first recovery copy found.
+    for prev_candidate in "$DEST/.$s.prev."*; do
+      if [ -e "$prev_candidate" ] || [ -L "$prev_candidate" ]; then
+        if [ -z "$newest_prev" ] || [ "$prev_candidate" -nt "$newest_prev" ]; then
+          newest_prev="$prev_candidate"
+        fi
+      fi
+    done
+    if [ -n "$newest_prev" ]; then
+      mv -- "$newest_prev" "$DEST/$s"
+      echo "  ↩ $s: recovered previous copy from interrupted install"
+    fi
+  fi
+  tmp="$(mktemp -d -- "$DEST/.$s.tmp.XXXXXX")"
+  if ! cp -r -- "$REPO/skills/$s/." "$tmp/"; then
+    rm -rf -- "$tmp"
+    exit 1
+  fi
+  if [ -L "$DEST/$s" ]; then
+    echo "  ⚠ $s: $DEST/$s is a symlink — replacing it with a copy"
+  fi
+  # Accepted trade-off: the installed path is absent for the instant between these two
+  # moves. The lock only serializes writers; a racing reader may see the path missing,
+  # or an old or new complete copy — never a partial one. Atomic indirection was
+  # deliberately not used: it would break the copy model and Codex symlink setup.
+  prev="$DEST/.$s.prev.$$"
+  had_previous=0
+  if [ -e "$DEST/$s" ] || [ -L "$DEST/$s" ]; then
+    if ! mv -- "$DEST/$s" "$prev"; then
+      echo "  ✗ $s: could not preserve previous copy — install aborted" >&2
+      rm -rf -- "$tmp"
+      exit 1
+    fi
+    had_previous=1
+  fi
+  if ! mv -- "$tmp" "$DEST/$s"; then
+    echo "  ✗ $s: install swap failed — restoring previous copy" >&2
+    rm -rf -- "$tmp"
+    if [ "$had_previous" -eq 1 ] && ! mv -- "$prev" "$DEST/$s"; then
+      echo "  ✗ $s: rollback also failed; previous copy remains at $prev" >&2
+    fi
+    exit 1
+  fi
+  rm -rf -- "$prev"
+  rm -rf -- "$DEST/.$s.prev."*
   echo "  ✓ $s installed (stamp v${stamp:-?})"
 done
 
@@ -37,9 +209,13 @@ echo
 # Status line: deploy the cork status-line script (shows the active ticket/branch).
 # Activation is opt-in — add to ~/.claude/settings.json:
 #   "statusLine": { "type": "command", "command": "~/.claude/statusline.py" }
-cp "$REPO/statusline.py" "$DEST/../statusline.py"
-chmod +x "$DEST/../statusline.py"
-echo "  ✓ statusline.py installed to $(cd "$DEST/.." && pwd)/statusline.py"
+if [ -e "$statusline_path" ] && [ "$REPO/statusline.py" -ef "$statusline_path" ]; then
+  echo "  ↪ statusline.py already at $statusline_path — skipping copy"
+else
+  cp -- "$REPO/statusline.py" "$statusline_path"
+  chmod +x "$statusline_path"
+  echo "  ✓ statusline.py installed to $statusline_path"
+fi
 if ! grep -q '"statusLine"' "$HOME/.claude/settings.json" 2>/dev/null; then
   echo "    (not yet enabled — add a statusLine block to ~/.claude/settings.json; see README)"
 fi
