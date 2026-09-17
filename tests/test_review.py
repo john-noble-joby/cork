@@ -38,14 +38,17 @@ class ReviewDiffTest(unittest.TestCase):
     def test_cmd_review_rejects_unresolved_base_before_diff(self):
         base_check = Mock(returncode=1, stderr="")
         with (
-            patch.object(orchestrate, "load_agent_instructions", return_value=("", "")),
+            patch.object(orchestrate, "_probe", return_value="ok") as probe,
+            patch.object(
+                orchestrate, "load_agent_instructions", return_value=("", "")
+            ) as load_instructions,
             patch.object(orchestrate.subprocess, "run", return_value=base_check) as run,
             patch.object(orchestrate, "git_diff_branch") as diff,
             redirect_stderr(io.StringIO()),
         ):
             with self.assertRaises(SystemExit):
                 orchestrate.cmd_review(
-                    "TEST-1", "/repo", "missing-base", "copilot/model", validate=False
+                    "TEST-1", "/repo", "missing-base", "copilot/model", validate=True
                 )
 
         run.assert_called_once_with(
@@ -60,6 +63,8 @@ class ReviewDiffTest(unittest.TestCase):
             capture_output=True,
             text=True,
         )
+        probe.assert_not_called()
+        load_instructions.assert_not_called()
         diff.assert_not_called()
 
     def test_require_base_ref_rejects_missing_merge_base(self):
