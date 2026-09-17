@@ -39,6 +39,7 @@ import json
 import os
 import re
 import shlex
+import socket
 import subprocess
 import sys
 import tempfile
@@ -361,13 +362,19 @@ def _format_expiry(expires_at: float | None) -> str:
 
 
 def _copilot_auth_summary(source: str, expires_at: float | None, refreshable: bool) -> str:
-    path = _display_path(_auth_path(source))
-    expiry = _format_expiry(expires_at)
     if source == "none":
         return f"Copilot token: none — run `{_LOGIN_COMMAND}`"
+    path = _display_path(_auth_path(source))
+    expiry = _format_expiry(expires_at)
+    if expires_at is None:
+        expiry_detail = "no expiry"
+    elif expires_at < _now():
+        expiry_detail = f"expired {expiry}"
+    else:
+        expiry_detail = f"expires {expiry}"
     if source == "opencode":
         return (f"WARNING: Copilot token: opencode fallback ({path}), "
-                f"{'no expiry' if expires_at is None else f'expires {expiry}'}, not refreshable — "
+                f"{expiry_detail}, not refreshable — "
                 f"run `{_LOGIN_COMMAND}` to give cork its own token")
     if source == "env":
         return ("Copilot token: env override (CORK_COPILOT_TOKEN), no expiry, "
@@ -375,9 +382,9 @@ def _copilot_auth_summary(source: str, expires_at: float | None, refreshable: bo
     if not refreshable:
         label = "legacy-shape cork file" if source == "cork-legacy-shape" else "cork"
         return (f"WARNING: Copilot token: {label} ({path}), "
-                f"{'no expiry' if expires_at is None else f'expires {expiry}'}, refreshable no — "
+                f"{expiry_detail}, refreshable no — "
                 f"delete/re-login with `{_LOGIN_COMMAND}`")
-    return f"Copilot token: cork ({path}), expires {expiry}, refreshable yes"
+    return f"Copilot token: cork ({path}), {expiry_detail}, refreshable yes"
 
 
 def _copilot_auth_failure(source: str, refreshable: bool) -> str:
@@ -906,8 +913,10 @@ def _probe(provider: str, model: str) -> str:
     # quota (the classification only needs the HTTP status, not the content).
     try:
         status, text = _call_and_extract(provider, model, "", "ok", max_out=16)
-    except (TimeoutError, urllib.error.URLError):
+    except (TimeoutError, socket.timeout):
         return "timeout"
+    except urllib.error.URLError:
+        return "connection"
     return _classify_preflight(status, text)
 
 
@@ -947,12 +956,12 @@ def preflight(rotation: list[dict], count: int) -> list[dict]:
         if provider == "copilot":
             assert copilot_auth is not None
             if copilot_auth[0] is None:
-                print(f"  ✗ {provider}/{model} skipped (no copilot token)")
+                print(f"  ✗ {provider}/{model} skipped (no copilot token)", flush=True)
                 continue
         verdict = _probe(provider, model)
         if verdict == "ok":
             selected.append({"provider": provider, "model": model})
-            print(f"  ✓ {provider}/{model}")
+            print(f"  ✓ {provider}/{model}", flush=True)
         elif verdict == "auth":
             if provider == "copilot":
                 assert copilot_auth is not None
@@ -961,7 +970,8 @@ def preflight(rotation: list[dict], count: int) -> list[dict]:
             fail(f"{provider}: auth failed (401/403) — token invalid/expired. "
                  f"Fix the {provider} token and retry.")
         else:
-            print(f"  ✗ {provider}/{model} dropped ({verdict})")
+            detail = "connection error" if verdict == "connection" else verdict
+            print(f"  ✗ {provider}/{model} dropped ({detail})", flush=True)
     if not selected:
         fail("No usable models on this seat — check your config rotation / tokens.")
     if len(selected) < count:
@@ -1395,6 +1405,8 @@ def cmd_auth_status(as_json: bool = False) -> None:
         fail(f"Copilot auth probe failed: copilot/{model} is unavailable to this integrator.")
     if verdict == "timeout":
         fail(f"Copilot auth probe timed out for copilot/{model}; retry later.")
+    if verdict == "connection":
+        fail(f"Copilot auth probe could not connect for copilot/{model}; retry later.")
     if verdict != "ok":
         fail(f"Copilot auth probe failed ({verdict}) for copilot/{model}; retry later.")
 

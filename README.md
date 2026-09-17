@@ -215,9 +215,11 @@ refreshes it in place; native-provider keys live alongside and are preserved acr
 Run `python3 orchestrate.py auth status` to see which source actually won, whether it can
 refresh, its expiry, and a one-request probe result. Add `--json` for scripting; its `probe`
 field is `{"status": "ok|fail", "reason": "<verdict>"}` so callers can distinguish auth
-failures from model, integrator, and timeout failures. A token-only cork file and the read-only
-opencode fallback are not refreshable; run `python3 "$CORK_HOME/orchestrate.py" login` to
-replace either with cork's own credential.
+failures from model, integrator, timeout, and connection failures. The reason is `missing` or
+`expired` when no probe can run, otherwise it is the probe verdict (`ok`, `auth`,
+`model_not_supported`, `integrator_mismatch`, `timeout`, `connection`, or `other`). A
+token-only cork file and the read-only opencode fallback are not refreshable; run
+`python3 "$CORK_HOME/orchestrate.py" login` to replace either with cork's own credential.
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
