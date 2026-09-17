@@ -16,7 +16,7 @@ cork uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) —
 
 The **single source of truth is the `VERSION` file**. Every skill's
 `**Version:**` stamp and `orchestrate.py --version` must match it — `install.sh`
-warns on drift. Bump `VERSION` and all four skill stamps together in the same
+warns on drift. Bump `VERSION` and every skill stamp together in the same
 change, and add a section here.
 
 ## [Unreleased]
@@ -39,9 +39,11 @@ change, and add a section here.
   endorses the pattern overrides the smell.
 
 ### Changed
-- Review protocol: pin the base first (`git diff <base>...HEAD`, verify the ref resolves and
+- Skill review protocol: pin the base first (`git diff <base>...HEAD`, verify the ref resolves and
   the diff is non-empty before fanning out); skip anything tooling already enforces; report
   format gains `## Spec conformance`; verdict names the worst item per axis.
+- cork review-only consolidated report gains a `## Spec conformance` section; the injected
+  rubric's output format gains `## Promotion candidates` (the fixer prompt already expected it).
 
 ## [0.8.3] — 2026-08-03
 

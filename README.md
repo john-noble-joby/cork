@@ -7,7 +7,8 @@ the active Claude session implements, then several independent models review the
 diff — each seeing only the current code, never prior reviewers' notes — so every
 model hunts for issues with fresh eyes.
 
-It ships three skills:
+It ships three user-facing skills (plus `cork-setup` and the auto-loaded
+`coding-standards` rubric):
 
 | Skill | Say | What it does |
 |-------|-----|--------------|
@@ -120,9 +121,10 @@ opted out (see below).
 
 ### Coding & review standards (layering)
 
-cork's fuller **coding & review rubric** lives at `skills/coding-standards/` and is installed
-by `install.sh`. `standards/AGENTS.md` is the condensed copy injected into blind reviewer
-models; the two are kept in step. Other harnesses share the installed skill:
+cork's fuller **coding & review rubric** lives at `skills/coding-standards/` and is
+installed by `install.sh`. `standards/AGENTS.md` is the condensed copy injected into blind
+reviewer models and followed by devit's implementer; the two are kept in step. Other
+harnesses share the installed skill:
 
 - **Codex:** symlink `~/.codex/skills/coding-standards` to
   `~/.claude/skills/coding-standards`.
