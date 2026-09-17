@@ -56,7 +56,8 @@ out good patterns by name — affirmation matters.
   paths, including errors. Pair acquisition with scoped disposal.
 - **Error handling:** swallowed/empty catches; catching everything without a filter
   (hides cancellation); rethrowing in a way that loses the stack/cause; generic error types
-  for domain failures.
+  for domain failures; exceptions as flow control — reserve try/catch for external-library
+  boundaries, use result types for expected failures where that's the convention.
 - **Error attribution:** errors carry a precise, structured location (line/column,
   JSON-pointer or path), not just a message.
 - **Boundary parsing:** prefer non-throwing Try-style parse APIs at input boundaries; a
@@ -116,7 +117,9 @@ Each recurs across real review history; when a diff fixes one instance, verify t
 ## Tests
 - Happy path: assert the actual produced values, not just "not null".
 - Error paths: a test for every stable failure mode (missing / blank / out-of-range /
-  invalid). A "should fail with X" fixture must trigger exactly *one* failure.
+  invalid). A "should fail with X" fixture must trigger exactly *one* failure. When mutating
+  a fixture to induce a failure, target the minimal unique surrounding context — a broad
+  replace that matches two places makes the test pass for the wrong reason.
 - Don't couple tests to implementation details (exact messages, private state).
 - Helpers (equality, parsing) get their own edge-case tests.
 - Every new conditional has a mutation test: delete or invert the clause and some test must

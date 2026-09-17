@@ -3,12 +3,20 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr
+from pathlib import Path
 from unittest.mock import Mock, call, patch
 
 import orchestrate
 
 
 class ReviewDiffTest(unittest.TestCase):
+    def _minimal_config(self):
+        return {
+            "count": 1,
+            "providers": {"copilot": {"enabled": True}},
+            "rotation": [{"provider": "copilot", "model": "model"}],
+        }
+
     def test_git_diff_branch_uses_merge_base(self):
         with patch.object(orchestrate.subprocess, "check_output", return_value="diff") as check:
             self.assertEqual(orchestrate.git_diff_branch("/repo", "origin/main"), "diff")
@@ -28,7 +36,7 @@ class ReviewDiffTest(unittest.TestCase):
         )
 
     def test_cmd_review_rejects_unresolved_base_before_diff(self):
-        base_check = Mock(returncode=1)
+        base_check = Mock(returncode=1, stderr="")
         with (
             patch.object(orchestrate, "load_agent_instructions", return_value=("", "")),
             patch.object(orchestrate.subprocess, "run", return_value=base_check) as run,
@@ -41,7 +49,13 @@ class ReviewDiffTest(unittest.TestCase):
                 )
 
         run.assert_called_once_with(
-            ["git", "rev-parse", "--verify", "--quiet", "missing-base"],
+            [
+                "git",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "missing-base^{commit}",
+            ],
             cwd="/repo",
             capture_output=True,
             text=True,
@@ -49,10 +63,14 @@ class ReviewDiffTest(unittest.TestCase):
         diff.assert_not_called()
 
     def test_require_base_ref_rejects_missing_merge_base(self):
-        checks = [Mock(returncode=0), Mock(returncode=1)]
+        checks = [
+            Mock(returncode=0, stderr=""),
+            Mock(returncode=1, stderr="fatal: refusing unrelated histories\n"),
+        ]
+        error = io.StringIO()
         with (
             patch.object(orchestrate.subprocess, "run", side_effect=checks) as run,
-            redirect_stderr(io.StringIO()),
+            redirect_stderr(error),
         ):
             with self.assertRaises(SystemExit):
                 orchestrate.require_base_ref("/repo", "origin/main")
@@ -61,7 +79,13 @@ class ReviewDiffTest(unittest.TestCase):
             run.call_args_list,
             [
                 call(
-                    ["git", "rev-parse", "--verify", "--quiet", "origin/main"],
+                    [
+                        "git",
+                        "rev-parse",
+                        "--verify",
+                        "--quiet",
+                        "origin/main^{commit}",
+                    ],
                     cwd="/repo",
                     capture_output=True,
                     text=True,
@@ -74,29 +98,85 @@ class ReviewDiffTest(unittest.TestCase):
                 ),
             ],
         )
+        self.assertIn("fatal: refusing unrelated histories", error.getvalue())
+
+    def test_require_base_ref_omits_empty_merge_base_reason(self):
+        checks = [
+            Mock(returncode=0, stderr=""),
+            Mock(returncode=1, stderr=""),
+        ]
+        error = io.StringIO()
+        with (
+            patch.object(orchestrate.subprocess, "run", side_effect=checks),
+            redirect_stderr(error),
+        ):
+            with self.assertRaises(SystemExit):
+                orchestrate.require_base_ref("/repo", "origin/main")
+
+        self.assertIn("No merge base between 'origin/main' and HEAD\n", error.getvalue())
+        self.assertNotIn("HEAD:", error.getvalue())
 
     def test_main_requires_base_before_step_one(self):
-        with tempfile.TemporaryDirectory() as repo:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
             argv = [
                 "orchestrate.py",
                 "TEST-1",
-                repo,
+                str(repo),
                 "--base-branch",
                 "origin/main",
+                "--reset",
                 "--skip-validation",
             ]
             with (
                 patch.object(sys, "argv", argv),
+                patch.object(orchestrate, "STATE_DIR", Path(tmp) / "state"),
+                patch.object(
+                    orchestrate, "load_config", return_value=self._minimal_config()
+                ),
                 patch.object(
                     orchestrate, "require_base_ref", side_effect=SystemExit(1)
                 ) as require,
+                patch.object(orchestrate, "clear_state") as clear_state,
                 patch.object(orchestrate, "run_claude") as run_claude,
             ):
                 with self.assertRaises(SystemExit):
                     orchestrate.main()
 
-        require.assert_called_once_with(repo, "origin/main")
+        require.assert_called_once_with(str(repo.resolve()), "origin/main")
+        clear_state.assert_not_called()
         run_claude.assert_not_called()
+
+    def test_main_requires_base_before_seed_only_git_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            argv = [
+                "orchestrate.py",
+                "TEST-1",
+                str(repo),
+                "--base-branch",
+                "origin/main",
+                "--seed-only",
+                "--skip-validation",
+            ]
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(orchestrate, "STATE_DIR", Path(tmp) / "state"),
+                patch.object(
+                    orchestrate, "load_config", return_value=self._minimal_config()
+                ),
+                patch.object(
+                    orchestrate, "require_base_ref", side_effect=SystemExit(1)
+                ) as require,
+                patch.object(orchestrate.subprocess, "check_output") as git_log,
+            ):
+                with self.assertRaises(SystemExit):
+                    orchestrate.main()
+
+        require.assert_called_once_with(str(repo.resolve()), "origin/main")
+        git_log.assert_not_called()
 
     def test_review_prompts_use_merge_base_and_fix_spec_findings(self):
         review_prompt = orchestrate.prompt_claude_review(

@@ -639,7 +639,7 @@ def run_claude(prompt: str, cwd: str) -> str:
 
 def require_base_ref(repo: str, base: str) -> None:
     base_check = subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", base],
+        ["git", "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"],
         cwd=repo, capture_output=True, text=True,
     )
     if base_check.returncode != 0:
@@ -649,7 +649,9 @@ def require_base_ref(repo: str, base: str) -> None:
         cwd=repo, capture_output=True, text=True,
     )
     if merge_base_check.returncode != 0:
-        fail(f"No merge base between {base!r} and HEAD")
+        reason = merge_base_check.stderr.strip()
+        suffix = f": {reason}" if reason else ""
+        fail(f"No merge base between {base!r} and HEAD{suffix}")
 
 
 def git_diff_branch(cwd: str, base: str) -> str:
