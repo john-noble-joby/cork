@@ -190,24 +190,32 @@ Invocations (flags verified against `claude --help` 2.1.x and `codex exec --help
 ```bash
 claude -p --no-session-persistence --output-format text --model <m> --system-prompt <standards> \
        --safe-mode --restricted --tools Read,Grep,Glob --permission-mode plan          # prompt on stdin
-codex exec -m <m> -s read-only --ephemeral --skip-git-repo-check -C <repo> --color never -   # prompt on stdin
+codex exec -m <m> --ephemeral --skip-git-repo-check -C <repo> --color never - -s read-only \
+       --ignore-user-config --disable shell_tool --disable unified_exec \
+       --disable code_mode_host --disable apps                                          # prompt on stdin
 ```
 
 **Read-only guarantees and their limits.** `claude` runs with `--safe-mode` (no CLAUDE.md,
 hooks, MCP or plugins — auth is kept, unlike `--bare`, which refuses OAuth logins) and
 `--restricted` (no code-running tools; file tools confined to the repo), with only
-`Read,Grep,Glob` under `--permission-mode plan`. `codex` runs under its `read-only` sandbox
-with no session persisted. Neither can modify the repo (the manual check in the 0.11.0 PR
-shows `git status --porcelain` identical before and after). Limits: codex's sandbox still
-lets it *read* anywhere the user can, so in review-only fan-out it could in principle read
-another reviewer's `/tmp/cork-review-*` output (claude's `--restricted` closes this for the
-claude lane). Codex has no system-prompt flag, so the standards are prepended to the prompt
+`Read,Grep,Glob` under `--permission-mode plan`: it can read the repo but cannot run
+commands or reach outside it. `codex` runs under its `read-only` sandbox with no session
+persisted — but that sandbox only blocks writes; codex's shell would still run read-only
+commands and read anywhere the user can. So cork also passes `--disable shell_tool
+--disable unified_exec --disable code_mode_host --disable apps` and `--ignore-user-config`
+(features listed by `codex features list`, flags by `codex exec --help`): the codex
+reviewer then has **no command execution, no file access and none of your MCP servers**
+and reviews from the prompt alone, like an API model (verified with a tool-inventory probe
+on codex-cli 0.146.0; it still has web search, image tools and sub-agent tools). Neither
+lane can modify the repo (the manual check in the 0.11.0 PR shows `git status --porcelain`
+identical before and after). Codex has no system-prompt flag, so the standards are prepended to the prompt
 body under a `=== END OF REVIEW STANDARDS ===` separator. Claude's standards travel as one
 `--system-prompt` argument, so a standards layer over ~128 KiB hits the Linux per-argument
 limit and the lane is skipped with `Argument list too long`. **Trust boundary:** the
 reviewer follows instructions from the branch under review (`code-review/AGENTS.md`, file
 contents) with your local login, so a hostile branch could steer it into reading and quoting
-files it can reach (`--restricted` limits claude to the repo; codex's sandbox does not).
+files it can reach (`--restricted` limits claude to the repo; codex has no file access,
+but does have web search).
 Run harness lanes only on branches you would run the repo's own hooks or tests from — the
 same trust you already extend to the implementer step. A timeout kills the CLI process
 itself; tool subprocesses it spawned are not tracked.

@@ -79,9 +79,9 @@ PROVIDER_BASE = {
 # Adding a lane is a data-only change: `argv` is the harness's own flag set
 # ({model}/{repo} substituted), `read_only` is the subset that enforces
 # no-write/no-shell, `system_flag` is how the standards travel (None = prepend
-# to the prompt body), `prompt_via` is "stdin" or "arg". Never include a shell
-# tool: a reviewer with Bash could read the other reviewers' /tmp/cork-review-*
-# files and break blindness.
+# to the prompt body), `prompt_via` is "stdin" or "arg". Never leave a shell
+# tool enabled: a reviewer with a shell could read the other reviewers'
+# /tmp/cork-review-* files and break blindness.
 HARNESSES: dict[str, dict] = {
     "claude": {  # claude 2.1.x — verified against `claude --help`
         "bin": "claude", "bin_env": "CORK_CLAUDE_BIN",
@@ -97,7 +97,13 @@ HARNESSES: dict[str, dict] = {
         "bin": "codex", "bin_env": "CORK_CODEX_BIN",
         "argv": ["exec", "-m", "{model}", "--ephemeral", "--skip-git-repo-check",
                  "-C", "{repo}", "--color", "never", "-"],
-        "read_only": ["-s", "read-only"],
+        # -s read-only blocks writes but leaves codex's shell, which can still run
+        # commands and read outside the repo — so also drop every exec tool
+        # (features verified via `codex features list`) and the user's MCP servers.
+        # Codex then reviews from the prompt alone, exactly like an API model.
+        "read_only": ["-s", "read-only", "--ignore-user-config",
+                      "--disable", "shell_tool", "--disable", "unified_exec",
+                      "--disable", "code_mode_host", "--disable", "apps"],
         "system_flag": None, "prompt_via": "stdin", "timeout": 900,
     },
 }
@@ -504,8 +510,16 @@ def _validate_config(cfg: dict) -> None:
         if key in seen:
             fail(f"duplicate rotation entry: {key}")
         seen.add(key)
+    providers = cfg.get("providers", {})
+    if not isinstance(providers, dict):
+        fail("config.providers must be an object mapping provider name -> settings")
+    for name, pc in providers.items():
+        if not isinstance(pc, dict):
+            fail(f"config.providers.{name} must be an object")
+        if "enabled" in pc and not isinstance(pc["enabled"], bool):
+            fail(f"config.providers.{name}.enabled must be true or false (a JSON boolean)")
     for name in HARNESSES:
-        _validate_harness_cfg(name, cfg.get("providers", {}).get(name, {}))
+        _validate_harness_cfg(name, providers.get(name, {}))
     count = cfg.get("count", 3)
     if not isinstance(count, int) or count < 1:
         fail("config.count must be a positive integer")
@@ -928,7 +942,7 @@ def _eligible_rotation(cfg: dict) -> list[dict]:
         # API providers default on (back-compat); harness lanes default OFF so a
         # rotation entry alone never runs a local CLI without explicit opt-in.
         enabled  = providers_cfg.get(provider, {}).get("enabled", provider not in HARNESSES)
-        if not enabled:
+        if enabled is not True:  # validated as a JSON boolean; never truthiness
             print(f"  ✗ {provider}/{model} skipped (provider disabled)", flush=True)
             continue
         if not _provider_token_available(provider):
