@@ -7,7 +7,7 @@ description: Use when the user says "cork" / "run cork" on a branch (full mode �
 
 "Cork" = **C**ode **Or**chestrator **R**eview **K**ickoff.
 
-**Version:** 0.13.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
+**Version:** 0.14.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
 
 **The active Claude session is the coding agent.** Unlike the legacy headless mode (where `orchestrate.py` spawned `claude --print` subprocesses), here *you* — the session with full codebase + conversation context — do the implementing and fixing. The orchestrator script is used only as a stateless review tool: `--review-model MODEL` returns one outside model's findings on the current branch diff.
 
@@ -32,7 +32,7 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 
 - Fix steps run with full context (worktree state, prior decisions, the whole conversation) — a cold `claude --print` had none of that.
 - The user sees the work happen live and can interject.
-- Blind-review property is preserved: each `--review-model` call is stateless — the reviewer sees only the diff + changed files + AGENTS.md, never prior review text.
+- Blind-review property is preserved: each `--review-model` call is stateless — the reviewer sees only the story + diff + changed files + AGENTS.md, never prior review text.
 
 ## When invoked, do this
 
@@ -141,7 +141,7 @@ done
 wait
 ```
 
-Each `--review-model` call is stateless and read-only — it only prints findings. Pass `--skip-validation` here: every reviewer otherwise fires a per-model validation call (one premium request each), so skipping it across the parallel fan-out saves ~one request per model. The positional ticket arg isn't used by review output, so any placeholder is fine when there's no ticket. `gpt-5.5`/`gpt-5.x` models are auto-routed to Copilot's `/responses` endpoint. If a model errors, drop it and keep the rest (see *Model availability* under full mode).
+Each `--review-model` call is stateless and read-only — it receives only the story + diff + changed files + AGENTS.md and prints findings. Pass `--skip-validation` here: every reviewer otherwise fires a per-model validation call (one premium request each), so skipping it across the parallel fan-out saves ~one request per model. The positional ticket arg isn't used by review output, so any placeholder is fine when there's no ticket. `gpt-5.5`/`gpt-5.x` models are auto-routed to Copilot's `/responses` endpoint. If a model errors, drop it and keep the rest (see *Model availability* under full mode).
 
 ### R2 — Consolidate into one report
 

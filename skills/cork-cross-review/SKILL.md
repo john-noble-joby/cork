@@ -5,7 +5,7 @@ description: Use when the user says "cross review PR <n>", "cork cross-review", 
 
 # cork-cross-review — independent, cross-vendor PR verification
 
-**Version:** 0.13.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.14.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 **You are the tech lead, not the reviewer.** The author never signs off on their own work, and
 neither do you — a *different vendor's* model does. Your job is to gather the diff and its
@@ -137,38 +137,26 @@ outside the diff" — that is exactly what the scratch tree is for. Prefer API l
 
 ```bash
 BASE=$(jq -r .baseRefName "$OUT/pr.json")
+{ echo "## Acceptance contract"; cat "$OUT/contract.md"; echo; echo "## In-scope paths"; echo "<pathspec or 'whole diff'>";
+  echo; echo "## Rule"; echo "<the verbatim rule below>"; } > "$OUT/story.md"
 for LANE in $LANES; do
   safe="${LANE//\//-}"
   python3 "$CORK_HOME/orchestrate.py" "PR$N" "/tmp/cork-pr$N/wt" \
-      --review-model "$LANE" --base-branch "origin/$BASE" --skip-validation \
+      --review-model "$LANE" --story-file "$OUT/story.md" \
+      --base-branch "origin/$BASE" --skip-validation \
       > "$OUT/review-$safe.txt" 2> "$OUT/review-$safe.err" &
 done
 wait
 ```
 
-**How the contract reaches a lane (0.13.0).** `--review-model` has no `--story` flag: the
-review-only path reads its story from cork's checkpoint file
-`~/.local/share/code-orchestrator/<ticket>.json` (`done.summary`), and with no checkpoint every
-lane receives only "Review the branch changes for <ticket>." — the contract never arrives. So
-**before the fan-out**, write the story and seed the checkpoint for the ticket id you pass as the
-first positional (`PR$N` below; pick another id if a real `PR$N` checkpoint already exists):
-
-```bash
-{ echo "## Acceptance contract"; cat "$OUT/contract.md"; echo; echo "## In-scope paths"; echo "<pathspec or 'whole diff'>";
-  echo; echo "## Rule"; echo "<the verbatim rule below>"; } > "$OUT/story.md"
-mkdir -p ~/.local/share/code-orchestrator
-jq -n --rawfile s "$OUT/story.md" --arg tid "PR$N" \
-  '{version:2, ticket_id:$tid, done:{implement:true, summary:$s}}' \
-  > ~/.local/share/code-orchestrator/"PR$N".json
-```
-
-A `--story-file` flag that removes this pre-seed is a registered follow-on; until it lands, the
-checkpoint is the only channel. `--review-model` also has no pathspec/slice option, so every call
-receives the full branch diff: for a sliced review, re-seed the checkpoint once per slice with that
-slice's contract excerpt and in-scope paths, then run the lane loop. Harness lanes run with the
+**How the contract reaches a lane (0.14.0).** The review-only path reads `$OUT/story.md` through
+`--story-file`, so API and harness lanes receive the same acceptance contract without changing a
+checkpoint. `--review-model` has no pathspec/slice option, so every call receives the full branch
+diff: for a sliced review, write a story file per slice with that slice's contract excerpt and
+in-scope paths, then pass it with `--story-file` in that slice's lane loop. Harness lanes run with the
 scratch worktree as their working directory — `orchestrate.py` passes it as `cwd` and applies the
 read-only flags; you do not need to add prompt text for that. The story text for every lane
-carries this rule, verbatim:
+carries this rule, verbatim. Keep `story.md` to a few KB; put long material in the diff, not the story.
 
 > The DIFF is the object of review; the checkout is read-only CONTEXT. Verify your claims
 > against it — callers, merge-base behaviour via `git show <merge_base>:<path>`, pinned
@@ -244,9 +232,8 @@ missed, run another lane on it.
 - **You are the author's session** (the PR is yours): apply the fixes yourself, run the gates,
   commit, push (never force-push), then loop to Step 1 with `gh pr diff` again — and re-review
   **only the delta** (`git diff <old-head>..<new-head>`) with the *same* lanes, asking each to
-  confirm its own blockers are closed and to look for regressions in the delta — re-seed the
-  checkpoint first with the previous blockers and the delta range, or the ask never reaches the
-  lane. Move the scratch
+  confirm its own blockers are closed and to look for regressions in the delta — write a new story
+  file with the previous blockers + delta range and pass it with `--story-file`. Move the scratch
   tree to the new head (`git -C … checkout --detach <new-head>`).
 - **Someone else's PR**: post `$OUT/consolidated.md` as a PR comment (`gh pr comment $N
   --body-file …`) or hand it to the author as they prefer. Never push to their branch.

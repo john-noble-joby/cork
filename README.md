@@ -142,6 +142,28 @@ Two ways to run it:
   [--base-branch <branch>]` runs the whole loop in subprocesses, checkpointing after each
   step (resume by re-running; `--reset` to start over).
 
+Review-only usage accepts the contract directly for both API and harness lanes:
+
+```bash
+python3 orchestrate.py <TICKET> <repo-path> --review-model <provider/model> \
+  [--story-file <path> | --story <text>] [--base-branch <branch>] [--skip-validation]
+```
+
+Story precedence is `--story-file` → `--story` → checkpoint `done.summary` → checkpoint
+`summary` → the built-in fallback. The selected source and character count are printed before
+the review starts; explicit stories are not written to the checkpoint.
+
+| Flag | Review-only behavior |
+|------|----------------------|
+| `--review-model MODEL` | Run one API or harness reviewer and print its findings. |
+| `--story-file PATH` | Read the story/acceptance contract from a UTF-8 file. |
+| `--story TEXT` | Supply the story inline; use `--story=TEXT` if it starts with `-`. |
+| `--base-branch BRANCH` | Select the branch used for the review diff. |
+| `--skip-validation` | Skip the model availability probe. |
+
+Keep stories to a few KB: large stories crowd changed-file contents out of API lane budgets, while
+`pi` and `opencode` pass prompts through argv and can skip the lane at the OS argument-size limit.
+
 ### Model selection (`preflight` + `config.json`)
 
 Cork picks reviewers at runtime. The ranked candidate list and desired count live in
