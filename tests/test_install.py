@@ -36,6 +36,23 @@ class InstallSafetyTest(unittest.TestCase):
         )
         return repo, skills
 
+    def _install_fixture(self, root: Path) -> Path:
+        repo, skills = self._guard_fixture(root)
+        for skill in SKILLS:
+            shutil.copytree(ROOT / "skills" / skill, skills / skill)
+        shutil.copy(ROOT / "statusline.py", repo / "statusline.py")
+        shutil.copy(ROOT / "orchestrate.py", repo / "orchestrate.py")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(
+            [
+                "git", "-c", "user.name=Test", "-c", "user.email=test@example.com",
+                "commit", "-qm", "complete install fixture",
+            ],
+            cwd=repo,
+            check=True,
+        )
+        return repo
+
     def _run(
         self, repo: Path, destination: Path | str, **env_overrides: str
     ) -> subprocess.CompletedProcess[str]:
@@ -135,13 +152,15 @@ class InstallSafetyTest(unittest.TestCase):
                     self._assert_clean_fixture(repo)
 
     def test_identity_guard_refuses_alias_when_string_guard_is_removed(self):
-        # Kills deletion of the -ef identity layer: this fixture removes the
-        # string guard, leaving filesystem identity as the only refusal path.
+        # Kills deletion of either -ef check: this fixture removes the string
+        # guard, leaving filesystem identity as the only refusal path.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo, skills = self._guard_fixture(root)
-            link = root / "skills-alias"
-            link.symlink_to(skills, target_is_directory=True)
+            skills_alias = root / "skills-alias"
+            skills_alias.symlink_to(skills, target_is_directory=True)
+            repo_alias = root / "repo-alias"
+            repo_alias.symlink_to(repo, target_is_directory=True)
             script = repo / "install.sh"
             contents = script.read_text()
             string_guard = '''case "$dest_root/" in
@@ -164,11 +183,13 @@ esac
                 check=True,
             )
 
-            result = self._run(repo, link)
+            for alias in (skills_alias, repo_alias):
+                with self.subTest(alias=alias):
+                    result = self._run(repo, alias)
 
-            self.assertEqual(result.returncode, 1)
-            self.assertIn("overlaps this repo's skills/", result.stdout)
-            self._assert_clean_fixture(repo)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("overlaps this repo's skills/", result.stdout)
+                    self._assert_clean_fixture(repo)
 
     def test_repo_root_with_or_without_trailing_slashes_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -290,6 +311,42 @@ esac
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertTrue((logical_parent / "statusline.py").is_file())
             self.assertFalse((physical_parent / "statusline.py").exists())
+
+    def test_trailing_dot_destination_keeps_statusline_outside_skills(self):
+        for ending in (".", "./"):
+            with self.subTest(ending=ending), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                claude_dir = root / ".claude"
+                skills = claude_dir / "skills"
+                destination = f"{skills}/{ending}"
+
+                result = self._run(
+                    ROOT,
+                    destination,
+                    HOME=str(root / "home"),
+                    CORK_HOME=str(ROOT),
+                )
+
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue((claude_dir / "statusline.py").is_file())
+                self.assertFalse((skills / "statusline.py").exists())
+
+    def test_statusline_copy_is_skipped_when_source_and_destination_are_same_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._install_fixture(Path(tmp))
+            destination = repo / "build-skills"
+            statusline = repo / "statusline.py"
+            before_mtime = statusline.stat().st_mtime_ns
+
+            result = self._run(repo, destination)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(
+                result.stdout.count(f"installed (stamp v{VERSION})"), len(SKILLS)
+            )
+            self.assertIn("statusline.py already at", result.stdout)
+            self.assertEqual(statusline.stat().st_mtime_ns, before_mtime)
+            self._assert_no_install_artifacts(destination)
 
     def test_dangling_skill_symlink_yields_to_orphan_recovery(self):
         with tempfile.TemporaryDirectory() as tmp:

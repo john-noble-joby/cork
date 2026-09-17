@@ -18,9 +18,17 @@ case "$dest_logical" in
   /*) ;;
   *) dest_logical="$PWD/$dest_logical" ;;
 esac
-while [ "$dest_logical" != "/" ] && [ "${dest_logical%/}" != "$dest_logical" ]; do
-  dest_logical="${dest_logical%/}"
+while :; do
+  previous_dest_logical="$dest_logical"
+  dest_logical="${dest_logical//\/\//\/}"
+  case "$dest_logical" in
+    /|/.) dest_logical="/" ;;
+    */.) dest_logical="${dest_logical%/.}" ;;
+    */) dest_logical="${dest_logical%/}" ;;
+  esac
+  [ "$dest_logical" = "$previous_dest_logical" ] && break
 done
+DEST="$dest_logical"
 statusline_dir="${dest_logical%/*}"
 [ -n "$statusline_dir" ] || statusline_dir="/"
 statusline_path="$statusline_dir/statusline.py"
@@ -82,8 +90,9 @@ while [ ! -e "$dest_ancestor" ] && [ ! -L "$dest_ancestor" ]; do
   [ -n "$dest_ancestor" ] || dest_ancestor="/"
 done
 
-# Two layers are deliberate: -ef catches filesystem aliases and case-insensitive
-# equivalence; the string case remains a readable second check before any mkdir.
+# Two layers are deliberate: -ef catches identity the string compare cannot: bind
+# mounts and case-insensitive equivalence (symlink aliases are resolved by pwd -P).
+# The string case remains a readable second check before any mkdir.
 identity_path="$dest_ancestor"
 identity_overlap=0
 while :; do
@@ -172,7 +181,7 @@ for s in "${SKILLS[@]}"; do
   # Accepted trade-off: the installed path is absent for the instant between these two
   # moves. The lock only serializes writers; a racing reader may see the path missing,
   # or an old or new complete copy — never a partial one. Atomic indirection was
-  # deliberately not used (see CHANGELOG).
+  # deliberately not used: it would break the copy model and Codex symlink setup.
   prev="$DEST/.$s.prev.$$"
   had_previous=0
   if [ -e "$DEST/$s" ] || [ -L "$DEST/$s" ]; then
@@ -200,9 +209,13 @@ echo
 # Status line: deploy the cork status-line script (shows the active ticket/branch).
 # Activation is opt-in — add to ~/.claude/settings.json:
 #   "statusLine": { "type": "command", "command": "~/.claude/statusline.py" }
-cp -- "$REPO/statusline.py" "$statusline_path"
-chmod +x "$statusline_path"
-echo "  ✓ statusline.py installed to $statusline_path"
+if [ -e "$statusline_path" ] && [ "$REPO/statusline.py" -ef "$statusline_path" ]; then
+  echo "  ↪ statusline.py already at $statusline_path — skipping copy"
+else
+  cp -- "$REPO/statusline.py" "$statusline_path"
+  chmod +x "$statusline_path"
+  echo "  ✓ statusline.py installed to $statusline_path"
+fi
 if ! grep -q '"statusLine"' "$HOME/.claude/settings.json" 2>/dev/null; then
   echo "    (not yet enabled — add a statusLine block to ~/.claude/settings.json; see README)"
 fi

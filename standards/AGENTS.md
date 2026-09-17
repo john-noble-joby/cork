@@ -116,7 +116,9 @@ Each recurs across real review history; when a diff fixes one instance, verify t
 - **Collision handling on keyed registries and derived labels** — define collision semantics (no silent first/last-wins); check derived labels on every surface that renders them.
 - **Presentation-surface inventory** — when output changes, list every surface that shows it (live view, badges, history, exports, print) and confirm each is updated or explicitly waived; silence is a miss.
 - **Cross-system identifier mappings verified at the source** — IDs mapped across systems are verified against the authoritative upstream and cited at the mapping site; mismatches are silent.
-- **Domain-model boundary hygiene** — types carry real invariants; parser/DTO/transport types stay out of the domain and off public service APIs.
+- **Domain-model suitability and boundary hygiene** — closed hierarchies are well-bounded;
+  wrappers carry real invariants; enums do not prematurely close string-valued concepts;
+  parser/DTO/transport types stay out of the domain and off public service APIs.
 
 ## Tests
 - Happy path: assert the actual produced values, not just "not null".
