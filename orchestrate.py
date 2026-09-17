@@ -1503,7 +1503,8 @@ def cmd_login() -> None:
     fail("Device authorization timed out — re-run `orchestrate.py login`.")
 
 
-def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True) -> None:
+def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True,
+               story_file: str | None = None, story_text: str | None = None) -> None:
     provider, model = _split_model_ref(model_ref)
     if validate:
         verdict = _probe(provider, model)
@@ -1516,9 +1517,28 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     if not diff.strip():
         fail(f"No diff vs {base} — nothing to review.")
     files = changed_files_branch(repo, base)
-    _st = load_state(tid)
-    story = (_st.get("done", {}).get("summary") or _st.get("summary")
-             or f"Review the branch changes for {tid}.")
+    if story_file is not None:
+        story_path = Path(story_file).expanduser()
+        try:
+            story = story_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as e:
+            fail(f"Cannot read story file {story_path}: {e}")
+        story_source = f"--story-file {story_path}"
+    elif story_text is not None:
+        story = story_text
+        story_source = "--story"
+    else:
+        state = load_state(tid)
+        done_summary = state.get("done", {}).get("summary")
+        checkpoint_summary = state.get("summary")
+        if done_summary:
+            story, story_source = done_summary, "checkpoint done.summary"
+        elif checkpoint_summary:
+            story, story_source = checkpoint_summary, "checkpoint summary"
+        else:
+            story = f"Review the branch changes for {tid}."
+            story_source = "fallback"
+    print(f"Story: {story_source} ({len(story)} chars)")
     print(f"\n── Review: {provider}/{model} — {len(files)} files, "
           f"{len(diff.splitlines())} diff lines vs {base}\n", flush=True)
     print(review(provider, model, instructions, story, diff, files, _DEFAULT_CHAR_BUDGET,
@@ -1655,9 +1675,14 @@ def main() -> None:
     parser.add_argument("--review-model", metavar="MODEL",
                         help="Review-only mode: run ONE Copilot model's review of the "
                              "branch diff, print findings to stdout, and exit. Stateless "
-                             "(reviewer sees only diff + changed files + AGENTS.md). Used by "
+                             "(reviewer sees only story + diff + changed files + AGENTS.md). Used by "
                              "the session-driven cork skill, where the active Claude session "
                              "does the implementing and fixing instead of a headless subprocess.")
+    story_group = parser.add_mutually_exclusive_group()
+    story_group.add_argument("--story-file", metavar="PATH",
+                             help="Review-only story/acceptance contract read as UTF-8.")
+    story_group.add_argument("--story", metavar="TEXT",
+                             help="Review-only story/acceptance contract supplied inline.")
     args = parser.parse_args()
 
     if args.status:
@@ -1675,7 +1700,8 @@ def main() -> None:
         fail(f"repo_path does not exist: {repo}")
 
     if args.review_model:
-        cmd_review(tid, repo, base, args.review_model, validate=not args.skip_validation)
+        cmd_review(tid, repo, base, args.review_model, validate=not args.skip_validation,
+                   story_file=args.story_file, story_text=args.story)
         return
 
     if args.reset:
