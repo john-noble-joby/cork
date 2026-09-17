@@ -16,7 +16,7 @@ cork uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) —
 
 The **single source of truth is the `VERSION` file**. Every skill's
 `**Version:**` stamp and `orchestrate.py --version` must match it — `install.sh`
-warns on drift. Bump `VERSION` and all four skill stamps together in the same
+warns on drift. Bump `VERSION` and every skill stamp together in the same
 change, and add a section here.
 
 ## [Unreleased]
@@ -33,7 +33,7 @@ change, and add a section here.
   disagreeing vendors, consolidates into one verdict with a `Reviewer | Vendor | Model | Slice`
   roster and a tamper check on the scratch tree, routes blocking findings back to the author and
   re-reviews only the delta. The human merges. Builds on PR #12's `claude`/`codex` harness lanes
-  (0.11.0), and also depends on PR #11's `auth status` (0.10.0) plus the in-flight `opencode`/`pi`
+  (0.11.0), and also depends on PR #11's `auth status` (0.10.0, merging separately) plus the in-flight `opencode`/`pi`
   harness lanes (planned for 0.12.0); the herdr mapping is documented as a manual path until a
   native transport lands.
 - `install.sh` installs the new skill; `skills/README.md` documents the invocation phrase.

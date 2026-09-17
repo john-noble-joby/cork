@@ -1,6 +1,6 @@
 ---
 name: cork-cross-review
-description: Use when the user says "cross review PR <n>", "cork cross-review", "cross-vendor review", or "multi-agent review of this PR/branch". The active Claude Code session acts as tech lead — it never reviews the code itself. It fans the PR's diff out to INDEPENDENT reviewers from vendors other than the author's (agentic harness lanes claude/codex/opencode/pi run inside a read-only scratch worktree at the PR head, plus Copilot API models), consolidates their findings into one verdict, turns blocking issues into fix tasks, and loops on the delta until clean. The human merges.
+description: Use when the user says "cross review PR <n>", "cork cross-review", "cross-vendor review", or "multi-agent review of this PR/branch". The active Claude Code session acts as tech lead — it never reviews the code itself. It fans the PR's diff out to INDEPENDENT reviewers from vendors other than the author's (agentic harness lanes — claude/codex today, opencode/pi once cork 0.12.0 lands — run inside a read-only scratch worktree at the PR head, plus Copilot API models), consolidates their findings into one verdict, turns blocking issues into fix tasks, and loops on the delta until clean. The human merges.
 ---
 
 # cork-cross-review — independent, cross-vendor PR verification
@@ -47,7 +47,10 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 
 ```bash
 python3 "$CORK_HOME/orchestrate.py" --version
-python3 "$CORK_HOME/orchestrate.py" auth status        # Copilot token source + per-harness login state
+# PENDING PR #11 (0.10.0, merging separately) — not in this release:
+#   python3 "$CORK_HOME/orchestrate.py" auth status   # Copilot token source + per-harness login state
+# Until it merges, a logged-out lane surfaces only at review time, as the skipped sentinel with the
+# CLI's stderr in review-<lane>.err.
 python3 "$CORK_HOME/orchestrate.py" preflight          # the lanes that will actually run on this seat
 ```
 
@@ -57,7 +60,13 @@ python3 "$CORK_HOME/orchestrate.py" preflight          # the lanes that will act
 | Kind | Example refs | What it is | Auth it needs |
 |---|---|---|---|
 | API (Copilot-hosted) | `copilot/gpt-5.6-sol`, `copilot/claude-opus-4.7`, `copilot/gemini-3.1-pro-preview` | Stateless call — sees only diff + changed files + standards | `cork login` (one Copilot seat covers all of these) |
-| Harness (agentic) | `codex/gpt-5.6-sol`, `claude/claude-opus-4.7`, `opencode/github-copilot/gpt-5.5`, `pi/glm-internal/glm-5.3-onprem` | Locally installed coding-agent CLI run read-only inside the scratch worktree — can read callers, run `git show`, verify | Each CLI's own vendor login (`codex login`, `claude auth login`, `opencode auth login`, pi `/login` or `GLM_API_KEY`) |
+| Harness (agentic) | **Live (0.11.0+):** `codex/gpt-5.6-sol`, `claude/claude-opus-4.7`. **Planned for 0.12.0 (in flight — not yet in `HARNESSES`; preflight will not print them until then):** `opencode/github-copilot/gpt-5.5`, `pi/glm-internal/glm-5.3-onprem` | Locally installed coding-agent CLI run read-only inside the scratch worktree — can read callers, run `git show`, verify | Each CLI's own vendor login (`codex login`, `claude auth login`; later `opencode auth login`, pi `/login` or `GLM_API_KEY`) |
+
+Harness lanes are **opt-in**: a default install's rotation holds only Copilot API lanes, so
+preflight prints none of them and this skill silently degrades to API-only. Enable each one in
+`~/.config/cork/config.json` — `providers.<harness>.enabled: true` plus a `rotation` entry such
+as `{"provider": "claude", "model": "claude-opus-4.7"}` — and preflight prints it when the
+binary is on PATH.
 
 Group the printed lanes by **vendor family** — Claude, GPT, GLM, Gemini — regardless of kind.
 Then determine the **author's vendor**: a human → all lanes valid; a `cork`/Claude Code session →
@@ -68,6 +77,9 @@ Confirm before running:
 `Cork {VERSION} cross-review: PR #{N} ({BRANCH} → {BASE}) | author vendor: {V} | lanes: {LANES} | slices: {K}. Run?`
 
 Stop here — do not proceed — if fewer than two vendor families remain after excluding the author's.
+
+Once confirmed, record the kept refs for the fan-out exactly as preflight printed them:
+`LANES="codex/gpt-5.6-sol claude/claude-opus-4.7 …"` (space-separated `provider/model`).
 
 ## Step 1 — Diff and contract
 
@@ -85,10 +97,13 @@ sentence per required behaviour — do not let reviewers invent the spec.
 ## Step 2 — Scratch worktree at the PR head + deterministic gates
 
 ```bash
-HEAD=$(jq -r .headRefOid "$OUT/pr.json")
-git fetch origin "pull/$N/head"
+HEAD=$(jq -r .headRefOid "$OUT/pr.json"); BASE=$(jq -r .baseRefName "$OUT/pr.json")
+git fetch origin "$BASE" "pull/$N/head"        # fetch the base too, so origin/$BASE is current for slice diffs
 git worktree add --detach "/tmp/cork-pr$N/wt" "$HEAD"
 ```
+
+Run these in **your own clone** of the PR's repo (`origin` = the GitHub remote) — never in the
+author's checkout.
 
 Run the repo's own tests / lint / typecheck **inside that worktree first** (use the commands the
 repo's `CLAUDE.md` documents). If a gate is red, stop: report the failing gate to the author and
@@ -129,12 +144,29 @@ done
 wait
 ```
 
-`--review-model` currently has no pathspec/slice option, so every call receives the full branch
-diff. Until one exists, run the loop once per slice, pass the slice contract in the story text,
-and tell the reviewer exactly which paths are in scope. Harness lanes run with the scratch
-worktree as their working directory — `orchestrate.py` passes it as `cwd` and applies the
-read-only flags; you do not need to add prompt text for that. What you **do** add to the story
-text for every lane, verbatim:
+**How the contract reaches a lane (0.13.0).** `--review-model` has no `--story` flag: the
+review-only path reads its story from cork's checkpoint file
+`~/.local/share/code-orchestrator/<ticket>.json` (`done.summary`), and with no checkpoint every
+lane receives only "Review the branch changes for <ticket>." — the contract never arrives. So
+**before the fan-out**, write the story and seed the checkpoint for the ticket id you pass as the
+first positional (`PR$N` below; pick another id if a real `PR$N` checkpoint already exists):
+
+```bash
+{ echo "## Acceptance contract"; cat "$OUT/contract.md"; echo; echo "## In-scope paths"; echo "<pathspec or 'whole diff'>";
+  echo; echo "## Rule"; echo "<the verbatim rule below>"; } > "$OUT/story.md"
+mkdir -p ~/.local/share/code-orchestrator
+jq -n --rawfile s "$OUT/story.md" --arg tid "PR$N" \
+  '{version:2, ticket_id:$tid, done:{implement:true, summary:$s}}' \
+  > ~/.local/share/code-orchestrator/"PR$N".json
+```
+
+A `--story-file` flag that removes this pre-seed is a registered follow-on; until it lands, the
+checkpoint is the only channel. `--review-model` also has no pathspec/slice option, so every call
+receives the full branch diff: for a sliced review, re-seed the checkpoint once per slice with that
+slice's contract excerpt and in-scope paths, then run the lane loop. Harness lanes run with the
+scratch worktree as their working directory — `orchestrate.py` passes it as `cwd` and applies the
+read-only flags; you do not need to add prompt text for that. The story text for every lane
+carries this rule, verbatim:
 
 > The DIFF is the object of review; the checkout is read-only CONTEXT. Verify your claims
 > against it — callers, merge-base behaviour via `git show <merge_base>:<path>`, pinned
@@ -143,15 +175,24 @@ text for every lane, verbatim:
 
 Lane-specific rules learned the hard way:
 
-- **`pi` / GLM** — pin `pi/glm-internal/glm-5.3-onprem` (or the current on-prem model from
-  `pi --list-models glm`). `orchestrate.py` already closes stdin (pi blocks on an open pipe) and
-  passes `--no-session --no-context-files`. GLM is the **tie-breaker**: when a Claude finding and a
-  GPT finding disagree, or when you are tempted to overrule a reviewer from your own knowledge,
-  run one more `pi` lane on *just that finding* with the evidence (hunk, dependency source, test)
-  before grading it. Two vendors agreeing from the same training data is not ground truth.
-- **`claude`** — runs `--safe-mode --restricted` (no CLAUDE.md, no hooks, no MCP, file tools
-  confined to the scratch tree). If `ANTHROPIC_API_KEY` is set but invalid the lane hangs
-  silently until timeout; `auth status` flags `env_key: true` so you know to look there.
+- **`pi` / GLM — PLANNED lane (0.12.0, in flight; absent from 0.13.0's `HARNESSES`)** — when it
+  lands, pin `pi/glm-internal/glm-5.3-onprem` (or the current on-prem model from
+  `pi --list-models glm`; a `glm-only` shim rejects ids off its allowlist at boot). That lane spec
+  will close stdin (pi blocks on an open pipe) and pass `--no-session --no-context-files`; nothing
+  in 0.13.0 does this yet. GLM is the **tie-breaker**: when a Claude finding and a GPT finding
+  disagree, or when you are tempted to overrule a reviewer from your own knowledge, run one more
+  lane on *just that finding* with the evidence (hunk, dependency source, test) before grading it.
+  Two vendors agreeing from the same training data is not ground truth. Until the pi lane exists,
+  break ties with a third family present on this seat (e.g. `copilot/gemini-3.1-pro-preview`) or
+  your own spot-check against the scratch tree — and say which in the roster. GLM rules learned
+  the hard way, to carry into its story text: no skill-tool calls; a one-line progress note after
+  each read; read the diff in explicit `sed -n 'a,bp'` ranges; write reports only under `$HOME`; a
+  "completed" run whose output is only preamble is a failed lane.
+- **`claude`** — runs `--safe-mode --restricted --tools Read,Grep,Glob --permission-mode plan`
+  (no CLAUDE.md, no hooks, no MCP, no shell tool — that absence is what keeps the lane blind; file
+  tools confined to the scratch tree). If `ANTHROPIC_API_KEY` is set but invalid the lane hangs
+  silently until timeout — check `review-claude-*.err` and try unsetting the key (an `env_key`
+  flag in `auth status` is pending PR #11 / 0.12.0).
 - **`codex`** — `exec -s read-only --ephemeral`; it may take 30–45 s to fail on missing auth. Its
   sandbox can read outside the repo, so keep other lanes' report files out of its `cwd`.
 - **A lane that returns the `… — skipped]` sentinel or an empty file** is a failed lane, not a
@@ -197,7 +238,9 @@ missed, run another lane on it.
 - **You are the author's session** (the PR is yours): apply the fixes yourself, run the gates,
   commit, push (never force-push), then loop to Step 1 with `gh pr diff` again — and re-review
   **only the delta** (`git diff <old-head>..<new-head>`) with the *same* lanes, asking each to
-  confirm its own blockers are closed and to look for regressions in the delta. Move the scratch
+  confirm its own blockers are closed and to look for regressions in the delta — re-seed the
+  checkpoint first with the previous blockers and the delta range, or the ask never reaches the
+  lane. Move the scratch
   tree to the new head (`git -C … checkout --detach <new-head>`).
 - **Someone else's PR**: post `$OUT/consolidated.md` as a PR comment (`gh pr comment $N
   --body-file …`) or hand it to the author as they prefer. Never push to their branch.
