@@ -16,7 +16,7 @@ class ReviewStoryTest(unittest.TestCase):
         self._originals = {
             name: getattr(orchestrate, name)
             for name in ("CONFIG_PATH", "load_agent_instructions", "git_diff_branch",
-                         "changed_files_branch", "load_state", "_call_and_extract")
+                         "changed_files_branch", "load_state", "_call_and_extract", "_probe")
         }
         orchestrate.CONFIG_PATH = Path(self.tmp.name) / "config.json"
         orchestrate.load_agent_instructions = lambda repo: ("STANDARDS", "/repo/AGENTS.md")
@@ -26,6 +26,8 @@ class ReviewStoryTest(unittest.TestCase):
             "done": {"summary": "done checkpoint story"},
             "summary": "legacy checkpoint story",
         }
+        orchestrate._call_and_extract = lambda *a, **k: (200, "review ok")
+        orchestrate._probe = lambda *a, **k: self.fail("probe called before story validation")
 
     def tearDown(self):
         for name, value in self._originals.items():
@@ -54,6 +56,7 @@ class ReviewStoryTest(unittest.TestCase):
 
     def test_story_file_reaches_harness_lane(self):
         self.story_file.write_text("harness acceptance contract", encoding="utf-8")
+        orchestrate._call_and_extract = self._originals["_call_and_extract"]
         calls = []
 
         def fake_run(argv, **kwargs):
@@ -106,7 +109,7 @@ class ReviewStoryTest(unittest.TestCase):
         stderr = io.StringIO()
         with redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
             orchestrate.cmd_review("TASK-1", self.tmp.name, "origin/main", "copilot/model",
-                                   validate=False, story_file=str(self.story_file))
+                                   story_file=str(self.story_file))
         self.assertNotEqual(raised.exception.code, 0)
         self.assertEqual(len(stderr.getvalue().strip().splitlines()), 1)
         self.assertIn("Cannot read story file", stderr.getvalue())
@@ -119,7 +122,23 @@ class ReviewStoryTest(unittest.TestCase):
             orchestrate.cmd_review("TASK-1", self.tmp.name, "origin/main", "copilot/model",
                                    validate=False, story_file=str(self.story_file))
         self.assertEqual(len(stderr.getvalue().strip().splitlines()), 1)
+        self.assertIn("Cannot read story file", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_empty_story_file_fails(self):
+        self.story_file.write_text(" \n", encoding="utf-8")
+        stderr = io.StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit):
+            orchestrate.cmd_review("TASK-1", self.tmp.name, "origin/main", "copilot/model",
+                                   validate=False, story_file=str(self.story_file))
+        self.assertIn(f"Story from --story-file {self.story_file} is empty.", stderr.getvalue())
+
+    def test_empty_inline_story_fails(self):
+        stderr = io.StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit):
+            orchestrate.cmd_review("TASK-1", self.tmp.name, "origin/main", "copilot/model",
+                                   validate=False, story_text="")
+        self.assertIn("Story from --story is empty.", stderr.getvalue())
 
     def test_mutually_exclusive_story_flags_fail_parsing(self):
         original_argv = sys.argv

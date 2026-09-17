@@ -157,9 +157,12 @@ the review starts; explicit stories are not written to the checkpoint.
 |------|----------------------|
 | `--review-model MODEL` | Run one API or harness reviewer and print its findings. |
 | `--story-file PATH` | Read the story/acceptance contract from a UTF-8 file. |
-| `--story TEXT` | Supply the story/acceptance contract inline. |
+| `--story TEXT` | Supply the story inline; use `--story=TEXT` if it starts with `-`. |
 | `--base-branch BRANCH` | Select the branch used for the review diff. |
 | `--skip-validation` | Skip the model availability probe. |
+
+Keep stories to a few KB: large stories crowd changed-file contents out of API lane budgets, while
+`pi` and `opencode` pass prompts through argv and can skip the lane at the OS argument-size limit.
 
 ### Model selection (`preflight` + `config.json`)
 

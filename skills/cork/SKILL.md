@@ -32,7 +32,7 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 
 - Fix steps run with full context (worktree state, prior decisions, the whole conversation) — a cold `claude --print` had none of that.
 - The user sees the work happen live and can interject.
-- Blind-review property is preserved: each `--review-model` call is stateless — the reviewer sees only the diff + changed files + AGENTS.md, never prior review text.
+- Blind-review property is preserved: each `--review-model` call is stateless — the reviewer sees only the story + diff + changed files + AGENTS.md, never prior review text.
 
 ## When invoked, do this
 
@@ -141,7 +141,7 @@ done
 wait
 ```
 
-Each `--review-model` call is stateless and read-only — it only prints findings. Pass `--skip-validation` here: every reviewer otherwise fires a per-model validation call (one premium request each), so skipping it across the parallel fan-out saves ~one request per model. The positional ticket arg isn't used by review output, so any placeholder is fine when there's no ticket. `gpt-5.5`/`gpt-5.x` models are auto-routed to Copilot's `/responses` endpoint. If a model errors, drop it and keep the rest (see *Model availability* under full mode).
+Each `--review-model` call is stateless and read-only — it receives only the story + diff + changed files + AGENTS.md and prints findings. Pass `--skip-validation` here: every reviewer otherwise fires a per-model validation call (one premium request each), so skipping it across the parallel fan-out saves ~one request per model. The positional ticket arg isn't used by review output, so any placeholder is fine when there's no ticket. `gpt-5.5`/`gpt-5.x` models are auto-routed to Copilot's `/responses` endpoint. If a model errors, drop it and keep the rest (see *Model availability* under full mode).
 
 ### R2 — Consolidate into one report
 

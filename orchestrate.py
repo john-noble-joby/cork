@@ -1505,18 +1505,6 @@ def cmd_login() -> None:
 
 def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True,
                story_file: str | None = None, story_text: str | None = None) -> None:
-    provider, model = _split_model_ref(model_ref)
-    if validate:
-        verdict = _probe(provider, model)
-        if verdict != "ok":
-            fail(f"{provider}/{model} not usable on this seat ({verdict}).")
-    instructions, instructions_path = load_agent_instructions(repo)
-    if instructions_path:
-        print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
-    diff = git_diff_branch(repo, base)
-    if not diff.strip():
-        fail(f"No diff vs {base} — nothing to review.")
-    files = changed_files_branch(repo, base)
     if story_file is not None:
         story_path = Path(story_file).expanduser()
         try:
@@ -1538,6 +1526,21 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
         else:
             story = f"Review the branch changes for {tid}."
             story_source = "fallback"
+    if (story_file is not None or story_text is not None) and not story.strip():
+        fail(f"Story from {story_source} is empty.")
+
+    provider, model = _split_model_ref(model_ref)
+    if validate:
+        verdict = _probe(provider, model)
+        if verdict != "ok":
+            fail(f"{provider}/{model} not usable on this seat ({verdict}).")
+    instructions, instructions_path = load_agent_instructions(repo)
+    if instructions_path:
+        print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
+    diff = git_diff_branch(repo, base)
+    if not diff.strip():
+        fail(f"No diff vs {base} — nothing to review.")
+    files = changed_files_branch(repo, base)
     print(f"Story: {story_source} ({len(story)} chars)")
     print(f"\n── Review: {provider}/{model} — {len(files)} files, "
           f"{len(diff.splitlines())} diff lines vs {base}\n", flush=True)
@@ -1682,7 +1685,8 @@ def main() -> None:
     story_group.add_argument("--story-file", metavar="PATH",
                              help="Review-only story/acceptance contract read as UTF-8.")
     story_group.add_argument("--story", metavar="TEXT",
-                             help="Review-only story/acceptance contract supplied inline.")
+                             help="Review-only story/acceptance contract supplied inline. "
+                                  "Use --story=TEXT when TEXT starts with '-'.")
     args = parser.parse_args()
 
     if args.status:
