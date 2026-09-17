@@ -184,8 +184,8 @@ same rotation/preflight/consolidation. Harnesses are disabled by default; enable
 |---------|--------------------|------------|
 | `claude` | Safe/restricted plan mode; only `Read,Grep,Glob` | `claude auth status --text` |
 | `codex` | Read-only sandbox; ephemeral session | `codex login status` |
-| `opencode` | `plan` agent plus `--pure` | `opencode auth list` credential count |
-| `pi` | Only `read,grep,find,ls`; no session or context files | `pi auth check … --no-refresh` |
+| `opencode` | Env-denied write/shell/network/task tools; project config disabled | `opencode auth list` credential count |
+| `pi` | Only `read,grep,find,ls`; no session, context files, or project approval | `pi auth check … --no-refresh` |
 
 ```json
 "providers": { "codex": {"enabled": true}, "opencode": {"enabled": true}, "pi": {"enabled": true} },
@@ -199,20 +199,21 @@ Invocations (flags verified against `claude --help` 2.1.x, `codex exec --help` 0
 claude -p --no-session-persistence --output-format text --model <m> --system-prompt <standards> \
        --safe-mode --restricted --tools Read,Grep,Glob --permission-mode plan          # prompt on stdin
 codex exec -m <m> -s read-only --ephemeral --skip-git-repo-check -C <repo> --color never -   # prompt on stdin
-opencode run -m <provider/model> --agent plan --format default --dir <repo> --pure <prompt>
+opencode run -m <provider/model> --agent plan --format default --dir <repo> --pure -- <prompt>
 pi -p --model <provider/model> --system-prompt <standards> --tools read,grep,find,ls \
-   --no-session --no-context-files -- <prompt> </dev/null
+   --no-session --no-context-files --no-approve -- <prompt> </dev/null
 ```
 
 **Read-only guarantees and their limits.** `claude` runs with `--safe-mode` (no CLAUDE.md,
 hooks, MCP or plugins — auth is kept, unlike `--bare`, which refuses OAuth logins) and
 `--restricted` (no code-running tools; file tools confined to the repo), with only
 `Read,Grep,Glob` under `--permission-mode plan`. `codex` runs under its `read-only` sandbox
-with no session persisted. OpenCode's `plan` agent denies edit/write and all tools other than
-its allowed planning/read permissions (verified with `opencode agent list`); `--pure` disables
-external plugins, but its help does not claim to suppress repository `AGENTS.md` loading, so
-repo instructions may also be seen through OpenCode's own context loader. Pi receives only
-`read,grep,find,ls`, disables sessions and context-file discovery, and reads stdin from
+with no session persisted. OpenCode's stock `plan` agent still allows shell and plan-file
+writes, so cork injects `OPENCODE_PERMISSION` denies for `bash`, edit/write/patch, task,
+webfetch and external-directory access. `OPENCODE_DISABLE_PROJECT_CONFIG=1` prevents a branch's
+`.opencode/` configuration or project instructions from weakening that policy; `--pure` also
+disables external plugins. Pi receives only `read,grep,find,ls`, disables sessions and context
+files, ignores project-local `.pi/` resources with `--no-approve`, and reads stdin from
 `/dev/null` so `-p` cannot wait forever for EOF on a held-open pipe. None can modify the repo
 (the manual checks in the release PRs show `git status --porcelain` identical before and after).
 Limits: codex's sandbox still
@@ -236,9 +237,9 @@ a model request. Logged-out lanes print the exact recovery action: `claude auth 
 `--no-refresh`; alternatively, set the selected Pi provider's API-key environment variable.
 The other probes are status/list commands and do not write credentials. If
 `ANTHROPIC_API_KEY` is set, the Claude probe reports that fact without validating the key,
-because an invalid value can make `claude -p` hang silently until cork's timeout. This machine's
-`~/.local/bin/pi` may be a GLM-only policy shim: cork passes the configured model through
-unchanged, and the shim can refuse non-GLM models. OpenCode's `github-copilot` provider uses the
+because an invalid value can make `claude -p` hang silently until cork's timeout. Some Pi
+installations are wrapped in a provider-policy shim; cork passes the model through unchanged,
+so such a shim may refuse unsupported providers. OpenCode's `github-copilot` provider uses the
 same Copilot seat as cork's own Copilot API lane; it does not require a second subscription.
 
 Per-harness config keys — the only ones read: `bin` (or env `CORK_CLAUDE_BIN` /

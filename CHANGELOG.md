@@ -30,8 +30,11 @@ change, and add a section here.
   refreshed credentials.
 - **Live harness auth probes** — enabled harness lanes now check CLI login state during
   preflight and report `ok`, `not_logged_in`, `missing_binary`, `timeout`, or `error`, with the
-  lane-specific login command. `harness_auth_summary()` exposes the same structured results for
-  the forthcoming `auth status` command.
+  lane-specific login command. Preflight continues past a full selection to report every enabled
+  harness, marking live lanes that were not selected because the count was reached.
+- **Immutable OpenCode isolation** — cork denies shell, write, task, web and external-directory
+  permissions through `OPENCODE_PERMISSION` and disables branch-controlled OpenCode project
+  configuration. Pi also ignores project-local `.pi/` resources with `--no-approve`.
 
 ## [0.11.0] — 2026-09-17
 
