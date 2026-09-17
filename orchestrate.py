@@ -637,6 +637,21 @@ def run_claude(prompt: str, cwd: str) -> str:
     return result.stdout.strip()
 
 
+def require_base_ref(repo: str, base: str) -> None:
+    base_check = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", base],
+        cwd=repo, capture_output=True, text=True,
+    )
+    if base_check.returncode != 0:
+        fail(f"Base ref {base!r} does not resolve")
+    merge_base_check = subprocess.run(
+        ["git", "merge-base", base, "HEAD"],
+        cwd=repo, capture_output=True, text=True,
+    )
+    if merge_base_check.returncode != 0:
+        fail(f"No merge base between {base!r} and HEAD")
+
+
 def git_diff_branch(cwd: str, base: str) -> str:
     return subprocess.check_output(
         ["git", "diff", f"{base}...HEAD"], cwd=cwd, text=True
@@ -1235,12 +1250,7 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     instructions, instructions_path = load_agent_instructions(repo)
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
-    base_check = subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", base],
-        cwd=repo, capture_output=True, text=True,
-    )
-    if base_check.returncode != 0:
-        fail(f"Base ref {base!r} does not resolve")
+    require_base_ref(repo, base)
     diff = git_diff_branch(repo, base)
     if not diff.strip():
         fail(f"No diff vs {base} — nothing to review.")
@@ -1405,6 +1415,8 @@ def main() -> None:
     if args.review_model:
         cmd_review(tid, repo, base, args.review_model, validate=not args.skip_validation)
         return
+
+    require_base_ref(repo, base)
 
     if args.reset:
         clear_state(tid)
