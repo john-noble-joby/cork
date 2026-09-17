@@ -7,7 +7,7 @@ description: Use when the user says "cork" / "run cork" on a branch (full mode �
 
 "Cork" = **C**ode **Or**chestrator **R**eview **K**ickoff.
 
-**Version:** 0.11.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
+**Version:** 0.12.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
 
 **The active Claude session is the coding agent.** Unlike the legacy headless mode (where `orchestrate.py` spawned `claude --print` subprocesses), here *you* — the session with full codebase + conversation context — do the implementing and fixing. The orchestrator script is used only as a stateless review tool: `--review-model MODEL` returns one outside model's findings on the current branch diff.
 
@@ -108,7 +108,7 @@ This command **only prints the model's review to stdout** — it makes no change
 
 **Model availability** is seat-dependent — that's exactly what `preflight` checks. If a model errors mid-run with "not found in your Copilot account" or "not accessible", drop it and continue. `gpt-5.x`/codex are reachable via Copilot but only via the `/responses` endpoint — `orchestrate.py` routes them there automatically. Gemini is no longer served to this integrator. For openai/anthropic models, `preflight` needs the matching provider token (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` env vars, or keys `"openai"` / `"anthropic"` in `~/.config/cork/auth.json` — chmod 600; tokens never go in `config.json`).
 
-**Harness reviewers.** `preflight` may also print `claude/<model>` or `codex/<model>` lines: those are locally installed coding-agent CLIs run by `orchestrate.py` as read-only reviewers (`claude --safe-mode --restricted` with only `Read,Grep,Glob` in plan mode; `codex exec -s read-only --ephemeral`). Treat them exactly like API models — same `--review-model` ref, same output format, same consolidation. They are selected when `providers.<harness>.enabled` is true and the binary is on PATH; a harness that fails or times out prints the usual `… — skipped]` sentinel and the rotation continues.
+**Harness reviewers.** `preflight` may also print `claude/<model>`, `codex/<model>`, `opencode/<provider/model>`, or `pi/<provider/model>` lines: those are locally installed coding-agent CLIs run by `orchestrate.py` as read-only reviewers. Treat them exactly like API models — same `--review-model` ref, same output format, same consolidation. They are selected when `providers.<harness>.enabled` is true, the binary is on PATH, and its read-only auth probe confirms a live login; a harness that fails or times out prints the usual `… — skipped]` sentinel and the rotation continues.
 
 Read the findings from stdout. For each: apply the fix in the worktree (run tests before committing), or push back with reasoning if wrong. Commit after each model's fixes with message `fix: apply {MODEL} review [{TICKET}]`.
 

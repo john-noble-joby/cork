@@ -21,6 +21,18 @@ change, and add a section here.
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-09-17
+
+### Added
+- **OpenCode and Pi harness reviewers** — opt-in `opencode/<provider/model>` and
+  `pi/<provider/model>` lanes use each CLI's read-only mode, ephemeral/no-session operation,
+  and argument-based prompts. Pi auth checks include `--no-refresh`, so preflight never writes
+  refreshed credentials.
+- **Live harness auth probes** — enabled harness lanes now check CLI login state during
+  preflight and report `ok`, `not_logged_in`, `missing_binary`, `timeout`, or `error`, with the
+  lane-specific login command. `harness_auth_summary()` exposes the same structured results for
+  the forthcoming `auth status` command.
+
 ## [0.11.0] — 2026-09-17
 
 ### Added
