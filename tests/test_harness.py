@@ -134,6 +134,15 @@ class ConfigAndProbeTest(HarnessBase):
         with self.assertRaises(SystemExit):
             orchestrate._validate_config({"rotation": [{"provider": "opencode", "model": "x"}]})
 
+    def test_validate_harness_keys_types(self):
+        base = {"rotation": [{"provider": "codex", "model": "m"}]}
+        orchestrate._validate_config({**base, "providers": {"codex": {
+            "enabled": True, "bin": "/opt/codex", "extra_args": ["--a"], "timeout": 60.5}}})
+        for bad in ({"timeout": None}, {"timeout": 0}, {"timeout": "30"}, {"timeout": True},
+                    {"extra_args": "--a"}, {"extra_args": [1]}, {"bin": ""}, {"bin": 3}, "str"):
+            with self.assertRaises(SystemExit, msg=repr(bad)):
+                orchestrate._validate_config({**base, "providers": {"codex": bad}})
+
     def test_default_config_has_harnesses_disabled(self):
         for h in orchestrate.HARNESSES:
             self.assertFalse(orchestrate.DEFAULT_CONFIG["providers"][h]["enabled"])
