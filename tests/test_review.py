@@ -211,6 +211,16 @@ class ReviewDiffTest(unittest.TestCase):
         self.assertIn("Spec conformance sections", fix_prompt)
         self.assertIn("do NOT delete behaviour flagged as unrequested", fix_prompt)
 
+    def test_self_review_prompt_carries_spec_axis_on_both_instruction_branches(self):
+        for instructions_path in ("/review.md", ""):
+            with self.subTest(instructions_path=instructions_path):
+                prompt = orchestrate.prompt_claude_review(
+                    "origin/main", instructions_path, "Implement the requested widget"
+                )
+                self.assertIn(orchestrate.SPEC_CONFORMANCE_SUFFIX, prompt)
+                self.assertIn("## Spec conformance", prompt)
+                self.assertIn("no spec available", prompt)
+
     def test_review_system_prompt_carries_spec_axis_on_both_branches(self):
         for instructions in ("Custom project rules", ""):
             with self.subTest(instructions=instructions):

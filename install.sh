@@ -15,6 +15,12 @@ SKILLS=(coding-standards copilot-review-loop cork cork-setup devit)
 
 resolve_before_create() {
   local candidate="$1" probe part tail ancestor
+  case "/$candidate/" in
+    */../*)
+      echo "✗ refusing to install into $DEST — '..' components are not allowed" >&2
+      return 1
+      ;;
+  esac
   case "$candidate" in
     /*) ;;
     *) candidate="$PWD/$candidate" ;;
@@ -34,7 +40,10 @@ resolve_before_create() {
     echo "✗ refusing to install into $DEST — path traverses a dangling symlink ($probe)" >&2
     return 1
   fi
-  ancestor="$(cd -- "$probe" && pwd -P)"
+  ancestor="$(cd -P -- "$probe" && pwd -P)" || {
+    echo "✗ could not resolve destination $DEST (ancestor: $probe)" >&2
+    return 1
+  }
   printf '%s\n' "$ancestor$tail" | awk -F/ '
     {
       count = 0
@@ -53,19 +62,28 @@ resolve_before_create() {
 
 repo_root="$(cd -- "$REPO" && pwd -P)"
 src_root="$(cd -- "$REPO/skills" && pwd -P)"
-dest_root="$(resolve_before_create "$DEST")"
+dest_root="$(resolve_before_create "$DEST")" || exit 1
+[ -n "$dest_root" ] || { echo "✗ could not resolve destination $DEST"; exit 1; }
 case "$dest_root/" in
   "$src_root/"*|"$repo_root/")
     echo "✗ refusing to install into $DEST — it overlaps this repo's skills/ (source tree)"
     exit 1
     ;;
 esac
-mkdir -p -- "$DEST"
-mkdir -- "$DEST/.cork-install.lock" 2>/dev/null || {
-  echo "✗ another cork install is running (lock: $DEST/.cork-install.lock) — remove it if stale"
+mkdir -p -- "$dest_root"
+DEST="$dest_root"
+lock="$DEST/.cork-install.lock"
+lock_held=0
+trap '[ "$lock_held" = 1 ] && rmdir -- "$lock" 2>/dev/null' EXIT
+if mkdir -- "$lock" 2>/dev/null; then
+  lock_held=1
+elif [ -d "$lock" ]; then
+  echo "✗ another cork install is running (lock: $lock) — remove it if stale"
   exit 1
-}
-trap 'rmdir -- "$DEST/.cork-install.lock" 2>/dev/null' EXIT
+else
+  echo "✗ cannot create lock $lock (permissions?)"
+  exit 1
+fi
 
 echo "Installing cork skills v$VERSION → $DEST"
 echo
@@ -84,7 +102,21 @@ for s in "${SKILLS[@]}"; do
   fi
 
   : "${s:?skill name must not be empty}"
-  rm -rf -- "$DEST/.$s.tmp."* "$DEST/.$s.prev."*
+  rm -rf -- "$DEST/.$s.tmp."*
+  if [ ! -e "$DEST/$s" ] && [ ! -L "$DEST/$s" ]; then
+    newest_prev=""
+    for candidate in "$DEST/.$s.prev."*; do
+      if [ -e "$candidate" ] || [ -L "$candidate" ]; then
+        if [ -z "$newest_prev" ] || [ "$candidate" -nt "$newest_prev" ]; then
+          newest_prev="$candidate"
+        fi
+      fi
+    done
+    if [ -n "$newest_prev" ]; then
+      mv -- "$newest_prev" "$DEST/$s"
+      echo "  ↩ $s: recovered previous copy from interrupted install"
+    fi
+  fi
   tmp="$(mktemp -d -- "$DEST/.$s.tmp.XXXXXX")"
   if ! cp -r -- "$REPO/skills/$s/." "$tmp/"; then
     rm -rf -- "$tmp"
@@ -115,6 +147,7 @@ for s in "${SKILLS[@]}"; do
     exit 1
   fi
   rm -rf -- "$prev"
+  rm -rf -- "$DEST/.$s.prev."*
   echo "  ✓ $s installed (stamp v${stamp:-?})"
 done
 

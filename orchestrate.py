@@ -1061,9 +1061,8 @@ def prompt_claude_review(base: str, instructions_path: str, summary: str) -> str
         f"## Story / Task\n{summary}\n\n"
         f"Review the current feature branch against {base}. "
         f"The full branch diff is available via: git diff {base}...HEAD\n"
-        "Judge spec conformance against the Story / Task above; if it states no "
-        "checkable requirements, say so.\n\n"
         f"{review_src}\n\n"
+        f"{SPEC_CONFORMANCE_SUFFIX}\n\n"
         "Output ONLY a structured findings report. "
         "Do NOT apply any fixes. Do NOT edit any files."
     )

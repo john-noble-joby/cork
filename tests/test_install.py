@@ -8,6 +8,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = (ROOT / "VERSION").read_text().strip()
+SKILLS_LINE = next(
+    line for line in (ROOT / "install.sh").read_text().splitlines()
+    if line.startswith("SKILLS=(")
+)
+SKILLS = tuple(SKILLS_LINE.removeprefix("SKILLS=(").removesuffix(")").split())
 
 
 class InstallSafetyTest(unittest.TestCase):
@@ -16,7 +22,7 @@ class InstallSafetyTest(unittest.TestCase):
         skills = repo / "skills"
         skills.mkdir(parents=True)
         shutil.copy(ROOT / "install.sh", repo / "install.sh")
-        (repo / "VERSION").write_text("0.9.0\n")
+        (repo / "VERSION").write_text(f"{VERSION}\n")
         (skills / ".keep").write_text("")
         subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
@@ -31,12 +37,14 @@ class InstallSafetyTest(unittest.TestCase):
         return repo, skills
 
     def _run(
-        self, repo: Path, destination: Path, **env_overrides: str
+        self, repo: Path, destination: Path | str, **env_overrides: str
     ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env.update(env_overrides)
         env["CLAUDE_SKILLS_DIR"] = str(destination)
         env.setdefault("CORK_HOME", str(repo))
+        env.setdefault("HOME", str(repo.parent / "home"))
+        Path(env["HOME"]).mkdir(parents=True, exist_ok=True)
         return subprocess.run(
             ["bash", "install.sh"],
             cwd=repo,
@@ -69,6 +77,21 @@ class InstallSafetyTest(unittest.TestCase):
         self.assertFalse((destination / ".cork-install.lock").exists())
         self.assertEqual(list(destination.glob(".*.tmp.*")), [])
         self.assertEqual(list(destination.glob(".*.prev.*")), [])
+
+    def _write_failing_coding_standards_mv(self, wrapper_dir: Path) -> None:
+        real_mv = shutil.which("mv")
+        self.assertIsNotNone(real_mv)
+        if real_mv is None:
+            self.fail("mv executable not found")
+        wrapper = wrapper_dir / "mv"
+        wrapper.write_text(
+            "#!/usr/bin/env bash\n"
+            'case "$*" in\n'
+            '  *".coding-standards.tmp."*"/coding-standards") exit 1 ;;\n'
+            "esac\n"
+            f"exec {shlex.quote(real_mv)} \"$@\"\n"
+        )
+        wrapper.chmod(0o755)
 
     def test_nonexistent_destination_under_source_is_refused_without_dirtying_repo(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -111,6 +134,52 @@ class InstallSafetyTest(unittest.TestCase):
                     self.assertIn("overlaps this repo's skills/", result.stdout)
                     self._assert_clean_fixture(repo)
 
+    def test_repo_root_with_or_without_trailing_slashes_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, _ = self._guard_fixture(Path(tmp))
+
+            for destination in (repo, f"{repo}///"):
+                with self.subTest(destination=destination):
+                    result = self._run(repo, destination)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("overlaps this repo's skills/", result.stdout)
+                    self._assert_clean_fixture(repo)
+
+    def test_dotdot_paths_are_refused_without_creating_source_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, skills = self._guard_fixture(root)
+            symlink_target = skills / "sub"
+            symlink_target.mkdir()
+            link = root / "link"
+            link.symlink_to(symlink_target, target_is_directory=True)
+            destinations = (
+                (Path(f"{link}/../x"), skills / "x"),
+                (Path(f"{skills}/nope/../../../outside"), skills / "nope"),
+            )
+
+            for destination, forbidden in destinations:
+                with self.subTest(destination=destination):
+                    result = self._run(repo, destination)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("'..' components are not allowed", result.stderr)
+                    self.assertFalse(forbidden.exists())
+                    self._assert_clean_fixture(repo)
+
+    def test_regular_file_ancestor_fails_resolution_without_creating_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, _ = self._guard_fixture(root)
+            regular_file = root / "not-a-directory"
+            regular_file.write_text("file\n")
+
+            result = self._run(repo, regular_file / "new")
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("could not resolve destination", result.stderr)
+            self.assertFalse((regular_file / "new").exists())
+            self._assert_clean_fixture(repo)
+
     def test_preexisting_lock_refuses_install_without_touching_destination(self):
         with tempfile.TemporaryDirectory() as tmp:
             destination = Path(tmp) / "skills"
@@ -148,7 +217,9 @@ class InstallSafetyTest(unittest.TestCase):
             second = self._run_real_install(destination)
 
             self.assertEqual(second.returncode, 0, second.stderr)
-            self.assertEqual(second.stdout.count("installed (stamp v0.9.0)"), 5)
+            self.assertEqual(
+                second.stdout.count(f"installed (stamp v{VERSION})"), len(SKILLS)
+            )
             self.assertNotIn("⚠", second.stdout)
             self.assertFalse(stale_file.exists())
             self._assert_no_install_artifacts(destination)
@@ -163,19 +234,7 @@ class InstallSafetyTest(unittest.TestCase):
             marker.write_text("old\n")
             wrapper_dir = root / "bin"
             wrapper_dir.mkdir()
-            real_mv = shutil.which("mv")
-            self.assertIsNotNone(real_mv)
-            if real_mv is None:
-                self.fail("mv executable not found")
-            wrapper = wrapper_dir / "mv"
-            wrapper.write_text(
-                "#!/usr/bin/env bash\n"
-                'case "$*" in\n'
-                '  *".coding-standards.tmp."*"/coding-standards") exit 1 ;;\n'
-                "esac\n"
-                f"exec {shlex.quote(real_mv)} \"$@\"\n"
-            )
-            wrapper.chmod(0o755)
+            self._write_failing_coding_standards_mv(wrapper_dir)
 
             result = self._run_real_install(
                 destination, PATH=f"{wrapper_dir}:{os.environ['PATH']}"
@@ -183,6 +242,46 @@ class InstallSafetyTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 1)
             self.assertIn("restoring previous copy", result.stderr)
+            self.assertEqual(marker.read_text(), "old\n")
+            self._assert_no_install_artifacts(destination)
+
+    def test_orphaned_previous_copy_is_recovered_before_normal_install(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "skills"
+            orphan = destination / ".coding-standards.prev.123"
+            orphan.mkdir(parents=True)
+            (orphan / "PREVIOUS_INSTALL").write_text("old\n")
+
+            result = self._run_real_install(destination)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                "recovered previous copy from interrupted install", result.stdout
+            )
+            installed_skill = destination / "coding-standards" / "SKILL.md"
+            self.assertIn(f"**Version:** {VERSION}", installed_skill.read_text())
+            self._assert_no_install_artifacts(destination)
+
+    def test_orphaned_previous_copy_survives_failed_staged_move(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            destination = root / "skills"
+            orphan = destination / ".coding-standards.prev.123"
+            orphan.mkdir(parents=True)
+            (orphan / "PREVIOUS_INSTALL").write_text("old\n")
+            wrapper_dir = root / "bin"
+            wrapper_dir.mkdir()
+            self._write_failing_coding_standards_mv(wrapper_dir)
+
+            result = self._run_real_install(
+                destination, PATH=f"{wrapper_dir}:{os.environ['PATH']}"
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(
+                "recovered previous copy from interrupted install", result.stdout
+            )
+            marker = destination / "coding-standards" / "PREVIOUS_INSTALL"
             self.assertEqual(marker.read_text(), "old\n")
             self._assert_no_install_artifacts(destination)
 
