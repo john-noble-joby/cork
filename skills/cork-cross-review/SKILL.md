@@ -50,7 +50,8 @@ python3 "$CORK_HOME/orchestrate.py" --version
 # PENDING PR #11 (0.10.0, merging separately) — not in this release:
 #   python3 "$CORK_HOME/orchestrate.py" auth status   # Copilot token source + per-harness login state
 # Until it merges, `preflight` is the login check: it prints one line per ENABLED harness —
-# `<harness>: live (<detail>)` / `logged-out — run <login command>` / `not installed` (0.12.0).
+# `<harness>: live (<detail>)` / `logged-out — run <login command>` / `not installed` /
+# `unavailable (<reason>)` when the probe itself failed or timed out (0.12.0).
 python3 "$CORK_HOME/orchestrate.py" preflight          # the lanes that will actually run on this seat
 ```
 
@@ -60,7 +61,7 @@ python3 "$CORK_HOME/orchestrate.py" preflight          # the lanes that will act
 | Kind | Example refs | What it is | Auth it needs |
 |---|---|---|---|
 | API (Copilot-hosted) | `copilot/gpt-5.6-sol`, `copilot/claude-opus-4.7`, `copilot/gemini-3.1-pro-preview` | Stateless call — sees only diff + changed files + standards | `cork login` (one Copilot seat covers all of these) |
-| Harness (agentic) | `codex/gpt-5.6-sol`, `claude/claude-opus-4.7` (0.11.0), `opencode/github-copilot/gpt-5.5`, `pi/glm-internal/glm-5.3-onprem` (0.12.0) | Locally installed coding-agent CLI run read-only inside the scratch worktree — can read callers, run `git show`, verify | Each CLI's own vendor login (`codex login`, `claude auth login`, `opencode auth login`, pi `/login` or `GLM_API_KEY`) |
+| Harness (agentic) | `codex/gpt-5.6-sol`, `claude/claude-opus-4.7` (0.11.0), `opencode/github-copilot/gpt-5.5`, `pi/glm-internal/glm-5.3-onprem` (0.12.0) | Locally installed coding-agent CLI run read-only inside the scratch worktree — can read callers, run `git show`, verify | Each CLI's own vendor login (`codex login`, `claude auth login`, `opencode auth login`, pi then `/login` — or the provider's API-key env var, e.g. `GLM_API_KEY` for a LiteLLM/GLM provider; preflight prints the login command verbatim) |
 
 Harness lanes are **opt-in**: a default install's rotation holds only Copilot API lanes, so
 preflight prints none of them and this skill silently degrades to API-only. Enable each one in
