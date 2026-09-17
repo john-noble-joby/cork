@@ -231,12 +231,7 @@ cork file and the read-only opencode fallback are not refreshable; run
 ### Using your Copilot seat for the Codex lane
 
 Codex CLI 0.146 can use cork's resolved Copilot credential through a custom Responses
-provider. Export `CORK_HOME` in the environment that starts Codex, then add this to
-`~/.codex/config.toml`:
-
-```bash
-export CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-```
+provider. Add this to `~/.codex/config.toml`:
 
 ```toml
 [model_providers.copilot]
@@ -247,17 +242,18 @@ http_headers = { "x-initiator" = "user", "Openai-Intent" = "conversation-edits",
 
 [model_providers.copilot.auth]
 command = "sh"
-args = ["-c", 'python3 "$CORK_HOME/orchestrate.py" auth print-token']
+args = ["-c", 'python3 "${CORK_HOME:-$HOME/dev/cork}/orchestrate.py" auth print-token']
 refresh_interval_ms = 300000
 ```
 
 The five-minute refresh interval makes Codex rerun the helper; cork's resolver applies the
 same `CORK_COPILOT_TOKEN` → cork auth file → opencode fallback precedence as reviews and
 refreshes an expired, refreshable cork token before printing it. Verify the source first with
-`python3 "$CORK_HOME/orchestrate.py" auth status`.
+`python3 "${CORK_HOME:-$HOME/dev/cork}/orchestrate.py" auth status`.
 
 For a cork Codex harness lane, select the provider through `extra_args` and use a
-`codex/<model>` rotation ref:
+`codex/<model>` rotation ref. This configuration requires the harness reviewer lanes
+(cork 0.11+); on 0.10.x this config fails validation.
 
 ```json
 {

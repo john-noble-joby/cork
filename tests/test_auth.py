@@ -354,6 +354,27 @@ class AuthRefreshTest(unittest.TestCase):
                     orchestrate.cmd_auth_print_token()
                 self.assertEqual(out.getvalue(), f"{token}\n")
 
+    def test_auth_print_token_env_real_resolver_has_exact_stdout(self):
+        token = "ENV_TOKEN"
+        os.environ["CORK_COPILOT_TOKEN"] = token
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                orchestrate.cmd_auth_print_token()
+        finally:
+            os.environ.pop("CORK_COPILOT_TOKEN", None)
+        self.assertEqual(out.getvalue(), f"{token}\n")
+
+    def test_auth_print_token_opencode_real_resolver_has_exact_stdout(self):
+        token = "OPENCODE_TOKEN"
+        self.oc.write_text(json.dumps({
+            "github-copilot": {"access": token, "expires": 9_999_999_999_000},
+        }))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            orchestrate.cmd_auth_print_token()
+        self.assertEqual(out.getvalue(), f"{token}\n")
+
     def test_auth_print_token_refreshes_expired_cork_token(self):
         orchestrate._now = lambda: 10000.0
         self.cork.write_text(json.dumps(
