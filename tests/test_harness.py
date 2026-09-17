@@ -80,6 +80,22 @@ class ArgvTest(HarnessBase):
         self.assertEqual(argv[-3:], ["--foo", "-s", "read-only"])  # extra_args before read-only
         self.assertEqual(kw["timeout"], 30)
 
+    def test_explicit_timeout_overrides_config(self):
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        orchestrate._harness_call("codex", "m", "S", "U", "/repo", timeout=7)
+        self.assertEqual(fake.calls[0][1]["timeout"], 7)
+
+    def test_empty_system_still_passes_system_flag(self):
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        orchestrate._harness_call("claude", "m", "", "U", "/repo")
+        self.assertIn("--system-prompt", fake.calls[0][0])
+
+    def test_empty_repo_fails_before_running(self):
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        with self.assertRaises(SystemExit):
+            orchestrate._harness_call("codex", "m", "S", "U", "")
+        self.assertEqual(fake.calls, [])
+
     def test_prompt_via_arg_path(self):
         orchestrate.HARNESSES["argtool"] = {**orchestrate.HARNESSES["codex"], "prompt_via": "arg"}
         try:
@@ -127,6 +143,50 @@ class FailurePathTest(HarnessBase):
         self.assertEqual(fake.calls[0][1]["cwd"], "/repo")
 
 
+class ApiRoutingUnaffectedTest(HarnessBase):
+    # The false arm of every new `provider in HARNESSES` gate: API providers must
+    # never touch subprocess.run or shutil.which.
+    def setUp(self):
+        super().setUp()
+        orchestrate.subprocess.run = lambda *a, **k: self.fail("harness path taken")
+        orchestrate.shutil.which = lambda b: self.fail("harness path taken")
+        self._calls = (orchestrate._openai_compatible_call, orchestrate._anthropic_call,
+                       orchestrate._call_and_extract, orchestrate._provider_token_available)
+
+    def tearDown(self):
+        (orchestrate._openai_compatible_call, orchestrate._anthropic_call,
+         orchestrate._call_and_extract, orchestrate._provider_token_available) = self._calls
+        super().tearDown()
+
+    def test_call_and_extract_copilot_and_anthropic(self):
+        orchestrate._openai_compatible_call = lambda *a, **k: (
+            200, {"choices": [{"message": {"content": "chat-ok"}}]})
+        orchestrate._anthropic_call = lambda *a, **k: (
+            200, {"content": [{"type": "text", "text": "anth-ok"}]})
+        self.assertEqual(orchestrate._call_and_extract("copilot", "gpt-4.1", "S", "U"),
+                         (200, "chat-ok"))
+        self.assertEqual(orchestrate._call_and_extract("anthropic", "claude-x", "S", "U"),
+                         (200, "anth-ok"))
+
+    def test_probe_api_provider_uses_http_probe(self):
+        seen = []
+        orchestrate._call_and_extract = lambda p, m, s, u, max_out=None, repo="": (
+            seen.append((p, m, max_out)) or (200, "ok"))
+        self.assertEqual(orchestrate._probe("copilot", "gpt-4.1"), "ok")
+        self.assertEqual(seen, [("copilot", "gpt-4.1", 16)])
+
+    def test_eligible_rotation_api_missing_token_wording(self):
+        import io
+        from contextlib import redirect_stdout
+        orchestrate._provider_token_available = lambda p: False
+        cfg = {"providers": {}, "rotation": [{"provider": "copilot", "model": "m"}]}
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(orchestrate._eligible_rotation(cfg), [])
+        self.assertIn("no copilot token", buf.getvalue())
+        self.assertNotIn("binary", buf.getvalue())
+
+
 class ConfigAndProbeTest(HarnessBase):
     def test_validate_accepts_harness_and_rejects_unknown(self):
         orchestrate._validate_config({"rotation": [{"provider": "claude", "model": "x"},
@@ -139,6 +199,7 @@ class ConfigAndProbeTest(HarnessBase):
         orchestrate._validate_config({**base, "providers": {"codex": {
             "enabled": True, "bin": "/opt/codex", "extra_args": ["--a"], "timeout": 60.5}}})
         for bad in ({"timeout": None}, {"timeout": 0}, {"timeout": "30"}, {"timeout": True},
+                    {"timeout": float("inf")}, {"timeout": float("nan")},
                     {"extra_args": "--a"}, {"extra_args": [1]}, {"bin": ""}, {"bin": 3}, "str"):
             with self.assertRaises(SystemExit, msg=repr(bad)):
                 orchestrate._validate_config({**base, "providers": {"codex": bad}})
@@ -146,6 +207,27 @@ class ConfigAndProbeTest(HarnessBase):
     def test_default_config_has_harnesses_disabled(self):
         for h in orchestrate.HARNESSES:
             self.assertFalse(orchestrate.DEFAULT_CONFIG["providers"][h]["enabled"])
+
+    def test_harness_absent_from_providers_is_not_eligible(self):
+        orchestrate.shutil.which = lambda b: "/usr/bin/" + b
+        cfg = {"providers": {}, "rotation": [{"provider": "codex", "model": "m"},
+                                             {"provider": "claude", "model": "m"}]}
+        self.assertEqual(orchestrate._eligible_rotation(cfg), [])
+        cfg["providers"] = {"codex": {"enabled": True}}
+        self.assertEqual(orchestrate._eligible_rotation(cfg), [{"provider": "codex", "model": "m"}])
+
+    def test_table_only_lane_is_data_only(self):
+        # A future lane added ONLY to HARNESSES must validate and default to disabled.
+        orchestrate.HARNESSES["opencode"] = {**orchestrate.HARNESSES["codex"], "bin": "opencode",
+                                             "bin_env": "CORK_OPENCODE_BIN"}
+        orchestrate.shutil.which = lambda b: "/usr/bin/" + b
+        try:
+            cfg = {"providers": {}, "rotation": [{"provider": "opencode", "model": "m"}]}
+            orchestrate._validate_config(cfg)
+            self.assertEqual(orchestrate._eligible_rotation(cfg), [])
+            self.assertTrue(orchestrate._provider_token_available("opencode"))
+        finally:
+            del orchestrate.HARNESSES["opencode"]
 
     def test_token_available_and_probe_follow_which(self):
         orchestrate.shutil.which = lambda b: "/usr/bin/" + b

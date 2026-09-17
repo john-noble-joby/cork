@@ -35,6 +35,7 @@ import contextlib
 import copy
 import fcntl
 import json
+import math
 import os
 import re
 import shutil
@@ -113,8 +114,7 @@ DEFAULT_CONFIG = {
         "copilot":   {"enabled": True},
         "openai":    {"enabled": False},
         "anthropic": {"enabled": False},
-        "claude":    {"enabled": False},
-        "codex":     {"enabled": False},
+        **{h: {"enabled": False} for h in HARNESSES},  # harness lanes are opt-in
     },
     "rotation": [
         {"provider": "copilot", "model": "gpt-5.5"},
@@ -526,8 +526,9 @@ def _validate_harness_cfg(name: str, hc: dict) -> None:
     if not isinstance(ea, list) or not all(isinstance(a, str) for a in ea):
         fail(f"config.providers.{name}.extra_args must be a list of strings")
     t = hc.get("timeout", 1)
-    if isinstance(t, bool) or not isinstance(t, (int, float)) or t <= 0:
-        fail(f"config.providers.{name}.timeout must be a positive number of seconds")
+    if (isinstance(t, bool) or not isinstance(t, (int, float))
+            or not math.isfinite(t) or t <= 0):
+        fail(f"config.providers.{name}.timeout must be a positive finite number of seconds")
 
 
 def load_config(quiet: bool = False) -> dict:
@@ -839,7 +840,7 @@ def _harness_bin(provider: str) -> str:
 def _harness_argv(spec: dict, model: str, repo: str, system: str) -> list[str]:
     sub = {"model": model, "repo": repo}
     argv = [spec["bin"], *(a.format(**sub) for a in spec["argv"])]
-    if spec["system_flag"] and system:
+    if spec["system_flag"]:
         argv += [spec["system_flag"], system]
     # read-only flags go LAST so user extra_args cannot out-rank them on last-wins parsers
     return argv + list(spec["extra_args"]) + list(spec["read_only"])
@@ -848,6 +849,8 @@ def _harness_argv(spec: dict, model: str, repo: str, system: str) -> list[str]:
 def _harness_call(provider: str, model: str, system: str, user_msg: str,
                   repo: str, timeout: int | None = None) -> tuple[int, str]:
     # Exit 0 -> (200, stdout). Anything else -> (non-200, diagnostic). One attempt.
+    if not repo:
+        fail(f"{provider} harness review needs a repo path (cwd for the reviewer)")
     spec = _harness_settings(provider)
     timeout = timeout or spec["timeout"]
     prompt = user_msg if spec["system_flag"] else (
@@ -858,7 +861,7 @@ def _harness_call(provider: str, model: str, system: str, user_msg: str,
     else:
         argv.append(prompt); run_kw = {"stdin": subprocess.DEVNULL}
     try:
-        r = subprocess.run(argv, cwd=repo or None, capture_output=True, text=True,
+        r = subprocess.run(argv, cwd=repo, capture_output=True, text=True,
                            timeout=timeout, **run_kw)
     except subprocess.TimeoutExpired:
         return 504, f"{provider} timed out after {timeout}s"
@@ -922,7 +925,9 @@ def _eligible_rotation(cfg: dict) -> list[dict]:
     for entry in cfg.get("rotation", []):
         provider = entry["provider"]
         model    = entry["model"]
-        enabled  = providers_cfg.get(provider, {}).get("enabled", True)
+        # API providers default on (back-compat); harness lanes default OFF so a
+        # rotation entry alone never runs a local CLI without explicit opt-in.
+        enabled  = providers_cfg.get(provider, {}).get("enabled", provider not in HARNESSES)
         if not enabled:
             print(f"  ✗ {provider}/{model} skipped (provider disabled)", flush=True)
             continue

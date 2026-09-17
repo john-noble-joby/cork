@@ -174,8 +174,8 @@ and supply its token via `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` (or keys `"opena
 ### Harness reviewers (`claude`, `codex`)
 
 Besides API providers, cork can drive a **locally installed coding-agent CLI** as an
-independent, read-only reviewer. It receives exactly what an API model gets — the
-standards as the system prompt, the story + changed files + diff as the user message —
+independent, read-only reviewer. It receives the same review inputs as an API model —
+the standards, the story, the changed files and the diff (delivery per harness, see below) —
 and its stdout is consumed as the findings. Same `--review-model provider/model` syntax,
 same rotation/preflight/consolidation. Harnesses are disabled by default; enable one in
 `config.json` and add rotation entries:
