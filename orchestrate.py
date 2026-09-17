@@ -23,6 +23,7 @@ Usage:
     python orchestrate.py <TICKET-ID> <repo-path> [options]
     python orchestrate.py ENG-123 ~/dev/edge-fmt --base-branch origin/develop
     python orchestrate.py auth status [--json]
+    python orchestrate.py auth print-token [--json]
     python orchestrate.py --version        # print "cork X.Y.Z (<git-sha>)"
 
 Requirements:
@@ -1389,6 +1390,17 @@ def cmd_auth_status(as_json: bool = False) -> None:
         fail(f"Copilot auth probe failed ({verdict}) for copilot/{model}; retry later.")
 
 
+def cmd_auth_print_token(as_json: bool = False) -> None:
+    token, source, expires_at, _ = _resolve_copilot_auth()
+    if token is None:
+        fail(_unusable_copilot_token_message(source))
+    if as_json:
+        print(json.dumps({"token": token, "source": source, "expires_at": expires_at},
+                         sort_keys=True))
+        return
+    print(token)
+
+
 def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True) -> None:
     provider, model = _split_model_ref(model_ref)
     if validate:
@@ -1479,10 +1491,13 @@ def main() -> None:
     if len(sys.argv) >= 2 and sys.argv[1] == "auth":
         sub = sys.argv[2] if len(sys.argv) >= 3 else ""
         rest = sys.argv[3:]
-        if sub != "status" or any(arg != "--json" for arg in rest):
-            print("usage: orchestrate.py auth status [--json]", file=sys.stderr)
+        if sub not in ("status", "print-token") or any(arg != "--json" for arg in rest):
+            print("usage: orchestrate.py auth status|print-token [--json]", file=sys.stderr)
             raise SystemExit(2)
-        cmd_auth_status(as_json="--json" in rest)
+        if sub == "status":
+            cmd_auth_status(as_json="--json" in rest)
+        else:
+            cmd_auth_print_token(as_json="--json" in rest)
         return
     if len(sys.argv) >= 2 and sys.argv[1] in ("--version", "-V", "version"):
         print(_version())
@@ -1530,6 +1545,7 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=("Standalone commands:\n"
                 "  auth status [--json]  Show Copilot credential source and verify it\n"
+                "  auth print-token [--json]  Print the resolved Copilot credential\n"
                 "  login                 Give cork its own refreshable Copilot token\n"
                 "  preflight             Probe the configured model rotation\n"
                 "  config ...            Show or edit cork configuration\n"

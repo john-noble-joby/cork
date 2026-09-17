@@ -21,6 +21,15 @@ change, and add a section here.
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-09-17
+
+### Added
+- **One cork login can authenticate the local Codex reviewer lane.** `auth print-token`
+  exposes the resolved, automatically refreshed Copilot credential as exact plain text or
+  structured JSON for Codex's command-backed provider auth. The README documents the verified
+  Codex 0.146 custom Responses provider, static Copilot headers, refresh interval, and lane
+  selection, including the unsupported-integration and subprocess-pipe security caveats.
+
 ## [0.10.0] — 2026-09-17
 
 ### Added
