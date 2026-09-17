@@ -21,6 +21,21 @@ change, and add a section here.
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-09-17
+
+### Added
+- **`auth status [--json]` makes Copilot credential ownership visible.** It reports the
+  resolved source and path, expiry, refreshability, and one cheap API probe, exiting nonzero
+  when no credential resolves or the probe fails.
+
+### Changed
+- Preflight now identifies the credential source before model results and warns when cork is
+  silently borrowing opencode auth or using another non-refreshable source. Missing-token and
+  401/403 failures name the relevant source and point to the exact `login` command; expired
+  token-only cork files no longer count as provider availability.
+- `cork-setup` now gates setup on structured auth status and prompts for cork-owned,
+  refreshable credentials instead of inferring token ownership from successful model probes.
+
 ## [0.8.3] — 2026-08-03
 
 ### Fixed
