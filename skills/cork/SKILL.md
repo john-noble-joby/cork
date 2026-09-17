@@ -152,6 +152,8 @@ Each `--review-model` call is stateless and read-only — it only prints finding
 Merge the self-review and every model's findings into a single markdown report:
 
 - **Group by severity:** Critical / Important / Minor / Nits.
+- **Promotion candidates:** its own section — what should move to central/shared
+  configuration or version management, with scope and one-time migration cost S/M/L.
 - **Spec conformance:** its own section, per reviewer, never merged into the severity groups; "no spec available" if every reviewer said so.
 - **Per finding:** `path:line` · description · suggested fix · **flagged by** (which reviewers — e.g. `gpt-4.1, opus, self`). Keep overlap as a confidence signal: something 4/5 reviewers caught is high-confidence; a lone flag is weaker.
 - **Dedupe:** merge near-identical findings across models into one entry rather than repeating them.

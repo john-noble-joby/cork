@@ -51,13 +51,13 @@ change, and add a section here.
 - The pipeline's self-review prompt now carries the implementer's summary as `## Story / Task`
   so the spec-conformance axis is actionable there; `standards/AGENTS.md` mirrors the skill's
   remaining universal smells and test rules.
-- The API reviewer's fallback system prompt (used when no standards are injected) now
-  requests the `## Spec conformance` section too, so every review path produces the same
-  report shape.
+- The spec-conformance instruction is appended to the API reviewer's system prompt on
+  every path (custom instructions or fallback), so every review produces the same report
+  shape.
 
 ### Fixed
 - Review diffs are now merge-base (`git diff <base>...HEAD`) in `orchestrate.py` and the cork skill's self-review, and the base ref (a reachable commit) and its merge base with HEAD are validated up front in every mode (review-only, full run, seed-only) — a bad `--base-branch` fails before any implementation step runs, and a base branch that advanced after forking no longer leaks base-only changes into the review. The review-only path also checks for an empty diff before contacting any provider, and the cork skill's Step 0 fails fast on an unresolvable base, missing merge base, or empty diff before fanning out.
-- `install.sh` now replaces each installed skill directory instead of merging into it, so files removed upstream don't linger after an upgrade.
+- `install.sh` now replaces each installed skill directory instead of merging into it, so files removed upstream don't linger after an upgrade, and stages each skill into a temp dir first, so an interrupted copy leaves the previous install intact.
 
 ## [0.8.3] — 2026-08-03
 

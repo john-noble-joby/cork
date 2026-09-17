@@ -11,6 +11,8 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
 VERSION="$(tr -d '[:space:]' < "$REPO/VERSION")"
 SKILLS=(coding-standards copilot-review-loop cork cork-setup devit)
+: "${DEST:?DEST must not be empty}"
+mkdir -p -- "$DEST"
 
 echo "Installing cork skills v$VERSION → $DEST"
 echo
@@ -28,13 +30,17 @@ for s in "${SKILLS[@]}"; do
     rc=1
   fi
 
-  : "${DEST:?DEST must not be empty}" "${s:?skill name must not be empty}"
+  : "${s:?skill name must not be empty}"
+  tmp="$(mktemp -d -- "$DEST/.$s.tmp.XXXXXX")"
+  if ! cp -r -- "$REPO/skills/$s/." "$tmp/"; then
+    rm -rf -- "$tmp"
+    exit 1
+  fi
   if [ -L "$DEST/$s" ]; then
     echo "  ⚠ $s: $DEST/$s is a symlink — replacing it with a copy"
   fi
   rm -rf -- "$DEST/$s"
-  mkdir -p -- "$DEST/$s"
-  cp -r -- "$REPO/skills/$s/." "$DEST/$s/"
+  mv -- "$tmp" "$DEST/$s"
   echo "  ✓ $s installed (stamp v${stamp:-?})"
 done
 

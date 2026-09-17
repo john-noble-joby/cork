@@ -132,7 +132,9 @@ harnesses share the installed skill:
 
 The **effective** rubric for a repo is:
 
-  cork's universal default  +  that repo's own `code-review/AGENTS.md` (if present)
+  cork's universal default  +  the repo's own standards file (first match of
+  `code-review/AGENTS.md`, `code-review/agent.md`, `AGENTS.md`, `agent.md`,
+  `.github/AGENTS.md`)
 
 - **Use the default** (on by default): nothing to do — every review/implementation carries
   the baseline.

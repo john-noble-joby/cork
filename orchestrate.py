@@ -94,13 +94,16 @@ DEFAULT_CONFIG = {
 }
 
 REVIEW_SYSTEM = """\
-You are a senior code reviewer. For each issue output exactly:
+You are a senior code reviewer. For each issue in the main list output exactly:
 FILE: <path> | LINE: <n> | ISSUE: <description> | FIX: <suggestion>
 Be specific. Reference exact file paths and line numbers.
 Cover: correctness, error handling, edge cases,
-style consistency with surrounding code, test coverage.
+style consistency with surrounding code, test coverage.\
+"""
 
-Also report spec conformance as its own section: under `## Spec conformance`, list
+SPEC_CONFORMANCE_SUFFIX = """\
+After the issue list, add a separate free-form section headed `## Spec conformance`
+(not issue records): list
 (a) requirements in the Story / Task that are missing or partial, (b) behaviour in
 the diff that wasn't asked for, (c) requirements that look implemented but wrong —
 quoting the story line for each. If the Story / Task states no checkable requirements,
@@ -914,7 +917,7 @@ def review(provider: str, model: str, instructions: str, story: str,
            diff: str, files: dict[str, str],
            char_budget: int = _DEFAULT_CHAR_BUDGET,
            max_attempts: int = 3) -> str:
-    system = (
+    review_system = (
         instructions + "\n\n---\n"
         "Note: you are a single-pass API reviewer — you cannot spawn "
         "sub-agents or invoke skills. Apply the standards in one pass and "
@@ -922,6 +925,7 @@ def review(provider: str, model: str, instructions: str, story: str,
         "findings only."
         if instructions else REVIEW_SYSTEM
     )
+    system = review_system + "\n\n" + SPEC_CONFORMANCE_SUFFIX
     fixed_chars = len(system) + len(story) + len(diff) + 500
     file_block, n_included = _budget_files(files, max(0, char_budget - fixed_chars))
     if n_included < len(files):

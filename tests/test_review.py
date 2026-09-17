@@ -211,18 +211,25 @@ class ReviewDiffTest(unittest.TestCase):
         self.assertIn("Spec conformance sections", fix_prompt)
         self.assertIn("do NOT delete behaviour flagged as unrequested", fix_prompt)
 
-    def test_review_fallback_requests_spec_conformance(self):
-        with patch.object(
-            orchestrate, "_call_and_extract", return_value=(200, "review output")
-        ) as call_api:
-            result = orchestrate.review(
-                "copilot", "model", "", "Implement the widget", "diff", {}
-            )
+    def test_review_system_prompt_carries_spec_axis_with_custom_instructions(self):
+        for instructions in ("Custom project rules", ""):
+            with self.subTest(instructions=instructions):
+                with patch.object(
+                    orchestrate, "_call_and_extract", return_value=(200, "review output")
+                ) as call_api:
+                    result = orchestrate.review(
+                        "copilot", "model", instructions,
+                        "Implement the widget", "diff", {}
+                    )
 
-        self.assertEqual(result, "review output")
-        system = call_api.call_args.args[2]
-        self.assertIn("## Spec conformance", system)
-        self.assertIn("no spec available", system)
+                self.assertEqual(result, "review output")
+                system = call_api.call_args.args[2]
+                self.assertIn("## Spec conformance", system)
+                self.assertIn("no spec available", system)
+                if instructions:
+                    self.assertIn(instructions, system)
+                else:
+                    self.assertIn("For each issue in the main list", system)
 
 
 if __name__ == "__main__":
