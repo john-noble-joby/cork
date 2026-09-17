@@ -38,7 +38,7 @@ class ArgvTest(HarnessBase):
         argv, kw = fake.calls[0]
         self.assertEqual(argv, ["codex", "exec", "-m", "gpt-5.6-sol", "--ephemeral",
                                 "--skip-git-repo-check", "-C", "/repo", "--color", "never", "-",
-                                "-s", "read-only"])
+                                "-s", "read-only"])  # sandbox flag last
         self.assertEqual(kw["cwd"], "/repo")
         self.assertEqual(kw["timeout"], 900)
         # no system flag -> standards prepended to the stdin body with a separator
@@ -51,17 +51,22 @@ class ArgvTest(HarnessBase):
         orchestrate._harness_call("claude", "claude-opus-4.7", "SYS", "USER", "/repo")
         argv, kw = fake.calls[0]
         self.assertEqual(argv, ["claude", "-p", "--no-session-persistence", "--output-format",
-                                "text", "--model", "claude-opus-4.7", "--tools", "Read,Grep,Glob",
-                                "--permission-mode", "plan", "--system-prompt", "SYS"])
+                                "text", "--model", "claude-opus-4.7", "--system-prompt", "SYS",
+                                "--safe-mode", "--restricted", "--tools", "Read,Grep,Glob",
+                                "--permission-mode", "plan"])
         self.assertEqual(kw["input"], "USER")  # system NOT duplicated into the body
-        self.assertNotIn("--bare", argv)       # OAuth seat: --bare would refuse to log in
+        self.assertNotIn("--bare", argv)       # --bare refuses OAuth logins; --safe-mode keeps auth
         self.assertNotIn("Bash", ",".join(argv))
 
-    def test_claude_bare_only_with_api_key(self):
-        os.environ["ANTHROPIC_API_KEY"] = "sk-test"
+    def test_config_cannot_override_read_only_or_argv(self):
+        orchestrate.CONFIG_PATH.write_text('{"rotation":[{"provider":"codex","model":"m"}],'
+                                           '"providers":{"codex":{"enabled":true,"read_only":[],'
+                                           '"argv":["exec"],"system_flag":"--x"}}}')
         fake = _FakeRun(); orchestrate.subprocess.run = fake
-        orchestrate._harness_call("claude", "m", "SYS", "USER", "/repo")
-        self.assertIn("--bare", fake.calls[0][0])
+        orchestrate._harness_call("codex", "m", "S", "U", "/repo")
+        argv = fake.calls[0][0]
+        self.assertEqual(argv[-2:], ["-s", "read-only"]); self.assertIn("--ephemeral", argv)
+        self.assertNotIn("--x", argv)
 
     def test_bin_env_and_extra_args_and_timeout_from_config(self):
         os.environ["CORK_CODEX_BIN"] = "/opt/codex"
@@ -72,7 +77,7 @@ class ArgvTest(HarnessBase):
         orchestrate._harness_call("codex", "m", "S", "U", "/repo")
         argv, kw = fake.calls[0]
         self.assertEqual(argv[0], "/opt/codex")
-        self.assertEqual(argv[-1], "--foo")
+        self.assertEqual(argv[-3:], ["--foo", "-s", "read-only"])  # extra_args before read-only
         self.assertEqual(kw["timeout"], 30)
 
     def test_prompt_via_arg_path(self):
