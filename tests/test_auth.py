@@ -284,11 +284,29 @@ class AuthRefreshTest(unittest.TestCase):
             {"token": "OLD", "refresh_token": "REFRESH", "expires_at": 5000}))
         auth_dir = Path(self.tmp.name)
         auth_dir.chmod(0o500)
+        err = io.StringIO()
         try:
-            with self.assertRaises(OSError):
+            with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as raised:
                 orchestrate._provider_token_available("copilot")
         finally:
             auth_dir.chmod(0o700)
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn(f"Cannot write {self.cork}.lock:", err.getvalue())
+
+    def test_merge_write_error_fails_at_file_boundary(self):
+        self.cork.write_text(json.dumps({"token": "OLD"}))
+        original = orchestrate.tempfile.mkstemp
+        def cannot_create(*args, **kwargs):
+            raise OSError("read-only directory")
+        orchestrate.tempfile.mkstemp = cannot_create
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as raised:
+                orchestrate._merge_and_write_auth({"token": "NEW"})
+        finally:
+            orchestrate.tempfile.mkstemp = original
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn(f"Cannot write {self.cork}: read-only directory", err.getvalue())
 
     def test_provider_availability_reports_malformed_cork_file(self):
         self.cork.write_text("{ malformed")
@@ -430,10 +448,21 @@ class AuthRefreshTest(unittest.TestCase):
                  if entry["provider"] == "copilot"),
         )
 
+    def test_auth_probe_model_falls_back_when_rotation_has_no_copilot(self):
+        orchestrate.load_config = lambda quiet=False: {
+            "providers": {"copilot": {"enabled": True}},
+            "rotation": [{"provider": "openai", "model": "native-only"}],
+        }
+        self.assertEqual(
+            orchestrate._auth_probe_model(),
+            next(entry["model"] for entry in orchestrate.DEFAULT_CONFIG["rotation"]
+                 if entry["provider"] == "copilot"),
+        )
+
     def test_login_command_is_directly_runnable(self):
         self.assertEqual(
             orchestrate._LOGIN_COMMAND,
-            f"python3 {Path(orchestrate.__file__).resolve()} login",
+            f"python3 {orchestrate.shlex.quote(str(Path(orchestrate.__file__).resolve()))} login",
         )
         self.assertNotIn("$", orchestrate._LOGIN_COMMAND)
 

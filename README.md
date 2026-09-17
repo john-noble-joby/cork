@@ -174,10 +174,10 @@ Cork picks reviewers at runtime. The ranked candidate list and desired count liv
 `rotation` is the ranked preference list; `count` is how many reviewers to actually run.
 `preflight` probes each entry in order, drops the unreachable ones, and selects the first
 `count` survivors (errors only if none survive). Before probing, preflight names the active
-Copilot credential source and warns when cork is using an environment override, a token-only
-file, or opencode fallback. Auth failures (401/403) are fatal and name the rejected source plus
-the `login` recovery command. `gpt-5.x`/codex are reached via Copilot's `/responses` endpoint
-automatically; everything else uses `/chat/completions`.
+Copilot credential source. Environment overrides are informational; warnings are reserved for
+a non-refreshable cork file or the opencode fallback. Auth failures (401/403) are fatal and name
+the rejected source plus the `login` recovery command. `gpt-5.x`/codex are reached via
+Copilot's `/responses` endpoint automatically; everything else uses `/chat/completions`.
 
 **Providers:** Copilot is the default and recommended path (one flat-rate seat). `openai`
 and `anthropic` are supported but disabled by default; enable a provider in `config.json`

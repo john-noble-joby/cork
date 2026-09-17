@@ -38,6 +38,7 @@ import fcntl
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -105,7 +106,7 @@ style consistency with surrounding code, test coverage.\
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 _TOKEN_SKEW = 300  # refresh this many seconds before the stored expiry
-_LOGIN_COMMAND = f"python3 {Path(__file__).resolve()} login"
+_LOGIN_COMMAND = f"python3 {shlex.quote(str(Path(__file__).resolve()))} login"
 
 
 def _now() -> float:  # seam so tests can control time without patching the time module
@@ -133,10 +134,22 @@ def _auth_lock() -> Iterator[None]:
     # parallel review fan-out (or an overlapping login) can't race the one-use
     # refresh token or cross-write the temp file.
     lock = _CORK_AUTH.with_name(_CORK_AUTH.name + ".lock")
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(lock, os.O_WRONLY | os.O_CREAT, 0o600)
-    with os.fdopen(fd, "w") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
+    try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock, os.O_WRONLY | os.O_CREAT, 0o600)
+    except OSError as e:
+        fail(f"Cannot write {lock}: {e}")
+    try:
+        lock_file = os.fdopen(fd, "w")
+    except OSError as e:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        fail(f"Cannot write {lock}: {e}")
+    with lock_file:
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+        except OSError as e:
+            fail(f"Cannot write {lock}: {e}")
         yield
 
 
@@ -170,15 +183,22 @@ def _merge_and_write_auth(fields: dict) -> None:
             data[k] = fields[k]
         else:
             data.pop(k, None)  # a token-only response clears a stale refresh/expiry
-    _CORK_AUTH.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(_CORK_AUTH.parent),
-                               prefix=_CORK_AUTH.name + ".", suffix=".tmp")
+    tmp: str | None = None
     try:
+        _CORK_AUTH.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(_CORK_AUTH.parent),
+                                   prefix=_CORK_AUTH.name + ".", suffix=".tmp")
         with os.fdopen(fd, "w") as f:
             f.write(json.dumps(data, indent=2) + "\n")
         os.replace(tmp, _CORK_AUTH)  # mkstemp already created it 0o600
+    except OSError as e:
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                Path(tmp).unlink(missing_ok=True)
+        fail(f"Cannot write {_CORK_AUTH}: {e}")
     except BaseException:
-        Path(tmp).unlink(missing_ok=True)
+        if tmp is not None:
+            Path(tmp).unlink(missing_ok=True)
         raise
 
 
