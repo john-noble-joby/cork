@@ -378,6 +378,7 @@ class AuthRefreshTest(unittest.TestCase):
             "model_not_supported": "not supported on this seat",
             "integrator_mismatch": "unavailable to this integrator",
             "timeout": "timed out",
+            "connection": "could not connect",
             "other": "retry later",
         }
         for verdict, message in expected.items():
@@ -392,6 +393,14 @@ class AuthRefreshTest(unittest.TestCase):
                                  {"status": "fail", "reason": verdict})
                 self.assertIn(message, err.getvalue())
                 self.assertNotIn(orchestrate._LOGIN_COMMAND, err.getvalue())
+
+    def test_auth_status_text_reports_probe_failure_reason(self):
+        os.environ["CORK_COPILOT_TOKEN"] = "ENV"
+        orchestrate._probe = lambda provider, model: "connection"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
+            orchestrate.cmd_auth_status(as_json=False)
+        self.assertIn("probe: fail (connection)", out.getvalue())
 
     def test_auth_status_json_reports_expired_token_without_probing(self):
         orchestrate._now = lambda: 10000.0
@@ -413,6 +422,7 @@ class AuthRefreshTest(unittest.TestCase):
         self.assertIn("expired", err.getvalue())
 
     def test_auth_source_summaries_and_failures_are_distinct(self):
+        orchestrate._now = lambda: 1000.0
         env = orchestrate._copilot_auth_summary("env", None, False)
         cork = orchestrate._copilot_auth_summary("cork", 5000.0, True)
         legacy = orchestrate._copilot_auth_summary("cork-legacy-shape", None, False)

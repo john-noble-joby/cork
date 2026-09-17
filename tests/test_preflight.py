@@ -37,6 +37,16 @@ class ClassifyTest(unittest.TestCase):
         finally:
             orchestrate._call_and_extract = original
 
+    def test_probe_reports_connection_failure_distinctly(self):
+        original = orchestrate._call_and_extract
+        def connection_error(*args, **kwargs):
+            raise orchestrate.urllib.error.URLError("dns unavailable")
+        orchestrate._call_and_extract = connection_error
+        try:
+            self.assertEqual(orchestrate._probe("copilot", "model"), "connection")
+        finally:
+            orchestrate._call_and_extract = original
+
 
 class SelectTest(unittest.TestCase):
     def setUp(self):
@@ -75,6 +85,19 @@ class SelectTest(unittest.TestCase):
                 orchestrate.preflight(rotation, count=3)
         finally:
             orchestrate._probe = orig
+
+    def test_connection_failure_has_distinct_preflight_tick(self):
+        orig = orchestrate._probe
+        orchestrate._probe = lambda provider, model: "connection"
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
+                orchestrate.preflight(
+                    [{"provider": "copilot", "model": "offline"}], count=1)
+        finally:
+            orchestrate._probe = orig
+        self.assertIn("✗ copilot/offline dropped (connection error)", out.getvalue())
+        self.assertNotIn("dropped (timeout)", out.getvalue())
 
     def test_auth_halts(self):
         orig = orchestrate._probe
@@ -165,6 +188,7 @@ class AuthVisibilityTest(unittest.TestCase):
             orchestrate.preflight(
                 [{"provider": "copilot", "model": "gpt-4.1"}], count=1)
         self.assertIn("WARNING: Copilot token: cork", out.getvalue())
+        self.assertIn("expired 1970-01-01T01:23:20Z", out.getvalue())
         self.assertIn(orchestrate._LOGIN_COMMAND, out.getvalue())
         self.assertIn("No usable models", err.getvalue())
 
@@ -180,7 +204,27 @@ class AuthVisibilityTest(unittest.TestCase):
                 self.assertRaises(SystemExit):
             orchestrate.cmd_preflight()
         self.assertIn(f"Copilot token: none — run `{orchestrate._LOGIN_COMMAND}`", out.getvalue())
+        self.assertIn("✗ copilot/model skipped (no copilot token)", out.getvalue())
         self.assertIn("No usable models", err.getvalue())
+
+    def test_main_full_run_preserves_no_token_guidance(self):
+        original_argv, original_state_dir = orchestrate.sys.argv, orchestrate.STATE_DIR
+        orchestrate.sys.argv = ["orchestrate.py", "TEST-1", self.tmp.name]
+        orchestrate.STATE_DIR = Path(self.tmp.name) / "state"
+        orchestrate.load_config = lambda quiet=False: {
+            "count": 1,
+            "providers": {"copilot": {"enabled": True}},
+            "rotation": [{"provider": "copilot", "model": "full-run-model"}],
+        }
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                    self.assertRaises(SystemExit):
+                orchestrate.main()
+        finally:
+            orchestrate.sys.argv, orchestrate.STATE_DIR = original_argv, original_state_dir
+        self.assertIn(f"Copilot token: none — run `{orchestrate._LOGIN_COMMAND}`", out.getvalue())
+        self.assertIn("✗ copilot/full-run-model skipped (no copilot token)", out.getvalue())
 
     def test_normal_preflight_keeps_native_fallback_when_copilot_missing(self):
         cfg = {
