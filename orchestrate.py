@@ -1673,7 +1673,7 @@ def main() -> None:
                              "first `count` entries directly, with the conservative default "
                              "char budget. Saves Copilot quota on repeated runs.")
     parser.add_argument("--review-model", metavar="MODEL",
-                        help="Review-only mode: run ONE Copilot model's review of the "
+                        help="Review-only mode: run ONE API or harness model's review of the "
                              "branch diff, print findings to stdout, and exit. Stateless "
                              "(reviewer sees only story + diff + changed files + AGENTS.md). Used by "
                              "the session-driven cork skill, where the active Claude session "

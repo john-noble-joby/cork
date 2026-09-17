@@ -21,6 +21,17 @@ change, and add a section here.
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-09-17
+
+### Added
+- **Explicit review-only stories** — `--story-file <path>` and `--story <text>` pass an
+  acceptance contract directly to API and harness reviewer lanes. File input is UTF-8 and takes
+  precedence over inline text, then checkpoint `done.summary`, checkpoint `summary`, and the
+  existing fallback. Review output reports the selected source and character count without
+  changing the full pipeline or checkpoint format.
+- **`cork-cross-review` uses `--story-file`** instead of pre-seeding a synthetic checkpoint for
+  fan-out, per-slice contracts, and delta re-review instructions.
+
 ## [0.13.0] — 2026-09-17
 
 ### Added
