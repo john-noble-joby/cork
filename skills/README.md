@@ -61,8 +61,8 @@ preference (`interactive_review`), the status line, and Linear/mem0 MCP checks. 
 Top-level, cross-vendor PR verification. The session acts as tech lead, never as reviewer: it
 fetches the PR diff + acceptance contract, stands up a detached scratch worktree at the PR head,
 runs the repo's gates there, then fans the review out to independent lanes from vendors other
-than the author's — agentic harness reviewers (`codex/…`, `claude/…` today; `opencode/…`, `pi/…` planned for
-0.12.0) that run read-only inside the scratch tree and can verify their claims, plus Copilot API models —
+than the author's — agentic harness reviewers (`codex/…`, `claude/…`, `opencode/…`, `pi/…`) that run
+read-only inside the scratch tree and can verify their claims, plus Copilot API models —
 consolidates the reports into one verdict with a `Reviewer | Vendor | Model | Slice` table, routes
 blocking findings back to the author, and re-reviews only the delta. Never merges.
 

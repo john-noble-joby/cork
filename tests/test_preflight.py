@@ -1,4 +1,5 @@
-import unittest
+import io, unittest
+from contextlib import redirect_stdout
 import orchestrate
 
 
@@ -31,22 +32,25 @@ class SelectTest(unittest.TestCase):
             {"provider": "copilot", "model": "good3"},
         ]
         calls = []
-        def fake_probe(provider, model):
+        def fake_probe(provider, model, details=None):
             calls.append(model)
             return "ok" if model.startswith("good") else "model_not_supported"
         orig = orchestrate._probe
         orchestrate._probe = fake_probe
         try:
-            sel = orchestrate.preflight(rotation, count=2)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                sel = orchestrate.preflight(rotation, count=2)
         finally:
             orchestrate._probe = orig
         self.assertEqual([s["model"] for s in sel], ["good1", "good2"])
         self.assertEqual(calls, ["dead1", "good1", "good2"])  # stopped, never probed good3
+        self.assertIn("copilot/dead1 dropped (model_not_supported)", output.getvalue())
 
     def test_zero_survivors_exits(self):
         rotation = [{"provider": "copilot", "model": "dead"}]
         orig = orchestrate._probe
-        orchestrate._probe = lambda p, m: "model_not_supported"
+        orchestrate._probe = lambda p, m, details=None: "model_not_supported"
         try:
             with self.assertRaises(SystemExit):
                 orchestrate.preflight(rotation, count=3)
@@ -55,7 +59,7 @@ class SelectTest(unittest.TestCase):
 
     def test_auth_halts(self):
         orig = orchestrate._probe
-        orchestrate._probe = lambda p, m: "auth"
+        orchestrate._probe = lambda p, m, details=None: "auth"
         try:
             with self.assertRaises(SystemExit):
                 orchestrate.preflight(

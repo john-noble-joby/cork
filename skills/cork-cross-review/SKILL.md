@@ -1,6 +1,6 @@
 ---
 name: cork-cross-review
-description: Use when the user says "cross review PR <n>", "cork cross-review", "cross-vendor review", or "multi-agent review of this PR/branch". The active Claude Code session acts as tech lead — it never reviews the code itself. It fans the PR's diff out to INDEPENDENT reviewers from vendors other than the author's (agentic harness lanes — claude/codex today, opencode/pi once cork 0.12.0 lands — run inside a read-only scratch worktree at the PR head, plus Copilot API models), consolidates their findings into one verdict, turns blocking issues into fix tasks, and loops on the delta until clean. The human merges.
+description: Use when the user says "cross review PR <n>", "cork cross-review", "cross-vendor review", or "multi-agent review of this PR/branch". The active Claude Code session acts as tech lead — it never reviews the code itself. It fans the PR's diff out to INDEPENDENT reviewers from vendors other than the author's (agentic harness lanes — claude/codex/opencode/pi — run inside a read-only scratch worktree at the PR head, plus Copilot API models), consolidates their findings into one verdict, turns blocking issues into fix tasks, and loops on the delta until clean. The human merges.
 ---
 
 # cork-cross-review — independent, cross-vendor PR verification
@@ -49,8 +49,8 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 python3 "$CORK_HOME/orchestrate.py" --version
 # PENDING PR #11 (0.10.0, merging separately) — not in this release:
 #   python3 "$CORK_HOME/orchestrate.py" auth status   # Copilot token source + per-harness login state
-# Until it merges, a logged-out lane surfaces only at review time, as the skipped sentinel in
-# review-<lane>.txt (the CLI's stderr tail is quoted in the → diagnostic line above it; .err stays empty).
+# Until it merges, `preflight` is the login check: it prints one line per ENABLED harness —
+# `<harness>: live (<detail>)` / `logged-out — run <login command>` / `not installed` (0.12.0).
 python3 "$CORK_HOME/orchestrate.py" preflight          # the lanes that will actually run on this seat
 ```
 
@@ -60,7 +60,7 @@ python3 "$CORK_HOME/orchestrate.py" preflight          # the lanes that will act
 | Kind | Example refs | What it is | Auth it needs |
 |---|---|---|---|
 | API (Copilot-hosted) | `copilot/gpt-5.6-sol`, `copilot/claude-opus-4.7`, `copilot/gemini-3.1-pro-preview` | Stateless call — sees only diff + changed files + standards | `cork login` (one Copilot seat covers all of these) |
-| Harness (agentic) | **Live (0.11.0+):** `codex/gpt-5.6-sol`, `claude/claude-opus-4.7`. **Planned for 0.12.0 (in flight — not yet in `HARNESSES`; preflight will not print them until then):** `opencode/github-copilot/gpt-5.5`, `pi/glm-internal/glm-5.3-onprem` | Locally installed coding-agent CLI run read-only inside the scratch worktree — can read callers, run `git show`, verify | Each CLI's own vendor login (`codex login`, `claude auth login`; later `opencode auth login`, pi `/login` or `GLM_API_KEY`) |
+| Harness (agentic) | `codex/gpt-5.6-sol`, `claude/claude-opus-4.7` (0.11.0), `opencode/github-copilot/gpt-5.5`, `pi/glm-internal/glm-5.3-onprem` (0.12.0) | Locally installed coding-agent CLI run read-only inside the scratch worktree — can read callers, run `git show`, verify | Each CLI's own vendor login (`codex login`, `claude auth login`, `opencode auth login`, pi `/login` or `GLM_API_KEY`) |
 
 Harness lanes are **opt-in**: a default install's rotation holds only Copilot API lanes, so
 preflight prints none of them and this skill silently degrades to API-only. Enable each one in
@@ -176,16 +176,19 @@ carries this rule, verbatim:
 
 Lane-specific rules learned the hard way:
 
-- **`pi` / GLM — PLANNED lane (0.12.0, in flight; absent from 0.13.0's `HARNESSES`)** — when it
-  lands, pin `pi/glm-internal/glm-5.3-onprem` (or the current on-prem model from
+- **`opencode`** — runs `--agent plan --format default --dir <tree> --pure --` with cork-injected
+  `OPENCODE_PERMISSION` denies (bash, edit [covers write/patch], task, webfetch, websearch,
+  external_directory) and `OPENCODE_DISABLE_PROJECT_CONFIG=1`, so a branch-controlled `.opencode/`
+  or `AGENTS.md` cannot steer it. Its `github-copilot` provider bills the same Copilot seat as
+  `cork login`. Config refs must be `opencode/<provider>/<model>`.
+- **`pi` / GLM** — pin `pi/glm-internal/glm-5.3-onprem` (or the current on-prem model from
   `pi --list-models glm`; some pi installs are wrapped in a `glm-only` shim that rejects ids off
-  its allowlist at boot — check yours). That lane spec
-  will close stdin (pi blocks on an open pipe) and pass `--no-session --no-context-files`; nothing
-  in 0.13.0 does this yet. GLM is the **tie-breaker**: when a Claude finding and a GPT finding
+  its allowlist at boot — check yours). `orchestrate.py` runs it with stdin closed (pi blocks on an open pipe),
+  `--tools read,grep,find,ls --no-session --no-context-files --no-approve`, and the prompt after
+  `--`; config refs must be `pi/<provider>/<model>`. GLM is the **tie-breaker**: when a Claude finding and a GPT finding
   disagree, or when you are tempted to overrule a reviewer from your own knowledge, run one more
   lane on *just that finding* with the evidence (hunk, dependency source, test) before grading it.
-  Two vendors agreeing from the same training data is not ground truth. Until the pi lane exists,
-  break ties with a third family present on this seat (e.g. `copilot/gemini-3.1-pro-preview`) or
+  Two vendors agreeing from the same training data is not ground truth. If the pi lane is not enabled on this seat, break ties with a third family present on this seat (e.g. `copilot/gemini-3.1-pro-preview`) or
   your own spot-check against the scratch tree — and say which in the roster. GLM rules learned
   the hard way, to carry into its story text: no skill-tool calls; a one-line progress note after
   each read; read the diff in explicit `sed -n 'a,bp'` ranges; write reports only under `$HOME`; a
@@ -193,8 +196,8 @@ Lane-specific rules learned the hard way:
 - **`claude`** — runs `--safe-mode --restricted --tools Read,Grep,Glob --permission-mode plan`
   (no CLAUDE.md, no hooks, no MCP, no shell tool — that absence is what keeps the lane blind; file
   tools confined to the scratch tree). If `ANTHROPIC_API_KEY` is set but invalid the lane hangs
-  silently until timeout — check `review-claude-*.err` and try unsetting the key (an `env_key`
-  flag in `auth status` is pending PR #11 (0.10.0)).
+  silently until timeout — check `review-claude-*.err` and try unsetting the key (preflight appends `; ANTHROPIC_API_KEY set` to the claude line so you know to look there;
+  an `auth status` surface is pending PR #11 (0.10.0)).
 - **`codex`** — `exec -s read-only --ephemeral`; it may take 30–45 s to fail on missing auth. Its
   sandbox can read outside the repo, so keep other lanes' report files out of its `cwd`.
 - **A lane that returns the `… — skipped]` sentinel or an empty file** is a failed lane, not a

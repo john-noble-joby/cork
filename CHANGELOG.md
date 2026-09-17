@@ -33,10 +33,24 @@ change, and add a section here.
   disagreeing vendors, consolidates into one verdict with a `Reviewer | Vendor | Model | Slice`
   roster and a tamper check on the scratch tree, routes blocking findings back to the author and
   re-reviews only the delta. The human merges. Builds on PR #12's `claude`/`codex` harness lanes
-  (0.11.0), and also depends on PR #11's `auth status` (0.10.0, merging separately) plus the in-flight `opencode`/`pi`
-  harness lanes (planned for 0.12.0); the herdr mapping is documented as a manual path until a
+  (0.11.0), and also depends on PR #11's `auth status` (0.10.0, merging separately) plus the `opencode`/`pi` harness lanes (0.12.0); the herdr mapping is documented as a manual path until a
   native transport lands.
 - `install.sh` installs the new skill; `skills/README.md` documents the invocation phrase.
+## [0.12.0] — 2026-09-17
+
+### Added
+- **OpenCode and Pi harness reviewers** — opt-in `opencode/<provider/model>` and
+  `pi/<provider/model>` lanes use each CLI's read-only mode, ephemeral/no-session operation,
+  and argument-based prompts. Pi auth checks include `--no-refresh`, so preflight never writes
+  refreshed credentials.
+- **Live harness auth probes** — enabled harness lanes now check CLI login state during
+  preflight and report `ok`, `not_logged_in`, `missing_binary`, `timeout`, or `error`, with the
+  lane-specific login command. Preflight continues past a full selection to report every enabled
+  harness, marking live lanes that were not selected because the count was reached.
+- **Immutable OpenCode isolation** — through `OPENCODE_PERMISSION`, cork denies `bash`; `edit`
+  (which governs write and patch tools); `task`; `webfetch`; `websearch`; and
+  `external_directory`. It also disables branch-controlled OpenCode project configuration.
+  Pi ignores project-local `.pi/` resources with `--no-approve`.
 
 ## [0.11.0] — 2026-09-17
 
