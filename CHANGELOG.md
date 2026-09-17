@@ -32,9 +32,10 @@ change, and add a section here.
   Copilot API models), slices large PRs by concern, uses `pi`/GLM as the tie-breaker between
   disagreeing vendors, consolidates into one verdict with a `Reviewer | Vendor | Model | Slice`
   roster and a tamper check on the scratch tree, routes blocking findings back to the author and
-  re-reviews only the delta. The human merges. Depends on the harness lanes (0.11.0/0.12.0) and
-  `auth status` (0.10.0); the herdr mapping is documented as a manual path until a native
-  transport lands.
+  re-reviews only the delta. The human merges. Builds on PR #12's `claude`/`codex` harness lanes
+  (0.11.0), and also depends on PR #11's `auth status` (0.10.0) plus the in-flight `opencode`/`pi`
+  harness lanes (planned for 0.12.0); the herdr mapping is documented as a manual path until a
+  native transport lands.
 - `install.sh` installs the new skill; `skills/README.md` documents the invocation phrase.
 
 ## [0.11.0] — 2026-09-17

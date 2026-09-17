@@ -51,7 +51,8 @@ python3 "$CORK_HOME/orchestrate.py" auth status        # Copilot token source + 
 python3 "$CORK_HOME/orchestrate.py" preflight          # the lanes that will actually run on this seat
 ```
 
-`preflight` prints one `provider/model` line per usable lane. Lanes come in two kinds:
+`preflight` prints one final `provider/model` line per selected usable lane (up to the configured
+`count`). Lanes come in two kinds:
 
 | Kind | Example refs | What it is | Auth it needs |
 |---|---|---|---|
@@ -128,9 +129,9 @@ done
 wait
 ```
 
-For a sliced review, run the loop once per slice with the slice's pathspec passed through (see
-`orchestrate.py --help` for the pathspec option; until it exists, pass the slice contract in the
-story text and tell the reviewer which paths are in scope). Harness lanes run with the scratch
+`--review-model` currently has no pathspec/slice option, so every call receives the full branch
+diff. Until one exists, run the loop once per slice, pass the slice contract in the story text,
+and tell the reviewer exactly which paths are in scope. Harness lanes run with the scratch
 worktree as their working directory — `orchestrate.py` passes it as `cwd` and applies the
 read-only flags; you do not need to add prompt text for that. What you **do** add to the story
 text for every lane, verbatim:
