@@ -44,6 +44,13 @@ change, and add a section here.
   format gains `## Spec conformance`; verdict names the worst item per axis.
 - cork review-only consolidated report gains a `## Spec conformance` section; the injected
   rubric's output format gains `## Promotion candidates` (the fixer prompt already expected it).
+- `prompt_fix` now covers the `## Spec conformance` section (implement missing/partial
+  requirements; never auto-delete unrequested behaviour). `standards/AGENTS.md` gains a
+  condensed `Recurring defect classes` section so the injected rubric carries the skill's
+  defect classes.
+
+### Fixed
+- Review diffs are now merge-base (`git diff <base>...HEAD`) in `orchestrate.py` and the cork skill's self-review, and the base ref is validated before diffing — a base branch that advanced after forking no longer leaks base-only changes into the review.
 
 ## [0.8.3] — 2026-08-03
 

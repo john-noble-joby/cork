@@ -87,6 +87,20 @@ the pattern overrides the smell. *What it is → how to fix:*
   instead of inherit.
 (Duplicated Code and Primitive Obsession are covered above under DRY and Type design.)
 
+## Recurring defect classes (condensed)
+Each recurs across real review history; when a diff fixes one instance, verify the whole class was swept — including sites the fix itself introduced.
+- **Fix the class, not the instance** — name the defect class, then grep every sibling site.
+- **Timing capture before the operation** — start/window timestamps are assigned before the first async dispatch they measure, never after.
+- **Fan-out results** — no early exit on first failure; compute the full per-target pass/fail split, decide once, and make the failure payload name every target's outcome. (.NET `Task.WhenAll`: all tasks have completed even when the await throws — read the retained tasks. JS `Promise.all`: rejects on the first failure — use `Promise.allSettled` before building diagnostics.)
+- **Normalize user-authored strings once at the boundary** — one shared normalizer with an input-domain test table (null, empty, whitespace, case, singular/plural, symbols, garbage); an ad-hoc `trim().toLowerCase()` inside a helper is itself a flag.
+- **Formatting preserves distinctions** — rounding applied to paired/ranged values is checked jointly; two distinct values must never render identically.
+- **Schema/parser strictness lockstep** — validator and parser are exactly equally strict; case folding and whitespace trimming are separate, individually documented decisions.
+- **Closed-hierarchy consumer audit** — a new enum member / subtype / union case means grepping every consumer of the base type (serializer registration, parser switch, schema enum, dispatch, round-trip fixture); an explicit "not implemented" beats silent fall-through.
+- **Collision handling on keyed registries and derived labels** — define collision semantics (no silent first/last-wins); check derived labels on every surface that renders them.
+- **Presentation-surface inventory** — when output changes, list every surface that shows it (live view, badges, history, exports, print) and confirm each is updated or explicitly waived; silence is a miss.
+- **Cross-system identifier mappings verified at the source** — IDs mapped across systems are verified against the authoritative upstream and cited at the mapping site; mismatches are silent.
+- **Domain-model boundary hygiene** — types carry real invariants; parser/DTO/transport types stay out of the domain and off public service APIs.
+
 ## Tests
 - Happy path: assert the actual produced values, not just "not null".
 - Error paths: a test for every stable failure mode (missing / blank / out-of-range /
@@ -104,8 +118,7 @@ captured after the thing they measure; ordering/monotonicity assumptions; cancel
 teardown races. Report only behavior you can state is wrong, with the triggering input.
 
 ## Spec conformance (the second axis)
-Use the story/spec you were given (the change description, a ticket fetched via the repo's
-tracker binding, or a spec file the repo standards point at). If none is available, write
+The `## Story / Task` section of your prompt is the spec — sometimes a full ticket with acceptance criteria, sometimes only the implementer's summary. Judge against whatever it states; if it contains no checkable requirements, say so. If none is available, write
 the single line "no spec available" under `## Spec conformance` — that is an outcome, not a
 skipped step; do not invent requirements. Otherwise report, quoting the spec line for each:
 (a) requirements asked for that are missing or partial; (b) behavior in the diff that wasn't

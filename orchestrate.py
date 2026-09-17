@@ -639,13 +639,13 @@ def run_claude(prompt: str, cwd: str) -> str:
 
 def git_diff_branch(cwd: str, base: str) -> str:
     return subprocess.check_output(
-        ["git", "diff", f"{base}..HEAD"], cwd=cwd, text=True
+        ["git", "diff", f"{base}...HEAD"], cwd=cwd, text=True
     )
 
 
 def changed_files_branch(cwd: str, base: str) -> dict[str, str]:
     names = subprocess.check_output(
-        ["git", "diff", f"{base}..HEAD", "--name-only"], cwd=cwd, text=True
+        ["git", "diff", f"{base}...HEAD", "--name-only"], cwd=cwd, text=True
     ).strip().splitlines()
     contents: dict[str, str] = {}
     for name in names:
@@ -1031,7 +1031,7 @@ def prompt_claude_review(base: str, instructions_path: str) -> str:
     )
     return (
         f"Review the current feature branch against {base}. "
-        f"The full branch diff is available via: git diff {base}..HEAD\n\n"
+        f"The full branch diff is available via: git diff {base}...HEAD\n\n"
         f"{review_src}\n\n"
         "Output ONLY a structured findings report. "
         "Do NOT apply any fixes. Do NOT edit any files."
@@ -1048,10 +1048,13 @@ def prompt_fix(summary: str, base: str, review: str, ticket_id: str,
     return (
         f"## Story Summary\n{summary}\n\n"
         "## Current Branch State\n"
-        f"Run `git diff {base}..HEAD` to see all changes on this branch.\n\n"
+        f"Run `git diff {base}...HEAD` to see all changes on this branch.\n\n"
         f"## Code Review Findings\n{review}\n\n"
-        "Address findings in the Critical, Important, Minor, Cross-cutting, and "
-        "Promotion candidates sections. Make targeted fixes — don't rewrite what works. "
+        "Address findings in the Critical, Important, Minor, Cross-cutting, Promotion "
+        "candidates, and Spec conformance sections. For Spec conformance: implement missing "
+        "or partial requirements; do NOT delete behaviour flagged as unrequested — leave it "
+        "and call it out in your summary for the human to decide. Make targeted fixes — "
+        "don't rewrite what works. "
         "Search mem0 if you need context about patterns or past decisions.\n\n"
         "DO NOT attempt to resolve items in 'Uncertain', 'needs human judgment', or "
         "'Out of scope' sections — those are flagged for human review, not automated fixing.\n\n"
@@ -1232,6 +1235,12 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     instructions, instructions_path = load_agent_instructions(repo)
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
+    base_check = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", base],
+        cwd=repo, capture_output=True, text=True,
+    )
+    if base_check.returncode != 0:
+        fail(f"Base ref {base!r} does not resolve")
     diff = git_diff_branch(repo, base)
     if not diff.strip():
         fail(f"No diff vs {base} — nothing to review.")
