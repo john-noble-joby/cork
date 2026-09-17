@@ -5,7 +5,7 @@ description: "Use when writing, modifying, or reviewing code in any language —
 
 # Coding Standards — default for writing and reviewing code
 
-**Version:** 0.11.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.11.1 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 One baseline for **both** roles: as an implementer, write code that would pass this review the first time; as a reviewer, report findings (`file:line`, excerpt, reasoning, concrete fix) and let the human decide what to apply.
 
