@@ -197,6 +197,61 @@ class ReviewDiffTest(unittest.TestCase):
         require.assert_called_once_with(str(repo.resolve()), "origin/main")
         git_log.assert_not_called()
 
+    def test_main_requires_base_before_preflight_on_normal_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            argv = [
+                "orchestrate.py",
+                "TEST-1",
+                str(repo),
+                "--base-branch",
+                "missing-base",
+            ]
+            base_check = Mock(returncode=1, stderr="")
+            error = io.StringIO()
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(orchestrate, "STATE_DIR", Path(tmp) / "state"),
+                patch.object(
+                    orchestrate, "load_config", return_value=self._minimal_config()
+                ),
+                patch.object(
+                    orchestrate,
+                    "_eligible_rotation",
+                    return_value=self._minimal_config()["rotation"],
+                ),
+                patch.object(
+                    orchestrate.subprocess, "run", return_value=base_check
+                ) as git_check,
+                patch.object(
+                    orchestrate,
+                    "preflight",
+                    side_effect=AssertionError(
+                        "preflight must not run before base validation"
+                    ),
+                ) as preflight,
+                redirect_stderr(error),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    orchestrate.main()
+
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn("Base ref 'missing-base' does not resolve", error.getvalue())
+        git_check.assert_called_once_with(
+            [
+                "git",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "missing-base^{commit}",
+            ],
+            cwd=str(repo.resolve()),
+            capture_output=True,
+            text=True,
+        )
+        preflight.assert_not_called()
+
     def test_review_prompts_use_merge_base_and_fix_spec_findings(self):
         review_prompt = orchestrate.prompt_claude_review(
             "origin/main", "/review.md", "Implement the requested widget"
