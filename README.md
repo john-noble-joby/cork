@@ -188,24 +188,28 @@ same rotation/preflight/consolidation. Harnesses are disabled by default; enable
 Invocations (flags verified against `claude --help` 2.1.x and `codex exec --help` 0.146.x):
 
 ```bash
-claude -p --no-session-persistence --output-format text --model <m> \
-       --tools Read,Grep,Glob --permission-mode plan --system-prompt <standards>   # prompt on stdin
+claude -p --no-session-persistence --output-format text --model <m> --system-prompt <standards> \
+       --safe-mode --restricted --tools Read,Grep,Glob --permission-mode plan          # prompt on stdin
 codex exec -m <m> -s read-only --ephemeral --skip-git-repo-check -C <repo> --color never -   # prompt on stdin
 ```
 
-**Read-only guarantees and their limits.** `claude` gets only `Read,Grep,Glob` under
-`--permission-mode plan` — no Bash, no Edit/Write. `codex` runs under its `read-only`
-sandbox with no session persisted. Neither can modify the repo (the manual check in the
-0.11.0 PR shows `git status --porcelain` identical before and after). Limits: both can
-still *read* anywhere the user can, so a reviewer could in principle read another
-reviewer's `/tmp/cork-review-*` output if it guessed the path; `claude` without `--bare`
-also loads the repo's CLAUDE.md and runs the user's own hooks (cork adds `--bare`
-automatically when `ANTHROPIC_API_KEY` is set — `--bare` refuses OAuth logins, so it
-cannot be the default). Codex has no system-prompt flag, so the standards are prepended
-to the prompt body under a `=== END OF REVIEW STANDARDS ===` separator.
+**Read-only guarantees and their limits.** `claude` runs with `--safe-mode` (no CLAUDE.md,
+hooks, MCP or plugins — auth is kept, unlike `--bare`, which refuses OAuth logins) and
+`--restricted` (no code-running tools; file tools confined to the repo), with only
+`Read,Grep,Glob` under `--permission-mode plan`. `codex` runs under its `read-only` sandbox
+with no session persisted. Neither can modify the repo (the manual check in the 0.11.0 PR
+shows `git status --porcelain` identical before and after). Limits: codex's sandbox still
+lets it *read* anywhere the user can, so in review-only fan-out it could in principle read
+another reviewer's `/tmp/cork-review-*` output (claude's `--restricted` closes this for the
+claude lane). Codex has no system-prompt flag, so the standards are prepended to the prompt
+body under a `=== END OF REVIEW STANDARDS ===` separator. Claude's standards travel as one
+`--system-prompt` argument, so a standards layer over ~128 KiB hits the Linux per-argument
+limit and the lane is skipped with `Argument list too long`.
 
-Per-harness config keys: `bin` (or env `CORK_CLAUDE_BIN` / `CORK_CODEX_BIN`, which wins),
-`extra_args` (appended verbatim), `timeout` (seconds, default 900). `preflight` selects a
+Per-harness config keys — the only ones read: `bin` (or env `CORK_CLAUDE_BIN` /
+`CORK_CODEX_BIN`, which wins), `extra_args` (appended verbatim, *before* the read-only
+flags; treated as trusted — it is your own config), `timeout` (seconds, default 900). The
+argv template and read-only flags are not configurable. `preflight` selects a
 harness iff its binary is on PATH — no spend. A harness that exits non-zero, times out,
 or prints nothing is reported and skipped (`[codex/<m> returned no usable content — skipped]`);
 there is no retry.

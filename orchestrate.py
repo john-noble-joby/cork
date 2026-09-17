@@ -86,7 +86,10 @@ HARNESSES: dict[str, dict] = {
         "bin": "claude", "bin_env": "CORK_CLAUDE_BIN",
         "argv": ["-p", "--no-session-persistence", "--output-format", "text",
                  "--model", "{model}"],
-        "read_only": ["--tools", "Read,Grep,Glob", "--permission-mode", "plan"],
+        # --safe-mode: no CLAUDE.md/hooks/MCP (auth kept — unlike --bare);
+        # --restricted: no code-running tools, file tools confined to the repo.
+        "read_only": ["--safe-mode", "--restricted", "--tools", "Read,Grep,Glob",
+                      "--permission-mode", "plan"],
         "system_flag": "--system-prompt", "prompt_via": "stdin", "timeout": 900,
     },
     "codex": {  # codex-cli 0.146.x — verified against `codex exec --help`
@@ -97,9 +100,9 @@ HARNESSES: dict[str, dict] = {
         "system_flag": None, "prompt_via": "stdin", "timeout": 900,
     },
 }
-# `claude --bare` also skips CLAUDE.md/hooks — but it refuses OAuth logins, so it
-# is only safe to add when the seat authenticates with an API key.
-_CLAUDE_BARE_ENV = "ANTHROPIC_API_KEY"
+# The only per-harness keys config.json may set — `argv`/`read_only` are not
+# user-overridable, so the read-only contract does not depend on configuration.
+_HARNESS_CONFIG_KEYS = ("bin", "extra_args", "timeout")
 
 DEFAULT_CONFIG = {
     "version": 1,
@@ -806,7 +809,8 @@ def _harness_settings(provider: str) -> dict:
     # Table defaults, then config.json `providers.<harness>` (bin/extra_args/timeout),
     # then the CORK_*_BIN env var for the binary.
     spec = {**HARNESSES[provider], "extra_args": []}
-    spec.update(load_config(quiet=True).get("providers", {}).get(provider, {}))
+    user = load_config(quiet=True).get("providers", {}).get(provider, {})
+    spec.update({k: v for k, v in user.items() if k in _HARNESS_CONFIG_KEYS})
     spec["bin"] = os.environ.get(spec["bin_env"]) or spec["bin"]
     return spec
 
@@ -815,14 +819,13 @@ def _harness_bin(provider: str) -> str:
     return _harness_settings(provider)["bin"]
 
 
-def _harness_argv(provider: str, spec: dict, model: str, repo: str, system: str) -> list[str]:
+def _harness_argv(spec: dict, model: str, repo: str, system: str) -> list[str]:
     sub = {"model": model, "repo": repo}
-    argv = [spec["bin"], *(a.format(**sub) for a in spec["argv"]), *spec["read_only"]]
-    if provider == "claude" and os.environ.get(_CLAUDE_BARE_ENV):
-        argv.append("--bare")
+    argv = [spec["bin"], *(a.format(**sub) for a in spec["argv"])]
     if spec["system_flag"] and system:
         argv += [spec["system_flag"], system]
-    return argv + list(spec["extra_args"])
+    # read-only flags go LAST so user extra_args cannot out-rank them on last-wins parsers
+    return argv + list(spec["extra_args"]) + list(spec["read_only"])
 
 
 def _harness_call(provider: str, model: str, system: str, user_msg: str,
@@ -832,7 +835,7 @@ def _harness_call(provider: str, model: str, system: str, user_msg: str,
     timeout = timeout or spec["timeout"]
     prompt = user_msg if spec["system_flag"] else (
         f"{system}\n\n=== END OF REVIEW STANDARDS — REVIEW TASK FOLLOWS ===\n\n{user_msg}")
-    argv = _harness_argv(provider, spec, model, repo, system)
+    argv = _harness_argv(spec, model, repo, system)
     if spec["prompt_via"] == "stdin":
         run_kw: dict = {"input": prompt}
     else:
