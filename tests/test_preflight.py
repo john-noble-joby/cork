@@ -27,6 +27,16 @@ class ClassifyTest(unittest.TestCase):
     def test_other(self):
         self.assertEqual(orchestrate._classify_preflight(503, "busy"), "other")
 
+    def test_probe_reports_timeout_distinctly(self):
+        original = orchestrate._call_and_extract
+        def time_out(*args, **kwargs):
+            raise TimeoutError()
+        orchestrate._call_and_extract = time_out
+        try:
+            self.assertEqual(orchestrate._probe("copilot", "model"), "timeout")
+        finally:
+            orchestrate._call_and_extract = original
+
 
 class SelectTest(unittest.TestCase):
     def setUp(self):
@@ -130,14 +140,28 @@ class AuthVisibilityTest(unittest.TestCase):
     def test_preflight_401_names_token_only_cork_file_and_relogin(self):
         self.cork.write_text(json.dumps({"token": "STALE"}))
         orchestrate._probe = lambda provider, model: "auth"
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as raised:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit) as raised:
             orchestrate.preflight(
                 [{"provider": "copilot", "model": "gpt-4.1"}], count=1)
         self.assertEqual(raised.exception.code, 1)
+        self.assertIn("WARNING: Copilot token: cork", out.getvalue())
+        self.assertIn("no expiry, refreshable no", out.getvalue())
         self.assertIn("token-only cork file", err.getvalue())
         self.assertIn(str(self.cork), err.getvalue())
         self.assertIn("delete it and re-login", err.getvalue())
+        self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
+
+    def test_preflight_rejects_expired_token_before_probe(self):
+        orchestrate._now = lambda: 10000.0
+        self.cork.write_text(json.dumps({"token": "OLD", "expires_at": 5000}))
+        orchestrate._probe = lambda provider, model: self.fail("must not probe expired auth")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            orchestrate.preflight(
+                [{"provider": "copilot", "model": "gpt-4.1"}], count=1)
+        self.assertIn("expired and has no refresh token", err.getvalue())
         self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
 
 

@@ -10,12 +10,15 @@ class AuthRefreshTest(unittest.TestCase):
         self.oc = Path(self.tmp.name) / "opencode.json"
         self._cork, self._oc = orchestrate._CORK_AUTH, orchestrate._OPENCODE_AUTH
         self._post, self._now, self._probe = orchestrate._post_form, orchestrate._now, orchestrate._probe
+        self._load_config = orchestrate.load_config
         orchestrate._CORK_AUTH, orchestrate._OPENCODE_AUTH = self.cork, self.oc
+        orchestrate.load_config = lambda quiet=False: orchestrate.DEFAULT_CONFIG
         self._env = os.environ.pop("CORK_COPILOT_TOKEN", None)
 
     def tearDown(self):
         orchestrate._CORK_AUTH, orchestrate._OPENCODE_AUTH = self._cork, self._oc
         orchestrate._post_form, orchestrate._now, orchestrate._probe = self._post, self._now, self._probe
+        orchestrate.load_config = self._load_config
         if self._env is not None:
             os.environ["CORK_COPILOT_TOKEN"] = self._env
         self.tmp.cleanup()
@@ -147,7 +150,8 @@ class AuthRefreshTest(unittest.TestCase):
         self.oc.write_text(json.dumps(
             {"github-copilot": {"access": "OC_ACCESS", "refresh": "OC_REFRESH",
                                 "expires": 9_999_999_999_000}}))
-        self.assertEqual(orchestrate._copilot_token(), "OC_ACCESS")
+        self.assertEqual(orchestrate._resolve_copilot_auth(),
+                         ("OC_ACCESS", "opencode", 9_999_999_999.0, False))
 
     def test_refresh_preserves_other_provider_keys(self):
         # auth.json also holds openai/anthropic tokens — a Copilot refresh must
@@ -207,6 +211,14 @@ class AuthRefreshTest(unittest.TestCase):
         )
         self.assertTrue(orchestrate._provider_token_available("copilot"))
 
+    def test_whitespace_env_token_falls_through_to_cork_file(self):
+        os.environ["CORK_COPILOT_TOKEN"] = "  \t "
+        self.cork.write_text(json.dumps({"token": "CORK"}))
+        self.assertEqual(
+            orchestrate._resolve_copilot_auth(),
+            ("CORK", "cork", None, False),
+        )
+
     def test_resolver_reports_refreshable_cork_source(self):
         orchestrate._now = lambda: 1000.0
         self.cork.write_text(json.dumps(
@@ -265,6 +277,19 @@ class AuthRefreshTest(unittest.TestCase):
         self.assertIn("Delete that token-only file", err.getvalue())
         self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
 
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses directory write permissions")
+    def test_provider_availability_does_not_swallow_lock_permission_error(self):
+        orchestrate._now = lambda: 10000.0
+        self.cork.write_text(json.dumps(
+            {"token": "OLD", "refresh_token": "REFRESH", "expires_at": 5000}))
+        auth_dir = Path(self.tmp.name)
+        auth_dir.chmod(0o500)
+        try:
+            with self.assertRaises(OSError):
+                orchestrate._provider_token_available("copilot")
+        finally:
+            auth_dir.chmod(0o700)
+
     def test_provider_availability_reports_malformed_cork_file(self):
         self.cork.write_text("{ malformed")
         with self.assertRaises(SystemExit):
@@ -281,12 +306,16 @@ class AuthRefreshTest(unittest.TestCase):
         orchestrate._now = lambda: 1000.0
         self.cork.write_text(json.dumps(
             {"token": "CORK", "refresh_token": "REFRESH", "expires_at": 5000}))
+        orchestrate.load_config = lambda quiet=False: {
+            "providers": {"copilot": {"enabled": True}},
+            "rotation": [{"provider": "copilot", "model": "configured-model"}],
+        }
         calls = []
         orchestrate._probe = lambda provider, model: calls.append((provider, model)) or "ok"
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             orchestrate.cmd_auth_status(as_json=True)
-        self.assertEqual(calls, [("copilot", orchestrate.DEFAULT_CONFIG["rotation"][0]["model"])])
+        self.assertEqual(calls, [("copilot", "configured-model")])
         self.assertEqual(json.loads(out.getvalue()), {
             "source": "cork",
             "path": str(self.cork),
@@ -323,6 +352,25 @@ class AuthRefreshTest(unittest.TestCase):
         self.assertEqual(json.loads(out.getvalue())["probe"], "fail")
         self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
 
+    def test_non_auth_probe_failures_do_not_recommend_login(self):
+        os.environ["CORK_COPILOT_TOKEN"] = "ENV"
+        expected = {
+            "model_not_supported": "not supported on this seat",
+            "integrator_mismatch": "unavailable to this integrator",
+            "timeout": "timed out",
+            "other": "retry later",
+        }
+        for verdict, message in expected.items():
+            with self.subTest(verdict=verdict):
+                orchestrate._probe = lambda provider, model, result=verdict: result
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                        self.assertRaises(SystemExit) as raised:
+                    orchestrate.cmd_auth_status(as_json=True)
+                self.assertEqual(raised.exception.code, 1)
+                self.assertIn(message, err.getvalue())
+                self.assertNotIn(orchestrate._LOGIN_COMMAND, err.getvalue())
+
     def test_auth_status_json_reports_expired_token_without_probing(self):
         orchestrate._now = lambda: 10000.0
         self.cork.write_text(json.dumps({"token": "OLD", "expires_at": 5000}))
@@ -347,6 +395,7 @@ class AuthRefreshTest(unittest.TestCase):
         cork = orchestrate._copilot_auth_summary("cork", 5000.0, True)
         legacy = orchestrate._copilot_auth_summary("cork-legacy-shape", None, False)
         self.assertIn("env override", env)
+        self.assertNotIn("WARNING:", env)
         self.assertIn("expires 1970-01-01T01:23:20Z, refreshable yes", cork)
         self.assertIn("legacy-shape cork file", legacy)
         self.assertIn("opencode fallback", orchestrate._copilot_auth_failure("opencode", False))
@@ -354,6 +403,39 @@ class AuthRefreshTest(unittest.TestCase):
         self.assertIn("legacy-shape cork file", orchestrate._copilot_auth_failure(
             "cork-legacy-shape", False))
         self.assertIn("refresh or re-login", orchestrate._copilot_auth_failure("cork", True))
+
+    def test_display_path_shortens_home_relative_path(self):
+        path = Path.home() / ".config/cork/auth.json"
+        self.assertEqual(orchestrate._display_path(path), "~/.config/cork/auth.json")
+
+    def test_auth_probe_model_uses_first_enabled_configured_copilot_entry(self):
+        orchestrate.load_config = lambda quiet=False: {
+            "providers": {"copilot": {"enabled": True}},
+            "rotation": [
+                {"provider": "openai", "model": "native"},
+                {"provider": "copilot", "model": "first-copilot"},
+                {"provider": "copilot", "model": "second-copilot"},
+            ],
+        }
+        self.assertEqual(orchestrate._auth_probe_model(), "first-copilot")
+
+    def test_auth_probe_model_falls_back_when_copilot_is_disabled(self):
+        orchestrate.load_config = lambda quiet=False: {
+            "providers": {"copilot": {"enabled": False}},
+            "rotation": [{"provider": "copilot", "model": "disabled"}],
+        }
+        self.assertEqual(
+            orchestrate._auth_probe_model(),
+            next(entry["model"] for entry in orchestrate.DEFAULT_CONFIG["rotation"]
+                 if entry["provider"] == "copilot"),
+        )
+
+    def test_login_command_is_directly_runnable(self):
+        self.assertEqual(
+            orchestrate._LOGIN_COMMAND,
+            f"python3 {Path(orchestrate.__file__).resolve()} login",
+        )
+        self.assertNotIn("$", orchestrate._LOGIN_COMMAND)
 
     def test_main_dispatches_auth_status_json(self):
         original, argv = orchestrate.cmd_auth_status, orchestrate.sys.argv
@@ -366,15 +448,17 @@ class AuthRefreshTest(unittest.TestCase):
             orchestrate.cmd_auth_status, orchestrate.sys.argv = original, argv
         self.assertEqual(calls, [True])
 
-    def test_main_rejects_unknown_auth_subcommand(self):
+    def test_main_rejects_unknown_auth_option_with_usage_exit_two(self):
         argv = orchestrate.sys.argv
-        orchestrate.sys.argv = ["orchestrate.py", "auth", "unknown"]
+        orchestrate.sys.argv = ["orchestrate.py", "auth", "status", "--bogus"]
+        err = io.StringIO()
         try:
-            with self.assertRaises(SystemExit) as raised:
+            with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as raised:
                 orchestrate.main()
         finally:
             orchestrate.sys.argv = argv
-        self.assertEqual(raised.exception.code, 1)
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("usage: orchestrate.py auth status [--json]", err.getvalue())
 
 
 if __name__ == "__main__":

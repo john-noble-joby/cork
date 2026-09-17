@@ -105,7 +105,7 @@ style consistency with surrounding code, test coverage.\
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 _TOKEN_SKEW = 300  # refresh this many seconds before the stored expiry
-_LOGIN_COMMAND = "python3 $CORK_HOME/orchestrate.py login"
+_LOGIN_COMMAND = f"python3 {Path(__file__).resolve()} login"
 
 
 def _now() -> float:  # seam so tests can control time without patching the time module
@@ -156,7 +156,7 @@ def _read_cork_auth() -> dict:
         data = None
     if not isinstance(data, dict):  # malformed OR valid-but-not-an-object → fail loudly
         fail(f"Refusing to use malformed auth file {_CORK_AUTH} — it may hold other "
-             "provider tokens. Fix or delete it, then re-run `login`.")
+             f"provider tokens. Fix or delete it, then run `{_LOGIN_COMMAND}`")
     return data
 
 
@@ -227,11 +227,6 @@ def _cork_access_token(data: dict) -> str | None:
         return _refresh_and_store(refresh)
     token = data.get("token")
     if token:
-        if expires_at is not None and _now() >= expires_at - _TOKEN_SKEW and not refresh:
-            # Known-expired with nothing to refresh — fail now rather than hand out a
-            # token that's guaranteed to 401 downstream.
-            fail(f"Copilot token in {_CORK_AUTH} has expired and has no refresh token. "
-                 f"Delete that token-only file and re-login with `{_LOGIN_COMMAND}`")
         return token.strip()
     legacy = data.get("github-copilot", {}).get("refresh")  # legacy opencode-shape file
     return legacy.strip() if legacy else None
@@ -261,10 +256,9 @@ def _missing_copilot_token_message() -> str:
     )
 
 
-def _resolve_copilot_auth() -> tuple[str, str, float | None, bool]:
-    # Returns token, source, expiry, refreshable. Absence is the one non-fatal
-    # resolution outcome so availability/status callers can report it themselves;
-    # malformed files still fail loudly at the read boundary.
+def _resolve_copilot_auth() -> tuple[str | None, str, float | None, bool]:
+    # Returns token, source, expiry, refreshable. Missing and known-expired auth
+    # are explicit results; malformed files and real I/O errors still fail loudly.
     env_tok = os.environ.get("CORK_COPILOT_TOKEN")
     if env_tok and env_tok.strip():
         return env_tok.strip(), "env", None, False
@@ -274,9 +268,7 @@ def _resolve_copilot_auth() -> tuple[str, str, float | None, bool]:
         expires_at = cork_data.get("expires_at")
         if (cork_data.get("token") and expires_at is not None
                 and _now() >= expires_at - _TOKEN_SKEW and not cork_data.get("refresh_token")):
-            raise PermissionError(
-                f"Copilot token in {_CORK_AUTH} has expired and has no refresh token. "
-                f"Delete that token-only file and re-login with `{_LOGIN_COMMAND}`")
+            return None, "cork", float(expires_at), False
         tok = _cork_access_token(cork_data)
         if tok:
             if cork_data.get("token"):
@@ -303,19 +295,26 @@ def _resolve_copilot_auth() -> tuple[str, str, float | None, bool]:
             expires_at = float(expires) / 1000 if is_access and expires is not None else None
             return tok, "opencode", expires_at, False
 
-    raise LookupError(_missing_copilot_token_message())
+    return None, "none", None, False
 
 
-def _resolve_copilot_token() -> tuple[str, str, float | None]:
+def _resolve_copilot_token() -> tuple[str | None, str, float | None]:
     token, source, expires_at, _ = _resolve_copilot_auth()
     return token, source, expires_at
 
 
+def _unusable_copilot_token_message(source: str) -> str:
+    if source == "cork":
+        return (f"Copilot token in {_CORK_AUTH} has expired and has no refresh token. "
+                f"Delete that token-only file and re-login with `{_LOGIN_COMMAND}`")
+    return _missing_copilot_token_message()
+
+
 def _copilot_token() -> str:
-    try:
-        return _resolve_copilot_token()[0]
-    except (LookupError, PermissionError) as e:
-        fail(str(e))
+    token, source, _ = _resolve_copilot_token()
+    if token is None:
+        fail(_unusable_copilot_token_message(source))
+    return token
 
 
 def _auth_path(source: str) -> Path | None:
@@ -349,7 +348,7 @@ def _copilot_auth_summary(source: str, expires_at: float | None, refreshable: bo
                 f"{'no expiry' if expires_at is None else f'expires {expiry}'}, not refreshable — "
                 f"run `{_LOGIN_COMMAND}` to give cork its own token")
     if source == "env":
-        return ("WARNING: Copilot token: env override (CORK_COPILOT_TOKEN), no expiry, "
+        return ("Copilot token: env override (CORK_COPILOT_TOKEN), no expiry, "
                 f"not refreshable — run `{_LOGIN_COMMAND}` to give cork its own token")
     if not refreshable:
         label = "legacy-shape cork file" if source == "cork-legacy-shape" else "cork"
@@ -406,11 +405,8 @@ def _provider_token(provider: str) -> str:
 def _provider_token_available(provider: str) -> bool:
     match provider:
         case "copilot":
-            try:
-                _resolve_copilot_token()
-                return True
-            except (LookupError, PermissionError):
-                return False
+            token, _, _ = _resolve_copilot_token()
+            return token is not None
         case "openai":
             if os.environ.get("OPENAI_API_KEY", "").strip():
                 return True
@@ -889,7 +885,7 @@ def _probe(provider: str, model: str) -> str:
     try:
         status, text = _call_and_extract(provider, model, "", "ok", max_out=16)
     except (TimeoutError, urllib.error.URLError):
-        return "other"
+        return "timeout"
     return _classify_preflight(status, text)
 
 
@@ -914,13 +910,12 @@ def preflight(rotation: list[dict], count: int) -> list[dict]:
     selected: list[dict] = []
     print(f"Preflight: selecting up to {count} of {len(rotation)} ranked models…",
           flush=True)
-    copilot_auth: tuple[str, str, float | None, bool] | None = None
+    copilot_auth: tuple[str | None, str, float | None, bool] | None = None
     if any(entry["provider"] == "copilot" for entry in rotation):
-        try:
-            copilot_auth = _resolve_copilot_auth()
-        except (LookupError, PermissionError) as e:
-            fail(str(e))
-        _, source, expires_at, refreshable = copilot_auth
+        copilot_auth = _resolve_copilot_auth()
+        token, source, expires_at, refreshable = copilot_auth
+        if token is None:
+            fail(_unusable_copilot_token_message(source))
         print(_copilot_auth_summary(source, expires_at, refreshable), flush=True)
     for entry in rotation:
         if len(selected) >= count:
@@ -931,7 +926,8 @@ def preflight(rotation: list[dict], count: int) -> list[dict]:
             selected.append({"provider": provider, "model": model})
             print(f"  ✓ {provider}/{model}")
         elif verdict == "auth":
-            if provider == "copilot" and copilot_auth is not None:
+            if provider == "copilot":
+                assert copilot_auth is not None
                 _, source, _, refreshable = copilot_auth
                 fail(_copilot_auth_failure(source, refreshable))
             fail(f"{provider}: auth failed (401/403) — token invalid/expired. "
@@ -1312,7 +1308,7 @@ def cmd_login() -> None:
             interval += 5
             continue
         fail(f"Device authorization failed: {err or tok}")
-    fail("Device authorization timed out — re-run `orchestrate.py login`.")
+    fail(f"Device authorization timed out — re-run `{_LOGIN_COMMAND}`")
 
 
 def _print_auth_status(result: dict, as_json: bool) -> None:
@@ -1327,23 +1323,32 @@ def _print_auth_status(result: dict, as_json: bool) -> None:
     print(f"  probe: {result['probe']}")
 
 
+def _auth_probe_model() -> str:
+    cfg = load_config(quiet=True)
+    if cfg.get("providers", {}).get("copilot", {}).get("enabled", True):
+        model = next((entry["model"] for entry in cfg["rotation"]
+                      if entry["provider"] == "copilot"), None)
+        if model:
+            return model
+    return next(entry["model"] for entry in DEFAULT_CONFIG["rotation"]
+                if entry["provider"] == "copilot")
+
+
 def cmd_auth_status(as_json: bool = False) -> None:
-    try:
-        _, source, expires_at, refreshable = _resolve_copilot_auth()
-    except (LookupError, PermissionError) as e:
-        is_expired = isinstance(e, PermissionError)
-        expires_at = _read_cork_auth().get("expires_at") if is_expired else None
+    token, source, expires_at, refreshable = _resolve_copilot_auth()
+    if token is None:
         result = {
-            "source": "cork" if is_expired else "none",
-            "path": str(_CORK_AUTH) if is_expired else None,
+            "source": source,
+            "path": str(_auth_path(source)) if _auth_path(source) else None,
             "expiry": _format_expiry(expires_at) if expires_at is not None else None,
             "refreshable": False,
             "probe": "fail",
         }
         _print_auth_status(result, as_json)
-        fail(str(e))
+        fail(_unusable_copilot_token_message(source))
 
-    verdict = _probe("copilot", DEFAULT_CONFIG["rotation"][0]["model"])
+    model = _auth_probe_model()
+    verdict = _probe("copilot", model)
     result = {
         "source": source,
         "path": str(_auth_path(source)) if _auth_path(source) else None,
@@ -1352,8 +1357,16 @@ def cmd_auth_status(as_json: bool = False) -> None:
         "probe": "ok" if verdict == "ok" else "fail",
     }
     _print_auth_status(result, as_json)
-    if verdict != "ok":
+    if verdict == "auth":
         fail(f"Copilot auth probe failed using {source}. Re-login with `{_LOGIN_COMMAND}`")
+    if verdict == "model_not_supported":
+        fail(f"Copilot auth probe failed: copilot/{model} is not supported on this seat.")
+    if verdict == "integrator_mismatch":
+        fail(f"Copilot auth probe failed: copilot/{model} is unavailable to this integrator.")
+    if verdict == "timeout":
+        fail(f"Copilot auth probe timed out for copilot/{model}; retry later.")
+    if verdict != "ok":
+        fail(f"Copilot auth probe failed ({verdict}) for copilot/{model}; retry later.")
 
 
 def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True) -> None:
@@ -1447,7 +1460,8 @@ def main() -> None:
         sub = sys.argv[2] if len(sys.argv) >= 3 else ""
         rest = sys.argv[3:]
         if sub != "status" or any(arg != "--json" for arg in rest):
-            fail("usage: orchestrate.py auth status [--json]")
+            print("usage: orchestrate.py auth status [--json]", file=sys.stderr)
+            raise SystemExit(2)
         cmd_auth_status(as_json="--json" in rest)
         return
     if len(sys.argv) >= 2 and sys.argv[1] in ("--version", "-V", "version"):
