@@ -21,6 +21,24 @@ change, and add a section here.
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-09-17
+
+### Added
+- **Harness reviewers** — `--review-model claude/<m>` and `codex/<m>` run a locally installed
+  coding-agent CLI as an independent, read-only blind reviewer, with the same review inputs
+  (standards, story, files, diff), stdout findings, rotation, preflight and consolidation as
+  API models. New
+  `HARNESSES` table beside `PROVIDER_BASE` (adding a lane is data-only); `providers.claude` /
+  `providers.codex` config keys (`enabled` default false, optional `bin`, `extra_args`,
+  `timeout`); `CORK_CLAUDE_BIN` / `CORK_CODEX_BIN` env overrides. `preflight` treats
+  "binary on PATH" as the credential and never spends a turn probing. A harness that exits
+  non-zero, times out or prints nothing yields the existing `— skipped]` sentinel (one attempt,
+  no retry). `review()` / `cmd_review` now take `repo` so the harness runs with `cwd=repo`.
+  Read-only per lane: `claude --safe-mode --restricted` (no code-running tools, repo-confined);
+  `codex -s read-only` plus its shell/exec tools and user MCP config disabled, so codex reviews
+  from the prompt alone.
+  `opencode` and `pi` lanes follow in a separate PR.
+
 ## [0.8.3] — 2026-08-03
 
 ### Fixed

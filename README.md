@@ -171,6 +171,63 @@ and `anthropic` are supported but disabled by default; enable a provider in `con
 and supply its token via `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` (or keys `"openai"` /
 `"anthropic"` in `~/.config/cork/auth.json`). Secrets never go in `config.json`.
 
+### Harness reviewers (`claude`, `codex`)
+
+Besides API providers, cork can drive a **locally installed coding-agent CLI** as an
+independent, read-only reviewer. It receives the same review inputs as an API model —
+the standards, the story, the changed files and the diff (delivery per harness, see below) —
+and its stdout is consumed as the findings. Same `--review-model provider/model` syntax,
+same rotation/preflight/consolidation. Harnesses are disabled by default; enable one in
+`config.json` and add rotation entries:
+
+```json
+"providers": { "codex": {"enabled": true}, "claude": {"enabled": true, "extra_args": ["--max-budget-usd", "3"]} },
+"rotation":  [ {"provider": "codex", "model": "gpt-5.6-sol"}, {"provider": "claude", "model": "claude-opus-4.7"} ]
+```
+
+Invocations (flags verified against `claude --help` 2.1.x and `codex exec --help` 0.146.x):
+
+```bash
+claude -p --no-session-persistence --output-format text --model <m> --system-prompt <standards> \
+       --safe-mode --restricted --tools Read,Grep,Glob --permission-mode plan          # prompt on stdin
+codex exec -m <m> --ephemeral --skip-git-repo-check -C <repo> --color never - -s read-only \
+       --ignore-user-config --disable shell_tool --disable unified_exec \
+       --disable code_mode_host --disable apps                                          # prompt on stdin
+```
+
+**Read-only guarantees and their limits.** `claude` runs with `--safe-mode` (no CLAUDE.md,
+hooks, MCP or plugins — auth is kept, unlike `--bare`, which refuses OAuth logins) and
+`--restricted` (no code-running tools; file tools confined to the repo), with only
+`Read,Grep,Glob` under `--permission-mode plan`: it can read the repo but cannot run
+commands or reach outside it. `codex` runs under its `read-only` sandbox with no session
+persisted — but that sandbox only blocks writes; codex's shell would still run read-only
+commands and read anywhere the user can. So cork also passes `--disable shell_tool
+--disable unified_exec --disable code_mode_host --disable apps` and `--ignore-user-config`
+(features listed by `codex features list`, flags by `codex exec --help`): the codex
+reviewer then has **no command execution, no file access and none of your MCP servers**
+and reviews from the prompt alone, like an API model (verified with a tool-inventory probe
+on codex-cli 0.146.0; it still has web search, image tools and sub-agent tools). Neither
+lane can modify the repo (the manual check in the 0.11.0 PR shows `git status --porcelain`
+identical before and after). Codex has no system-prompt flag, so the standards are prepended to the prompt
+body under a `=== END OF REVIEW STANDARDS ===` separator. Claude's standards travel as one
+`--system-prompt` argument, so a standards layer over ~128 KiB hits the Linux per-argument
+limit and the lane is skipped with `Argument list too long`. **Trust boundary:** the
+reviewer follows instructions from the branch under review (`code-review/AGENTS.md`, file
+contents) with your local login, so a hostile branch could steer it into reading and quoting
+files it can reach (`--restricted` limits claude to the repo; codex has no file access,
+but does have web search).
+Run harness lanes only on branches you would run the repo's own hooks or tests from — the
+same trust you already extend to the implementer step. A timeout kills the CLI process
+itself; tool subprocesses it spawned are not tracked.
+
+Per-harness config keys — the only ones read: `bin` (or env `CORK_CLAUDE_BIN` /
+`CORK_CODEX_BIN`, which wins), `extra_args` (appended verbatim, *before* the read-only
+flags; treated as trusted — it is your own config), `timeout` (seconds, default 900). The
+argv template and read-only flags are not configurable. `preflight` selects a
+harness iff its binary is on PATH — no spend. A harness that exits non-zero, times out,
+or prints nothing is reported and skipped (`[codex/<m> returned no usable content — skipped]`);
+there is no retry.
+
 ### Interactive review (`interactive_review`, default on)
 
 When on, cork (full mode) and the Copilot review loop **pause after each reviewer**: the
@@ -207,6 +264,7 @@ refreshes it in place; native-provider keys live alongside and are preserved acr
 | `CORK_COPILOT_TOKEN` | — | Copilot token used directly (highest priority) |
 | `CORK_COPILOT_CLIENT_ID` | `Iv1.b507a08c87ecfe98` | GitHub OAuth client id for `login` |
 | `CLAUDE_BIN` | `~/.local/bin/claude` | Path to Claude Code CLI (headless mode) |
+| `CORK_CLAUDE_BIN` / `CORK_CODEX_BIN` | `claude` / `codex` (PATH) | Harness reviewer binaries (see *Harness reviewers*) |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | — | Native-provider tokens (only if you enable those providers) |
 
 ### Error recovery (headless)
