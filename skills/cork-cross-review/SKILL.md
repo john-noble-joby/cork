@@ -94,7 +94,7 @@ mkdir -p ~/.cache/cork/$REPO/pr$N
 OUT=$(mktemp -d ~/.cache/cork/$REPO/pr$N/"$(date -u +%Y%m%dT%H%M%SZ)"-XXXXXX)   # allocated atomically: unique even for two runs in the same second
 RUN=${OUT##*/}                                                        # run id = that unique directory name; one run = one review round
 WT=/tmp/cork-$REPO-pr$N-$RUN/wt                                       # scratch worktree, derived from the run id
-TID="XR-$REPO-$N-$RUN"                                                # checkpoint id, derived from the run id
+TID="XR-$REPO-$N-$RUN"                                                # ticket-id positional: a per-run label
 gh pr view "$N" --json title,body,author,baseRefName,headRefName,headRefOid,additions,deletions,changedFiles > "$OUT/pr.json"
 gh pr diff "$N" > "$OUT/diff.patch"
 ```
@@ -167,7 +167,7 @@ snapshot "$WT" > "$OUT/post-gate-hashes"
 
 **Cleanup runs on every exit path after Step 1 has allocated the run**, not only after a clean
 verdict: a red gate and a `BLOCK` verdict both end with the Step 8 cleanup block, so the next run
-never trips over a registered worktree or a stale checkpoint. (A plan-gate stop in Step 0 happens
+never trips over a registered worktree. (A plan-gate stop in Step 0 happens
 before anything is allocated — there is nothing to clean, and the block refuses to run unset.)
 
 Never use the author's checkout. `$WT` is where the gates run and the cwd for prompt-only lanes
@@ -214,7 +214,8 @@ for LANE in $LANES; do
     snapshot "$LANE_WT" > "$OUT/pre-$SLICE-$safe-hashes" ;;
   esac
   ( python3 "$CORK_HOME/orchestrate.py" "$TID" "$LANE_WT" \
-        --review-model "$LANE" --base-branch "origin/$BASE" --skip-validation \
+        --review-model "$LANE" --story-file "$OUT/story.md" \
+        --base-branch "origin/$BASE" --skip-validation \
         > "$OUT/review-$SLICE-$safe.txt" 2> "$OUT/review-$SLICE-$safe.err"
     echo $? > "$OUT/review-$SLICE-$safe.status" ) &      # `wait` alone discards exit codes
 done
@@ -224,30 +225,21 @@ wait
 A lane counts as **reviewed** only when its `.status` is `0` *and* its `.txt` holds findings —
 not the `… — skipped]` sentinel, not empty, not a crashed lane's retry/progress chatter. Anything
 else is a failed lane (roster outcome `skipped`), even if stdout is non-empty. For a sliced review
-run this loop once per slice with `SLICE` set to that slice's name and the checkpoint re-seeded
+run this loop once per slice with `SLICE` set to that slice's name and the story file rewritten
 with that slice's contract excerpt and in-scope paths.
 
-**How the contract reaches a lane (as of 0.15.0).** `--review-model` has no `--story` flag: the
-review-only path reads its story from cork's checkpoint file
-`~/.local/share/code-orchestrator/<ticket>.json` (`done.summary`), and with no checkpoint every
-lane receives only "Review the branch changes for <ticket>." — the contract never arrives. So
-**before the fan-out**, write the story and seed the checkpoint for the ticket id you pass as the
-first positional — `$TID`, which is unique per run so it can neither collide with a concurrent
-review of the same PR number nor overwrite a real cork checkpoint (Step 8 deletes it):
+**How the contract reaches a lane (0.16.0).** Write the story file **before the fan-out** and
+pass it with `--story-file`, so API and harness lanes receive the same acceptance contract without
+touching cork's checkpoints (the `$TID` positional is only a label for this run):
 
 ```bash
 { echo "## Acceptance contract"; cat "$OUT/contract.md"; echo; echo "## In-scope paths"; echo "<pathspec or 'whole diff'>";
   echo; echo "## Rule"; echo "<the verbatim rule below>"; } > "$OUT/story.md"
-mkdir -p ~/.local/share/code-orchestrator
-jq -n --rawfile s "$OUT/story.md" --arg tid "$TID" \
-  '{version:2, ticket_id:$tid, done:{implement:true, summary:$s}}' \
-  > ~/.local/share/code-orchestrator/"$TID".json
 ```
 
-A `--story-file` flag that removes this pre-seed is a registered follow-on; until it lands, the
-checkpoint is the only channel. `--review-model` also has no pathspec/slice option, so every call
-receives the full branch diff: for a sliced review, re-seed the checkpoint once per slice with that
-slice's contract excerpt and in-scope paths, then run the lane loop. Harness lanes run with the
+`--review-model` has no pathspec/slice option, so every call receives the full branch diff: for a
+sliced review, write a story file per slice with that slice's contract excerpt and in-scope paths,
+then pass it with `--story-file` in that slice's lane loop. Harness lanes run with the
 scratch worktree as their working directory — `orchestrate.py` passes it as `cwd` and applies the
 read-only flags; you do not need to add prompt text for that. The story text for every lane
 carries this rule, verbatim:
@@ -341,12 +333,12 @@ missed, run another lane on it.
 
 - **You are the author's session** (the PR is yours): apply the fixes yourself, run the gates,
   commit, push (never force-push), then **run the Step 8 cleanup block for this round** (its
-  worktree and checkpoint) and loop to Step 1, which allocates the next round's `$OUT`, `$WT` and
-  `$TID` and checks out the new head. Review-only mode has no diff-range input: every
+  worktrees) and loop to Step 1, which allocates the next round's `$OUT`, `$WT` and
+  `$TID`. Review-only mode has no diff-range input: every
   `--review-model` call receives the full `<base>...HEAD` diff, so each round is a full re-review.
-  Focus it on the delta through the story instead — before the fan-out, re-seed the checkpoint
-  with the previous round's blockers and the delta (`git diff --stat <old-head>..<new-head>`, plus
-  the hunks if small), asking each lane to confirm its own blockers are closed and to look for
+  Focus it on the delta through the story instead — write a new story file with the previous
+  round's blockers and the delta (`git diff --stat <old-head>..<new-head>`, plus the hunks if
+  small) and pass it with `--story-file`, asking each lane to confirm its own blockers are closed and to look for
   regressions there first. Run the *same* lanes. A `--diff-range` input that makes rounds
   delta-only is a registered follow-on.
 - **Someone else's PR**: post `$OUT/consolidated.md` as a PR comment (`gh pr comment $N
@@ -365,7 +357,6 @@ consolidated report, and clean up:
 # Each step independent: one failure must not skip the others (it is reported, not hidden).
 for t in "${WT%/wt}"/wt*; do git worktree remove --force "$t" || echo "cleanup: worktree removal failed: $t" >&2; done
 git worktree prune                || echo "cleanup: worktree prune failed" >&2
-rm -f ~/.local/share/code-orchestrator/"$TID".json || echo "cleanup: checkpoint removal failed: $TID" >&2   # the seeded story checkpoint
 ```
 
 Run this block on **every** exit after Step 1 — red gate, `BLOCK`, or done. (A plan-gate stop in
