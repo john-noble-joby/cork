@@ -75,6 +75,36 @@ PROVIDER_BASE = {
     "anthropic": "https://api.anthropic.com",
 }
 
+
+def _auth_exit_zero(result: subprocess.CompletedProcess, _model: str) -> bool:
+    return result.returncode == 0
+
+
+def _plain_auth_output(result: subprocess.CompletedProcess) -> str:
+    return re.sub(r"\x1b\[[0-9;]*m", "", f"{result.stdout}\n{result.stderr}")
+
+
+def _opencode_auth_ready(result: subprocess.CompletedProcess, _model: str) -> bool:
+    text = _plain_auth_output(result)
+    if result.returncode != 0:
+        return False
+    count = re.search(r"\b(\d+) credentials?\b", text, re.IGNORECASE)
+    return bool(count and int(count.group(1)) > 0)
+
+
+def _auth_detail(result: subprocess.CompletedProcess, model: str) -> str:
+    text = _plain_auth_output(result)
+    for pattern in (r"^Logged in using (.+)$", r"^Login method: (.+)$"):
+        match = re.search(pattern, text, re.MULTILINE)
+        if match:
+            return match.group(1).strip()
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        payload = {}
+    return str(payload.get("provider") or (model.split("/", 1)[0] if "/" in model else ""))
+
+
 # Locally installed coding-agent CLIs used as independent, READ-ONLY reviewers.
 # Adding a lane is a data-only change: `argv` is the harness's own flag set
 # ({model}/{repo} substituted), `read_only` is the subset that enforces
@@ -92,6 +122,9 @@ HARNESSES: dict[str, dict] = {
         "read_only": ["--safe-mode", "--restricted", "--tools", "Read,Grep,Glob",
                       "--permission-mode", "plan"],
         "system_flag": "--system-prompt", "prompt_via": "stdin", "timeout": 900,
+        "auth_probe": {"argv": ["auth", "status", "--text"], "success": _auth_exit_zero,
+                       "detail": _auth_detail, "login": "claude auth login",
+                       "env_flag": "ANTHROPIC_API_KEY"},
     },
     "codex": {  # codex-cli 0.146.x — verified against `codex exec --help`
         "bin": "codex", "bin_env": "CORK_CODEX_BIN",
@@ -99,6 +132,26 @@ HARNESSES: dict[str, dict] = {
                  "-C", "{repo}", "--color", "never", "-"],
         "read_only": ["-s", "read-only"],
         "system_flag": None, "prompt_via": "stdin", "timeout": 900,
+        "auth_probe": {"argv": ["login", "status"], "success": _auth_exit_zero,
+                       "detail": _auth_detail, "login": "codex login"},
+    },
+    "opencode": {  # opencode 1.17.x — verified against `opencode run --help`
+        "bin": "opencode", "bin_env": "CORK_OPENCODE_BIN",
+        "argv": ["run", "-m", "{model}"],
+        "read_only": ["--agent", "plan", "--format", "default", "--dir", "{repo}", "--pure"],
+        "system_flag": None, "prompt_via": "arg", "timeout": 900,
+        "auth_probe": {"argv": ["auth", "list"], "success": _opencode_auth_ready,
+                       "detail": _auth_detail, "login": "opencode auth login"},
+    },
+    "pi": {  # pi 0.85.x — verified against `pi --help`
+        "bin": "pi", "bin_env": "CORK_PI_BIN",
+        "argv": ["-p", "--model", "{model}"],
+        "read_only": ["--tools", "read,grep,find,ls", "--no-session", "--no-context-files", "--"],
+        "system_flag": "--system-prompt", "prompt_via": "arg", "timeout": 900,
+        "auth_probe": {"argv": ["auth", "check", "--provider", "{model_provider}",
+                                "--json", "--no-refresh"],
+                       "success": _auth_exit_zero, "detail": _auth_detail,
+                       "login": "pi, then /login"},
     },
 }
 # The only per-harness keys config.json may set — `argv`/`read_only` are not
@@ -348,7 +401,7 @@ def _provider_token(provider: str) -> str:
 
 
 def _provider_token_available(provider: str) -> bool:
-    if provider in HARNESSES:  # no token — the binary on PATH is the credential
+    if provider in HARNESSES:  # binary gate only; _probe verifies its live login
         return shutil.which(_harness_bin(provider)) is not None
     match provider:
         case "copilot":
@@ -843,7 +896,7 @@ def _harness_argv(spec: dict, model: str, repo: str, system: str) -> list[str]:
     if spec["system_flag"]:
         argv += [spec["system_flag"], system]
     # read-only flags go LAST so user extra_args cannot out-rank them on last-wins parsers
-    return argv + list(spec["extra_args"]) + list(spec["read_only"])
+    return argv + list(spec["extra_args"]) + [a.format(**sub) for a in spec["read_only"]]
 
 
 def _harness_call(provider: str, model: str, system: str, user_msg: str,
@@ -907,9 +960,43 @@ def _classify_preflight(status: int, body: str) -> str:
     return "other"
 
 
-def _probe(provider: str, model: str) -> str:
-    if provider in HARNESSES:  # presence check only — never spends a harness turn
-        return "ok" if shutil.which(_harness_bin(provider)) else "no binary"
+def _harness_auth_probe(provider: str, model: str) -> dict:
+    spec = _harness_settings(provider)
+    result = {"provider": provider, "model": model, "status": "error",
+              "detail": "", "login": spec["auth_probe"]["login"]}
+    env_flag = spec["auth_probe"].get("env_flag")
+    if env_flag:
+        result["env_key"] = env_flag in os.environ
+    if not shutil.which(spec["bin"]):
+        result["status"] = "missing_binary"
+        return result
+    sub = {"model_provider": model.split("/", 1)[0]}
+    argv = [spec["bin"], *(arg.format(**sub) for arg in spec["auth_probe"]["argv"])]
+    try:
+        completed = subprocess.run(argv, timeout=10, stdin=subprocess.DEVNULL,
+                                   capture_output=True, text=True)
+    except subprocess.TimeoutExpired:
+        result["status"] = "timeout"
+        return result
+    except FileNotFoundError:
+        result["status"] = "missing_binary"
+        return result
+    except OSError:
+        return result
+    if spec["auth_probe"]["success"](completed, model):
+        result["status"] = "ok"
+        result["detail"] = spec["auth_probe"]["detail"](completed, model)
+    elif completed.returncode in (0, 1):
+        result["status"] = "not_logged_in"
+    return result
+
+
+def _probe(provider: str, model: str, details: dict | None = None) -> str:
+    if provider in HARNESSES:
+        result = _harness_auth_probe(provider, model)
+        if details is not None:
+            details.update(result)
+        return result["status"]
     # A cheap availability probe — cap output hard so it can't burn review-sized
     # quota (the classification only needs the HTTP status, not the content).
     try:
@@ -917,6 +1004,15 @@ def _probe(provider: str, model: str) -> str:
     except (TimeoutError, urllib.error.URLError):
         return "other"
     return _classify_preflight(status, text)
+
+
+def harness_auth_summary() -> list[dict]:
+    cfg = load_config(quiet=True)
+    providers = cfg.get("providers", {})
+    return [_harness_auth_probe(entry["provider"], entry["model"])
+            for entry in cfg.get("rotation", [])
+            if entry["provider"] in HARNESSES
+            and providers.get(entry["provider"], {}).get("enabled", False)]
 
 
 def _eligible_rotation(cfg: dict) -> list[dict]:
@@ -929,11 +1025,14 @@ def _eligible_rotation(cfg: dict) -> list[dict]:
         # rotation entry alone never runs a local CLI without explicit opt-in.
         enabled  = providers_cfg.get(provider, {}).get("enabled", provider not in HARNESSES)
         if not enabled:
-            print(f"  ✗ {provider}/{model} skipped (provider disabled)", flush=True)
+            if provider not in HARNESSES:
+                print(f"  ✗ {provider}/{model} skipped (provider disabled)", flush=True)
             continue
         if not _provider_token_available(provider):
-            why = "binary not on PATH" if provider in HARNESSES else f"no {provider} token"
-            print(f"  ✗ {provider}/{model} skipped ({why})", flush=True)
+            if provider in HARNESSES:
+                print(f"  ✗ {provider}: not installed", flush=True)
+            else:
+                print(f"  ✗ {provider}/{model} skipped (no {provider} token)", flush=True)
             continue
         kept.append(entry)
     return kept
@@ -944,18 +1043,29 @@ def preflight(rotation: list[dict], count: int) -> list[dict]:
     print(f"Preflight: selecting up to {count} of {len(rotation)} ranked models…",
           flush=True)
     for entry in rotation:
-        if len(selected) >= count:
-            break
+        if len(selected) >= count and entry["provider"] not in HARNESSES:
+            continue
         provider, model = entry["provider"], entry["model"]
-        verdict = _probe(provider, model)
+        probe: dict = {}
+        verdict = _probe(provider, model, probe)
+        env_note = "; ANTHROPIC_API_KEY set" if probe.get("env_key") else ""
         if verdict == "ok":
-            selected.append({"provider": provider, "model": model})
-            print(f"  ✓ {provider}/{model}")
+            if len(selected) < count:
+                selected.append({"provider": provider, "model": model})
+            if provider in HARNESSES:
+                detail = probe.get("detail") or "authenticated"
+                print(f"  ✓ {provider}: live ({detail}{env_note})")
+            else:
+                print(f"  ✓ {provider}/{model}")
         elif verdict == "auth":
             fail(f"{provider}: auth failed (401/403) — token invalid/expired. "
                  f"Fix the {provider} token and retry.")
-        else:
+        elif verdict == "not_logged_in":
+            print(f"  ✗ {provider}: logged-out — run {probe['login']}{env_note}")
+        elif provider not in HARNESSES:
             print(f"  ✗ {provider}/{model} dropped ({verdict})")
+        else:
+            print(f"  ✗ {provider}: unavailable ({verdict}{env_note})")
     if not selected:
         fail("No usable models on this seat — check your config rotation / tokens.")
     if len(selected) < count:

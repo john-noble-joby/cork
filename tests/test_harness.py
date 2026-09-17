@@ -1,4 +1,5 @@
-import os, subprocess, tempfile, unittest
+import inspect, io, os, subprocess, tempfile, unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 import orchestrate
 
@@ -21,7 +22,8 @@ class HarnessBase(unittest.TestCase):
         orchestrate.CONFIG_PATH = Path(self.tmp.name) / "config.json"  # -> DEFAULT_CONFIG
         self._run, self._which = orchestrate.subprocess.run, orchestrate.shutil.which
         self._env = {k: os.environ.pop(k, None)
-                     for k in ("ANTHROPIC_API_KEY", "CORK_CLAUDE_BIN", "CORK_CODEX_BIN")}
+                     for k in ("ANTHROPIC_API_KEY", "CORK_CLAUDE_BIN", "CORK_CODEX_BIN",
+                               "CORK_OPENCODE_BIN", "CORK_PI_BIN")}
 
     def tearDown(self):
         orchestrate.CONFIG_PATH = self._cfg
@@ -58,6 +60,29 @@ class ArgvTest(HarnessBase):
         self.assertNotIn("--bare", argv)       # --bare refuses OAuth logins; --safe-mode keeps auth
         self.assertNotIn("Bash", ",".join(argv))
 
+    def test_opencode_argv_read_only_prompt_arg_cwd(self):
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        orchestrate._harness_call("opencode", "github-copilot/gpt-5.5", "SYS", "USER", "/repo")
+        argv, kw = fake.calls[0]
+        self.assertEqual(argv, ["opencode", "run", "-m", "github-copilot/gpt-5.5",
+                                "--agent", "plan", "--format", "default", "--dir", "/repo",
+                                "--pure", "SYS\n\n=== END OF REVIEW STANDARDS — REVIEW TASK "
+                                "FOLLOWS ===\n\nUSER"])
+        self.assertEqual(kw["cwd"], "/repo")
+        self.assertNotIn("input", kw)
+        self.assertIs(kw["stdin"], subprocess.DEVNULL)
+
+    def test_pi_argv_read_only_prompt_arg_devnull(self):
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        orchestrate._harness_call("pi", "glm-internal/glm-5.3-onprem", "SYS", "USER", "/repo")
+        argv, kw = fake.calls[0]
+        self.assertEqual(argv, ["pi", "-p", "--model", "glm-internal/glm-5.3-onprem",
+                                "--system-prompt", "SYS", "--tools", "read,grep,find,ls",
+                                "--no-session", "--no-context-files", "--", "USER"])
+        self.assertEqual(kw["cwd"], "/repo")
+        self.assertNotIn("input", kw)
+        self.assertIs(kw["stdin"], subprocess.DEVNULL)
+
     def test_config_cannot_override_read_only_or_argv(self):
         orchestrate.CONFIG_PATH.write_text('{"rotation":[{"provider":"codex","model":"m"}],'
                                            '"providers":{"codex":{"enabled":true,"read_only":[],'
@@ -67,6 +92,18 @@ class ArgvTest(HarnessBase):
         argv = fake.calls[0][0]
         self.assertEqual(argv[-2:], ["-s", "read-only"]); self.assertIn("--ephemeral", argv)
         self.assertNotIn("--x", argv)
+
+    def test_new_lane_read_only_flags_follow_extra_args(self):
+        for lane, marker in (("opencode", "--agent"), ("pi", "--tools")):
+            with self.subTest(lane=lane):
+                orchestrate.CONFIG_PATH.write_text(
+                    '{"rotation":[{"provider":"' + lane + '","model":"p/m"}],'
+                    '"providers":{"' + lane + '":{"enabled":true,"extra_args":["--unsafe"]}}}'
+                )
+                fake = _FakeRun(); orchestrate.subprocess.run = fake
+                orchestrate._harness_call(lane, "p/m", "S", "U", "/repo")
+                argv = fake.calls[0][0]
+                self.assertLess(argv.index("--unsafe"), argv.index(marker))
 
     def test_bin_env_and_extra_args_and_timeout_from_config(self):
         os.environ["CORK_CODEX_BIN"] = "/opt/codex"
@@ -190,9 +227,11 @@ class ApiRoutingUnaffectedTest(HarnessBase):
 class ConfigAndProbeTest(HarnessBase):
     def test_validate_accepts_harness_and_rejects_unknown(self):
         orchestrate._validate_config({"rotation": [{"provider": "claude", "model": "x"},
-                                                   {"provider": "codex", "model": "y"}]})
+                                                   {"provider": "codex", "model": "y"},
+                                                   {"provider": "opencode", "model": "z"},
+                                                   {"provider": "pi", "model": "p/q"}]})
         with self.assertRaises(SystemExit):
-            orchestrate._validate_config({"rotation": [{"provider": "opencode", "model": "x"}]})
+            orchestrate._validate_config({"rotation": [{"provider": "unknown", "model": "x"}]})
 
     def test_validate_harness_keys_types(self):
         base = {"rotation": [{"provider": "codex", "model": "m"}]}
@@ -218,36 +257,24 @@ class ConfigAndProbeTest(HarnessBase):
 
     def test_table_only_lane_is_data_only(self):
         # A future lane added ONLY to HARNESSES must validate and default to disabled.
-        orchestrate.HARNESSES["opencode"] = {**orchestrate.HARNESSES["codex"], "bin": "opencode",
-                                             "bin_env": "CORK_OPENCODE_BIN"}
+        orchestrate.HARNESSES["future"] = {**orchestrate.HARNESSES["codex"], "bin": "future",
+                                           "bin_env": "CORK_FUTURE_BIN"}
         orchestrate.shutil.which = lambda b: "/usr/bin/" + b
         try:
-            cfg = {"providers": {}, "rotation": [{"provider": "opencode", "model": "m"}]}
+            cfg = {"providers": {}, "rotation": [{"provider": "future", "model": "m"}]}
             orchestrate._validate_config(cfg)
             self.assertEqual(orchestrate._eligible_rotation(cfg), [])
-            self.assertTrue(orchestrate._provider_token_available("opencode"))
+            self.assertTrue(orchestrate._provider_token_available("future"))
         finally:
-            del orchestrate.HARNESSES["opencode"]
+            del orchestrate.HARNESSES["future"]
 
-    def test_token_available_and_probe_follow_which(self):
+    def test_token_available_follows_which(self):
         orchestrate.shutil.which = lambda b: "/usr/bin/" + b
         self.assertTrue(orchestrate._provider_token_available("codex"))
-        self.assertEqual(orchestrate._probe("claude", "m"), "ok")
         orchestrate.shutil.which = lambda b: None
         self.assertFalse(orchestrate._provider_token_available("codex"))
-        self.assertEqual(orchestrate._probe("claude", "m"), "no binary")
 
-    def test_probe_never_runs_binary_or_http(self):
-        orchestrate.shutil.which = lambda b: "/usr/bin/" + b
-        orchestrate.subprocess.run = _FakeRun(raise_=AssertionError("must not run"))
-        orig = orchestrate._http_post_json
-        orchestrate._http_post_json = lambda *a, **k: (_ for _ in ()).throw(AssertionError("no HTTP"))
-        try:
-            self.assertEqual(orchestrate._probe("codex", "m"), "ok")
-        finally:
-            orchestrate._http_post_json = orig
-
-    def test_eligible_rotation_skip_line_names_binary(self):
+    def test_eligible_rotation_missing_harness_says_not_installed(self):
         import io
         from contextlib import redirect_stdout
         orchestrate.shutil.which = lambda b: None
@@ -256,19 +283,157 @@ class ConfigAndProbeTest(HarnessBase):
         buf = io.StringIO()
         with redirect_stdout(buf):
             self.assertEqual(orchestrate._eligible_rotation(cfg), [])
-        self.assertIn("binary not on PATH", buf.getvalue())
+        self.assertIn("codex: not installed", buf.getvalue())
 
     def test_preflight_selects_harness_without_http(self):
         orchestrate.shutil.which = lambda b: "/usr/bin/" + b
+        orchestrate.subprocess.run = _FakeRun(out="Logged in using ChatGPT")
         orig = orchestrate._http_post_json
         orchestrate._http_post_json = lambda *a, **k: (_ for _ in ()).throw(AssertionError("no HTTP"))
         try:
-            sel = orchestrate.preflight([{"provider": "codex", "model": "gpt-5.6-sol"},
-                                         {"provider": "claude", "model": "claude-opus-4.7"}], 2)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                sel = orchestrate.preflight([{"provider": "codex", "model": "gpt-5.6-sol"},
+                                             {"provider": "claude", "model": "claude-opus-4.7"}], 2)
         finally:
             orchestrate._http_post_json = orig
         self.assertEqual([orchestrate._model_key(s) for s in sel],
                          ["codex/gpt-5.6-sol", "claude/claude-opus-4.7"])
+        self.assertIn("codex: live (ChatGPT)", buf.getvalue())
+
+
+class AuthProbeTest(HarnessBase):
+    def setUp(self):
+        super().setUp()
+        orchestrate.shutil.which = lambda b: "/usr/bin/" + b
+
+    def test_probe_argv_per_lane_and_pi_provider_extraction(self):
+        cases = {
+            "claude": ("x", ["claude", "auth", "status", "--text"], "Login method: OAuth"),
+            "codex": ("x", ["codex", "login", "status"], ""),
+            "opencode": ("github-copilot/gpt", ["opencode", "auth", "list"],
+                         "GitHub Copilot oauth\n1 credential"),
+            "pi": ("glm-internal/glm-5.3/onprem",
+                   ["pi", "auth", "check", "--provider", "glm-internal", "--json",
+                    "--no-refresh"], '{"status":"ready","provider":"glm-internal"}'),
+        }
+        for lane, (model, argv, output) in cases.items():
+            with self.subTest(lane=lane):
+                fake = _FakeRun(out=output, err="Logged in using ChatGPT" if lane == "codex" else "")
+                orchestrate.subprocess.run = fake
+                details = {}
+                self.assertEqual(orchestrate._probe(lane, model, details), "ok")
+                self.assertEqual(details["status"], "ok")
+                self.assertEqual(fake.calls, [(argv, {"timeout": 10, "stdin": subprocess.DEVNULL,
+                                                      "capture_output": True, "text": True})])
+
+    def test_outcome_mapping(self):
+        for fake, expected in ((_FakeRun(rc=1), "not_logged_in"),
+                               (_FakeRun(rc=2), "error"),
+                               (_FakeRun(raise_=subprocess.TimeoutExpired("codex", 10)), "timeout"),
+                               (_FakeRun(raise_=FileNotFoundError("codex")), "missing_binary")):
+            with self.subTest(expected=expected):
+                orchestrate.subprocess.run = fake
+                self.assertEqual(orchestrate._probe("codex", "m"), expected)
+        orchestrate.shutil.which = lambda b: None
+        self.assertEqual(orchestrate._probe("codex", "m"), "missing_binary")
+
+    def test_opencode_credential_count(self):
+        for output, expected in (
+            ("GitHub Copilot oauth\n1 credential", "ok"),
+            ("0 credentials", "not_logged_in"),
+            ("2 credentials", "ok"),
+        ):
+            with self.subTest(output=output):
+                orchestrate.subprocess.run = _FakeRun(out=output)
+                self.assertEqual(orchestrate._probe("opencode", "provider/model"), expected)
+        orchestrate.subprocess.run = _FakeRun(rc=1, out="Anthropic oauth\n1 credential")
+        self.assertEqual(orchestrate._probe("opencode", "anthropic/claude"), "not_logged_in")
+
+    def test_each_lane_logged_out_and_not_installed(self):
+        for lane in orchestrate.HARNESSES:
+            with self.subTest(lane=lane, state="logged_out"):
+                output = "0 credentials" if lane == "opencode" else ""
+                orchestrate.subprocess.run = _FakeRun(rc=0 if lane == "opencode" else 1,
+                                                       out=output)
+                self.assertEqual(orchestrate._probe(lane, "provider/model"), "not_logged_in")
+            with self.subTest(lane=lane, state="not_installed"):
+                orchestrate.shutil.which = lambda b: None
+                self.assertEqual(orchestrate._probe(lane, "provider/model"), "missing_binary")
+                orchestrate.shutil.which = lambda b: "/usr/bin/" + b
+
+    def test_claude_env_key_is_presence_only(self):
+        os.environ["ANTHROPIC_API_KEY"] = ""
+        orchestrate.subprocess.run = _FakeRun(rc=1)
+        details = {}
+        self.assertEqual(orchestrate._probe("claude", "m", details), "not_logged_in")
+        self.assertIs(details["env_key"], True)
+
+    def test_preflight_logged_out_prints_login_and_never_calls_http(self):
+        orchestrate.subprocess.run = _FakeRun(rc=1)
+        original = orchestrate._http_post_json
+        orchestrate._http_post_json = lambda *a, **k: self.fail("HTTP probe called")
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf), self.assertRaises(SystemExit):
+                orchestrate.preflight([{"provider": "codex", "model": "m"}], 1)
+        finally:
+            orchestrate._http_post_json = original
+        self.assertIn("codex: logged-out — run codex login", buf.getvalue())
+
+    def test_preflight_claude_timeout_notes_env_key(self):
+        os.environ["ANTHROPIC_API_KEY"] = "invalid"
+        orchestrate.subprocess.run = _FakeRun(raise_=subprocess.TimeoutExpired("claude", 10))
+        buf = io.StringIO()
+        with redirect_stdout(buf), self.assertRaises(SystemExit):
+            orchestrate.preflight([{"provider": "claude", "model": "m"}], 1)
+        self.assertIn("claude: unavailable (timeout; ANTHROPIC_API_KEY set)", buf.getvalue())
+
+    def test_preflight_reports_harness_after_selection_count_is_full(self):
+        original = orchestrate._call_and_extract
+        orchestrate._call_and_extract = lambda *a, **k: (200, "ok")
+        orchestrate.subprocess.run = _FakeRun(out="Logged in using ChatGPT")
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                selected = orchestrate.preflight([
+                    {"provider": "copilot", "model": "gpt"},
+                    {"provider": "codex", "model": "review"},
+                ], 1)
+        finally:
+            orchestrate._call_and_extract = original
+        self.assertEqual(selected, [{"provider": "copilot", "model": "gpt"}])
+        self.assertIn("codex: live (ChatGPT)", buf.getvalue())
+
+    def test_eligible_rotation_silences_disabled_harness(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(orchestrate._eligible_rotation({
+                "providers": {"pi": {"enabled": False}},
+                "rotation": [{"provider": "pi", "model": "p/m"}],
+            }), [])
+        self.assertEqual(buf.getvalue(), "")
+
+    def test_harness_auth_summary_enabled_rotation_only(self):
+        orchestrate.CONFIG_PATH.write_text(
+            '{"providers":{"codex":{"enabled":true},"pi":{"enabled":false}},'
+            '"rotation":[{"provider":"codex","model":"m"},'
+            '{"provider":"pi","model":"glm/x"},{"provider":"copilot","model":"gpt"}]}'
+        )
+        orchestrate.subprocess.run = _FakeRun(out="Logged in using ChatGPT")
+        self.assertEqual(orchestrate.harness_auth_summary(), [{
+            "provider": "codex", "model": "m", "status": "ok", "detail": "ChatGPT",
+            "login": "codex login",
+        }])
+
+    def test_lane_names_are_not_enumerated_in_generic_code_paths(self):
+        generic = "\n".join(inspect.getsource(fn) for fn in (
+            orchestrate._harness_call, orchestrate._harness_auth_probe,
+            orchestrate._probe, orchestrate._eligible_rotation,
+            orchestrate._provider_token_available,
+        ))
+        for lane in orchestrate.HARNESSES:
+            self.assertNotIn(f'provider == "{lane}"', generic)
 
 
 class SplitRefTest(unittest.TestCase):
