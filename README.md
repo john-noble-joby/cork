@@ -80,6 +80,7 @@ pause-between-reviews preference, and the status line.
 | Command | Purpose |
 |---------|---------|
 | `python3 orchestrate.py auth status [--json]` | Show the active Copilot token source, expiry, refreshability, and one cheap probe result. |
+| `python3 orchestrate.py auth print-token [--json]` | Print the resolved Copilot token for a command-backed credential consumer. |
 | `python3 orchestrate.py login` | Give cork its own refreshable Copilot token through GitHub's device flow. |
 | `python3 orchestrate.py preflight` | Probe the configured model rotation and select usable reviewers. |
 | `python3 orchestrate.py config init\|show\|get\|set` | Initialize, inspect, or update cork configuration. |
@@ -226,6 +227,52 @@ cork file and the read-only opencode fallback are not refreshable; run
 | `CORK_COPILOT_CLIENT_ID` | `Iv1.b507a08c87ecfe98` | GitHub OAuth client id for `login` |
 | `CLAUDE_BIN` | `~/.local/bin/claude` | Path to Claude Code CLI (headless mode) |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | — | Native-provider tokens (only if you enable those providers) |
+
+### Using your Copilot seat for the Codex lane
+
+Codex CLI 0.146 can use cork's resolved Copilot credential through a custom Responses
+provider. Export `CORK_HOME` in the environment that starts Codex, then add this to
+`~/.codex/config.toml`:
+
+```bash
+export CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
+```
+
+```toml
+[model_providers.copilot]
+name = "GitHub Copilot"
+base_url = "https://api.githubcopilot.com"
+wire_api = "responses"
+http_headers = { "x-initiator" = "user", "Openai-Intent" = "conversation-edits", "User-Agent" = "opencode/0.1.0" }
+
+[model_providers.copilot.auth]
+command = "sh"
+args = ["-c", 'python3 "$CORK_HOME/orchestrate.py" auth print-token']
+refresh_interval_ms = 300000
+```
+
+The five-minute refresh interval makes Codex rerun the helper; cork's resolver applies the
+same `CORK_COPILOT_TOKEN` → cork auth file → opencode fallback precedence as reviews and
+refreshes an expired, refreshable cork token before printing it. Verify the source first with
+`python3 "$CORK_HOME/orchestrate.py" auth status`.
+
+For a cork Codex harness lane, select the provider through `extra_args` and use a
+`codex/<model>` rotation ref:
+
+```json
+{
+  "providers": {
+    "codex": {"enabled": true, "extra_args": ["-c", "model_provider=copilot"]}
+  },
+  "rotation": [{"provider": "codex", "model": "gpt-5.5"}]
+}
+```
+
+This passthrough is unsupported by GitHub and may stop working. Codex receives the token from
+the helper's stdout through a subprocess pipe, so do not add any other stdout output to
+`auth print-token` and remember that a process with access to that pipe can read the token.
+Claude Code cannot use this provider: its model API integration uses Anthropic's wire format,
+not the OpenAI Responses format exposed here.
 
 ### Error recovery (headless)
 

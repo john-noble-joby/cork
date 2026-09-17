@@ -11,6 +11,7 @@ class AuthRefreshTest(unittest.TestCase):
         self._cork, self._oc = orchestrate._CORK_AUTH, orchestrate._OPENCODE_AUTH
         self._post, self._now, self._probe = orchestrate._post_form, orchestrate._now, orchestrate._probe
         self._load_config = orchestrate.load_config
+        self._resolve = orchestrate._resolve_copilot_auth
         orchestrate._CORK_AUTH, orchestrate._OPENCODE_AUTH = self.cork, self.oc
         orchestrate.load_config = lambda quiet=False: orchestrate.DEFAULT_CONFIG
         self._env = os.environ.pop("CORK_COPILOT_TOKEN", None)
@@ -19,6 +20,7 @@ class AuthRefreshTest(unittest.TestCase):
         orchestrate._CORK_AUTH, orchestrate._OPENCODE_AUTH = self._cork, self._oc
         orchestrate._post_form, orchestrate._now, orchestrate._probe = self._post, self._now, self._probe
         orchestrate.load_config = self._load_config
+        orchestrate._resolve_copilot_auth = self._resolve
         if self._env is not None:
             os.environ["CORK_COPILOT_TOKEN"] = self._env
         self.tmp.cleanup()
@@ -342,6 +344,48 @@ class AuthRefreshTest(unittest.TestCase):
             "probe": "ok",
         })
 
+    def test_auth_print_token_is_exact_for_each_resolver_source(self):
+        for source in ("env", "cork", "cork-legacy-shape", "opencode"):
+            with self.subTest(source=source):
+                token = f"{source}_TOKEN"
+                orchestrate._resolve_copilot_auth = lambda: (token, source, None, False)
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    orchestrate.cmd_auth_print_token()
+                self.assertEqual(out.getvalue(), f"{token}\n")
+
+    def test_auth_print_token_refreshes_expired_cork_token(self):
+        orchestrate._now = lambda: 10000.0
+        self.cork.write_text(json.dumps(
+            {"token": "OLD", "refresh_token": "R1", "expires_at": 5000}))
+        orchestrate._post_form = lambda *a, **k: {
+            "access_token": "NEW", "refresh_token": "R2", "expires_in": 28800}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            orchestrate.cmd_auth_print_token()
+        self.assertEqual(out.getvalue(), "NEW\n")
+
+    def test_auth_print_token_json_reports_resolver_fields(self):
+        orchestrate._resolve_copilot_auth = lambda: ("TOKEN", "cork", 1234.5, True)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            orchestrate.cmd_auth_print_token(as_json=True)
+        self.assertEqual(json.loads(out.getvalue()), {
+            "token": "TOKEN", "source": "cork", "expires_at": 1234.5,
+        })
+        self.assertEqual(out.getvalue().count("\n"), 1)
+
+    def test_auth_print_token_without_token_fails_only_on_stderr_with_login_hint(self):
+        orchestrate._resolve_copilot_auth = lambda: (None, "none", None, False)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit) as raised:
+            orchestrate.cmd_auth_print_token()
+        self.assertEqual(raised.exception.code, 1)
+        self.assertEqual(out.getvalue(), "")
+        self.assertEqual(len([line for line in err.getvalue().splitlines() if line]), 1)
+        self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
+
     def test_auth_status_json_exits_one_when_nothing_resolves(self):
         calls = []
         orchestrate._probe = lambda provider, model: calls.append((provider, model)) or "ok"
@@ -477,6 +521,17 @@ class AuthRefreshTest(unittest.TestCase):
             orchestrate.cmd_auth_status, orchestrate.sys.argv = original, argv
         self.assertEqual(calls, [True])
 
+    def test_main_dispatches_auth_print_token_json(self):
+        original, argv = orchestrate.cmd_auth_print_token, orchestrate.sys.argv
+        calls = []
+        orchestrate.cmd_auth_print_token = lambda as_json=False: calls.append(as_json)
+        orchestrate.sys.argv = ["orchestrate.py", "auth", "print-token", "--json"]
+        try:
+            orchestrate.main()
+        finally:
+            orchestrate.cmd_auth_print_token, orchestrate.sys.argv = original, argv
+        self.assertEqual(calls, [True])
+
     def test_main_rejects_unknown_auth_option_with_usage_exit_two(self):
         argv = orchestrate.sys.argv
         orchestrate.sys.argv = ["orchestrate.py", "auth", "status", "--bogus"]
@@ -487,7 +542,7 @@ class AuthRefreshTest(unittest.TestCase):
         finally:
             orchestrate.sys.argv = argv
         self.assertEqual(raised.exception.code, 2)
-        self.assertIn("usage: orchestrate.py auth status [--json]", err.getvalue())
+        self.assertIn("usage: orchestrate.py auth status|print-token [--json]", err.getvalue())
 
 
 if __name__ == "__main__":
