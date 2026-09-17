@@ -75,6 +75,17 @@ Most of steps 3–6 are handled for you by the **`cork-setup` skill** — after 
 restart, just say **"set up cork"** and it walks you through the token, models, the
 pause-between-reviews preference, and the status line.
 
+## Commands
+
+| Command | Purpose |
+|---------|---------|
+| `python3 orchestrate.py auth status [--json]` | Show the active Copilot token source, expiry, refreshability, and one cheap probe result. |
+| `python3 orchestrate.py login` | Give cork its own refreshable Copilot token through GitHub's device flow. |
+| `python3 orchestrate.py preflight` | Probe the configured model rotation and select usable reviewers. |
+| `python3 orchestrate.py config init\|show\|get\|set` | Initialize, inspect, or update cork configuration. |
+| `python3 orchestrate.py standards status\|init` | Inspect or initialize the effective review standards. |
+| `python3 orchestrate.py <TICKET> <repo> [options]` | Run the headless implementation and review pipeline. |
+
 ---
 
 ## Write detailed Linear tickets — it matters a lot
@@ -162,9 +173,11 @@ Cork picks reviewers at runtime. The ranked candidate list and desired count liv
 
 `rotation` is the ranked preference list; `count` is how many reviewers to actually run.
 `preflight` probes each entry in order, drops the unreachable ones, and selects the first
-`count` survivors (errors only if none survive). Auth failures (401/403) are fatal — fix
-the token. `gpt-5.x`/codex are reached via Copilot's `/responses` endpoint automatically;
-everything else uses `/chat/completions`.
+`count` survivors (errors only if none survive). Before probing, preflight names the active
+Copilot credential source. Environment overrides are informational; warnings are reserved for
+a non-refreshable cork file or the opencode fallback. Auth failures (401/403) are fatal and name
+the rejected source plus the `login` recovery command. `gpt-5.x`/codex are reached via
+Copilot's `/responses` endpoint automatically; everything else uses `/chat/completions`.
 
 **Providers:** Copilot is the default and recommended path (one flat-rate seat). `openai`
 and `anthropic` are supported but disabled by default; enable a provider in `config.json`
@@ -196,8 +209,17 @@ Tokens live in **`~/.config/cork/auth.json`** (written by `orchestrate.py login`
 refreshes it in place; native-provider keys live alongside and are preserved across refreshes:
 `{"token": …, "refresh_token": …, "expires_at": …, "openai": "<key>", "anthropic": "<key>"}`.
 (For backward compat a bare `{"token": "<copilot>"}` and the legacy opencode shape
-`{"github-copilot": {"access": "…"}}` are also accepted.) The env vars below are **overrides**
+`{"github-copilot": {"refresh": "…"}}` are also accepted.) The env vars below are **overrides**
 (resolved first), not required. None are needed if you clone to `~/dev/cork` and run `login`.
+
+Run `python3 orchestrate.py auth status` to see which source actually won, whether it can
+refresh, its expiry, and a one-request probe result. Add `--json` for scripting; its `probe`
+field is `{"status": "ok|fail", "reason": "<verdict>"}` so callers can distinguish auth
+failures from model, integrator, timeout, and connection failures. The reason is `missing` or
+`expired` when no probe can run, otherwise it is the probe verdict (`ok`, `auth`,
+`model_not_supported`, `integrator_mismatch`, `timeout`, `connection`, or `other`). A
+token-only cork file and the read-only opencode fallback are not refreshable; run
+`python3 "$CORK_HOME/orchestrate.py" login` to replace either with cork's own credential.
 
 | Env var | Default | Purpose |
 |---------|---------|---------|

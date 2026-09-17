@@ -7,7 +7,7 @@ description: Use when the user says "cork" / "run cork" on a branch (full mode �
 
 "Cork" = **C**ode **Or**chestrator **R**eview **K**ickoff.
 
-**Version:** 0.8.3 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
+**Version:** 0.10.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
 
 **The active Claude session is the coding agent.** Unlike the legacy headless mode (where `orchestrate.py` spawned `claude --print` subprocesses), here *you* — the session with full codebase + conversation context — do the implementing and fixing. The orchestrator script is used only as a stateless review tool: `--review-model MODEL` returns one outside model's findings on the current branch diff.
 
@@ -157,7 +157,7 @@ Print the report and stop. If the user then wants fixes applied, that's a separa
 - **Base branch** is `develop` for edge-fmt. Pass `--base-branch develop` (local and origin are kept in sync; if in doubt `git fetch origin && git merge --ff-only origin/develop`).
 - **Run tests** after each fix before committing — don't commit a broken build. (Full mode only — review-only never writes code.)
 - **Review-only mode** is side-effect-free: parallel reviews → one consolidated report, nothing applied. Reach for it to review someone else's branch.
-- **Copilot token**: `--review-model` resolves a token in priority order — `CORK_COPILOT_TOKEN` env var → cork's own `~/.config/cork/auth.json` (`CORK_AUTH_FILE`) → opencode (`~/.local/share/opencode/auth.json`). To give cork its own token, run `python3 "$CORK_HOME/orchestrate.py" login` (GitHub device flow, writes the auth file automatically). cork **refreshes that token automatically** — `login` persists the refresh token, so you only need to re-run `login` if the refresh token itself expires (~6 months) or is revoked (a persistent 401 that survives a retry).
+- **Copilot token**: `--review-model` resolves a token in priority order — `CORK_COPILOT_TOKEN` env var → cork's own `~/.config/cork/auth.json` (`CORK_AUTH_FILE`) → opencode (`~/.local/share/opencode/auth.json`). Run `python3 "$CORK_HOME/orchestrate.py" auth status` to see the source, expiry, refreshability, and probe result. Preflight warns when it is using the non-refreshable opencode fallback or a token-only credential. To give cork its own refreshable token, run `python3 "$CORK_HOME/orchestrate.py" login` (GitHub device flow, writes the auth file automatically). Re-run `login` only if the refresh token itself expires (~6 months), is revoked, or status reports a non-refreshable source.
 - **Worktree**: all edits go in the PR's worktree, not the main checkout.
 - **Headless mode** still exists: `$CORK_HOME/orchestrate.py {TICKET} {WORKTREE}` runs the full `3 + 2×N` pipeline with `claude --print` subprocesses (N = preflight-selected count from config). Use that only for unattended/background runs; it resumes automatically from the checkpoint on re-run.
 - **Path config:** the orchestrator location comes from `$CORK_HOME` (default `~/dev/cork`). Set it in your shell profile or `~/.claude/settings.json` `env` block if your clone lives elsewhere.
