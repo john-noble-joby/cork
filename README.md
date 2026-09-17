@@ -143,6 +143,10 @@ The **effective** rubric for a repo is:
   precedence); fill in your stack's conventions.
 - **Opt a repo out:** `standards init <repo> --opt-out` (writes `code-review/.cork-standards-off`).
 - **Opt out everywhere:** `python3 orchestrate.py config set default_standards false`.
+- **Scope of the opt-out:** these toggles control what `orchestrate.py` injects into API
+  reviewers and the devit implementer prompt. The installed `coding-standards` skill is a
+  harness-level default and stays loaded in interactive sessions; uninstall it (delete
+  `~/.claude/skills/coding-standards`) if you don't want it at all.
 - **See what applies:** `python3 orchestrate.py standards status <repo>`.
 
 Two ways to run it:

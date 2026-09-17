@@ -11,6 +11,10 @@ One baseline for **both** roles: as an implementer, write code that would pass t
 
 These are the universal defaults. A repo's own standards file (e.g. `code-review/AGENTS.md`) layers on top — project specifics win and extend, never dilute. Where a repo standard deliberately endorses something a baseline smell below would flag, the repo wins — suppress the smell.
 
+This skill is a harness-level default: cork's `default_standards` / `.cork-standards-off`
+toggles gate only what the orchestrator injects into API reviewers, not whether this skill
+loads.
+
 Full review-session protocol (pass order, adversarial checklist, report format, dependency/doc hygiene): [references/review-checklist.md](references/review-checklist.md).
 
 ## Priority order — what "good" looks like

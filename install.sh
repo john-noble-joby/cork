@@ -13,6 +13,15 @@ VERSION="$(tr -d '[:space:]' < "$REPO/VERSION")"
 SKILLS=(coding-standards copilot-review-loop cork cork-setup devit)
 : "${DEST:?DEST must not be empty}"
 mkdir -p -- "$DEST"
+repo_root="$(cd -- "$REPO" && pwd -P)"
+src_root="$(cd -- "$REPO/skills" && pwd -P)"
+dest_root="$(cd -- "$DEST" && pwd -P)"
+case "$dest_root/" in
+  "$src_root/"*|"$repo_root/")
+    echo "✗ refusing to install into $DEST — it overlaps this repo's skills/ (source tree)"
+    exit 1
+    ;;
+esac
 
 echo "Installing cork skills v$VERSION → $DEST"
 echo

@@ -19,7 +19,8 @@ what `install.sh` keeps in sync. Check what's installed any time with
 (also surfaced in the cork skill's Step 0 confirmation line).
 
 Then invoke by phrase in any session:
-- **coding-standards** — auto-loaded when writing or reviewing code; no phrase needed
+- **coding-standards** — auto-loaded when writing or reviewing code; no phrase needed. Not
+  governed by cork's standards opt-out (that gates orchestrator-injected prompts only).
 - **cork** — "cork" / "run cork on this branch"
 - **copilot-review-loop** — "run the copilot review loop on this branch"
 - **devit** — "devit <TICKET>"
