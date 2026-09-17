@@ -102,11 +102,20 @@ def _opencode_auth_logged_out(result: subprocess.CompletedProcess, _model: str) 
     return result.returncode == 0 and bool(count and int(count.group(1)) == 0)
 
 
-def _pi_auth_logged_out(result: subprocess.CompletedProcess, _model: str) -> bool:
+def _pi_auth_payload(result: subprocess.CompletedProcess) -> dict:
     try:
         payload = json.loads(_plain_auth_output(result))
     except json.JSONDecodeError:
-        return False
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _pi_auth_ready(result: subprocess.CompletedProcess, _model: str) -> bool:
+    return result.returncode == 0 and _pi_auth_payload(result).get("status") == "ready"
+
+
+def _pi_auth_logged_out(result: subprocess.CompletedProcess, _model: str) -> bool:
+    payload = _pi_auth_payload(result)
     return (result.returncode == 1 and payload.get("status") == "not_ready"
             and payload.get("reason") != "provider_not_found")
 
@@ -120,6 +129,8 @@ def _auth_detail(result: subprocess.CompletedProcess, model: str) -> str:
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
+        payload = {}
+    if not isinstance(payload, dict):
         payload = {}
     return str(payload.get("reason") or payload.get("provider")
                or (model.split("/", 1)[0] if "/" in model else ""))
@@ -167,8 +178,10 @@ HARNESSES: dict[str, dict] = {
         "model_ref_parts": 2,
         "env": {
             "OPENCODE_PERMISSION": json.dumps({
-                "bash": "deny", "edit": "deny", "write": "deny", "patch": "deny",
-                "task": "deny", "webfetch": "deny", "external_directory": "deny",
+                # In OpenCode 1.17.x, `edit` governs both write and patch tools.
+                "bash": "deny", "edit": "deny", "task": "deny",
+                "webfetch": "deny", "websearch": "deny",
+                "external_directory": "deny",
             }, separators=(",", ":")),
             "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
         },
@@ -185,7 +198,7 @@ HARNESSES: dict[str, dict] = {
         "model_ref_parts": 2,
         "auth_probe": {"argv": ["auth", "check", "--provider", "{model_provider}",
                                 "--json", "--no-refresh"],
-                       "success": _auth_exit_zero, "logged_out": _pi_auth_logged_out,
+                       "success": _pi_auth_ready, "logged_out": _pi_auth_logged_out,
                        "detail": _auth_detail,
                        "login": "pi, then /login"},
     },
@@ -613,6 +626,9 @@ def _validate_harness_cfg(name: str, hc: dict) -> None:
     # from subprocess.run instead of the documented skipped-review sentinel.
     if not isinstance(hc, dict):
         fail(f"config.providers.{name} must be an object")
+    unknown = sorted(set(hc) - {"enabled", *_HARNESS_CONFIG_KEYS})
+    if unknown:
+        print(f"  ⚠ config.providers.{name}: ignoring unknown keys: {', '.join(unknown)}")
     if "bin" in hc and (not isinstance(hc["bin"], str) or not hc["bin"].strip()):
         fail(f"config.providers.{name}.bin must be a non-empty string")
     ea = hc.get("extra_args", [])

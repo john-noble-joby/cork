@@ -119,8 +119,8 @@ class ArgvTest(HarnessBase):
         env = fake.calls[0][1]["env"]
         self.assertEqual(env["OPENCODE_DISABLE_PROJECT_CONFIG"], "1")
         denies = json.loads(env["OPENCODE_PERMISSION"])
-        self.assertEqual(set(denies), {"bash", "edit", "write", "patch", "task",
-                                      "webfetch", "external_directory"})
+        self.assertEqual(set(denies), {"bash", "edit", "task", "webfetch", "websearch",
+                                      "external_directory"})
         self.assertEqual(set(denies.values()), {"deny"})
 
     def test_bin_env_and_extra_args_and_timeout_from_config(self):
@@ -266,6 +266,18 @@ class ConfigAndProbeTest(HarnessBase):
             with self.assertRaises(SystemExit, msg=repr(bad)):
                 orchestrate._validate_config({**base, "providers": {"codex": bad}})
 
+    def test_validate_warns_only_for_unknown_harness_keys(self):
+        base = {"rotation": [{"provider": "opencode", "model": "p/m"}]}
+        for extra, expected in (({"env": {}},
+                                 "  ⚠ config.providers.opencode: ignoring unknown keys: env\n"),
+                                ({}, "")):
+            with self.subTest(extra=extra):
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    orchestrate._validate_config({
+                        **base, "providers": {"opencode": {"enabled": True, **extra}}})
+                self.assertEqual(buf.getvalue(), expected)
+
     def test_default_config_has_harnesses_disabled(self):
         for h in orchestrate.HARNESSES:
             self.assertFalse(orchestrate.DEFAULT_CONFIG["providers"][h]["enabled"])
@@ -392,6 +404,21 @@ class AuthProbeTest(HarnessBase):
         self.assertEqual(orchestrate._probe("pi", "bad/model", details), "error")
         self.assertEqual(details["detail"], "provider_not_found")
 
+    def test_pi_logged_out_requires_rc1_not_ready_json(self):
+        cases = (
+            (_FakeRun(rc=1, out="", err="provider failed"), "non-JSON rc1"),
+            (_FakeRun(rc=0, out="", err="provider failed"), "non-JSON rc0"),
+            (_FakeRun(rc=1, out="[]"), "non-object JSON rc1"),
+            (_FakeRun(rc=0, out='{"status":"not_ready","reason":"missing_credentials"}'),
+             "not_ready rc0"),
+            (_FakeRun(rc=1, out='{"status":"ready","provider":"glm-internal"}'),
+             "ready rc1"),
+        )
+        for fake, label in cases:
+            with self.subTest(case=label):
+                orchestrate.subprocess.run = fake
+                self.assertEqual(orchestrate._probe("pi", "glm-internal/model"), "error")
+
     def test_each_lane_logged_out_and_not_installed(self):
         for lane in orchestrate.HARNESSES:
             with self.subTest(lane=lane, state="logged_out"):
@@ -433,6 +460,23 @@ class AuthProbeTest(HarnessBase):
         with redirect_stdout(buf), self.assertRaises(SystemExit):
             orchestrate.preflight([{"provider": "claude", "model": "m"}], 1)
         self.assertIn("claude: unavailable (timeout; ANTHROPIC_API_KEY set)", buf.getvalue())
+
+    def test_preflight_pi_logged_out_includes_reason(self):
+        orchestrate.subprocess.run = _FakeRun(
+            rc=1, out='{"status":"not_ready","reason":"missing_credentials"}')
+        buf = io.StringIO()
+        with redirect_stdout(buf), self.assertRaises(SystemExit):
+            orchestrate.preflight([{"provider": "pi", "model": "glm-internal/model"}], 1)
+        self.assertIn("pi: logged-out (missing_credentials) — run pi, then /login",
+                      buf.getvalue())
+
+    def test_preflight_pi_error_includes_reason(self):
+        orchestrate.subprocess.run = _FakeRun(
+            rc=1, out='{"status":"not_ready","reason":"provider_not_found"}')
+        buf = io.StringIO()
+        with redirect_stdout(buf), self.assertRaises(SystemExit):
+            orchestrate.preflight([{"provider": "pi", "model": "bad/model"}], 1)
+        self.assertIn("pi: unavailable (error: provider_not_found)", buf.getvalue())
 
     def test_preflight_reports_harness_after_selection_count_is_full(self):
         original = orchestrate._call_and_extract

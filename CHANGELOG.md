@@ -32,9 +32,10 @@ change, and add a section here.
   preflight and report `ok`, `not_logged_in`, `missing_binary`, `timeout`, or `error`, with the
   lane-specific login command. Preflight continues past a full selection to report every enabled
   harness, marking live lanes that were not selected because the count was reached.
-- **Immutable OpenCode isolation** — cork denies shell, write, task, web and external-directory
-  permissions through `OPENCODE_PERMISSION` and disables branch-controlled OpenCode project
-  configuration. Pi also ignores project-local `.pi/` resources with `--no-approve`.
+- **Immutable OpenCode isolation** — through `OPENCODE_PERMISSION`, cork denies `bash`; `edit`
+  (which governs write and patch tools); `task`; `webfetch`; `websearch`; and
+  `external_directory`. It also disables branch-controlled OpenCode project configuration.
+  Pi ignores project-local `.pi/` resources with `--no-approve`.
 
 ## [0.11.0] — 2026-09-17
 

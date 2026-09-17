@@ -209,8 +209,9 @@ hooks, MCP or plugins — auth is kept, unlike `--bare`, which refuses OAuth log
 `--restricted` (no code-running tools; file tools confined to the repo), with only
 `Read,Grep,Glob` under `--permission-mode plan`. `codex` runs under its `read-only` sandbox
 with no session persisted. OpenCode's stock `plan` agent still allows shell and plan-file
-writes, so cork injects `OPENCODE_PERMISSION` denies for `bash`, edit/write/patch, task,
-webfetch and external-directory access. `OPENCODE_DISABLE_PROJECT_CONFIG=1` prevents a branch's
+writes, so cork injects `OPENCODE_PERMISSION` denies for `bash`; `edit` (which governs both
+write and patch tools); `task`; `webfetch`; `websearch`; and `external_directory` access.
+`OPENCODE_DISABLE_PROJECT_CONFIG=1` prevents a branch's
 `.opencode/` configuration or project instructions from weakening that policy; `--pure` also
 disables external plugins. Pi receives only `read,grep,find,ls`, disables sessions and context
 files, ignores project-local `.pi/` resources with `--no-approve`, and reads stdin from
