@@ -41,19 +41,18 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 python3 "$CORK_HOME/orchestrate.py" --version            # cork version — announce it (see below)
+git rev-parse --verify --quiet "{BASE}^{commit}" >/dev/null || { echo "base {BASE} does not resolve"; exit 1; }
+git merge-base "{BASE}" HEAD >/dev/null      || { echo "no merge base with {BASE}"; exit 1; }
 python3 "$CORK_HOME/orchestrate.py" preflight            # probe & select models for this seat
 python3 "$CORK_HOME/orchestrate.py" standards status .   # show the active review-standards layers
 git rev-parse --abbrev-ref HEAD                         # current branch
 git rev-parse --abbrev-ref HEAD | grep -oP 'MXE-\d+'    # ticket ID, if branch follows convention
 pwd                                                     # worktree path
 git log {BASE}..HEAD --oneline                          # commits vs base
-git rev-parse --verify --quiet "{BASE}^{commit}" >/dev/null || { echo "base {BASE} does not resolve"; exit 1; }
-git merge-base "{BASE}" HEAD >/dev/null      || { echo "no merge base with {BASE}"; exit 1; }
-[ -n "$(git diff {BASE}...HEAD)" ]           || { echo "empty diff vs {BASE} — nothing to review"; exit 1; }
 ```
 
-Stop here on any of those — an unrelated base or an empty diff must fail once, up front,
-not once per background `--review-model` process.
+Stop here if the base is unresolvable or unrelated — fail once, locally, before probing
+providers or starting any review process.
 
 If `standards status` shows *no project standards* and the default is on, mention once (non-blocking): the repo has no project standards layer — `standards init` adds one, `--opt-out` skips the default. Proceed regardless.
 
@@ -78,6 +77,13 @@ Confirm with the user before running (lead with the captured `{VERSION}` and the
 If the branch has no commits vs develop, implement the story now (in-session), then commit. If implementation is already committed, skip to Step 2.
 
 ### Step 2 — Self-review
+
+```bash
+[ -n "$(git diff {BASE}...HEAD)" ] || { echo "empty diff vs {BASE} — nothing was implemented"; exit 1; }
+```
+
+After the implementation commit, stop here if the diff is still empty; do not fan out
+reviewers for a branch that implemented nothing.
 
 Review your own diff with subagents (dispatch parallel reviewers), apply fixes, commit.
 
@@ -125,6 +131,10 @@ Push the branch and open a PR with `gh`, summarizing what each pass caught.
 You apply **nothing** in this mode: no edits, no commits, no push, no PR, no mem0/Linear writes. The deliverable is one findings report printed in-session.
 
 Because no fixes land between passes, **every reviewer sees the identical diff** — so the reviews are independent and you run them **in parallel** (the opposite of full mode, where fixes between passes force sequencing).
+
+```bash
+[ -n "$(git diff {BASE}...HEAD)" ] || { echo "empty diff vs {BASE} — nothing to review"; exit 1; }
+```
 
 ### R1 — Fan out all reviewers at once
 

@@ -12,16 +12,51 @@ DEST="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
 VERSION="$(tr -d '[:space:]' < "$REPO/VERSION")"
 SKILLS=(coding-standards copilot-review-loop cork cork-setup devit)
 : "${DEST:?DEST must not be empty}"
-mkdir -p -- "$DEST"
+
+resolve_before_create() {
+  local candidate="$1" probe part tail ancestor
+  case "$candidate" in
+    /*) ;;
+    *) candidate="$PWD/$candidate" ;;
+  esac
+  while [ "$candidate" != "/" ] && [ "${candidate%/}" != "$candidate" ]; do
+    candidate="${candidate%/}"
+  done
+  probe="$candidate"
+  tail=""
+  while [ ! -e "$probe" ]; do
+    part="${probe##*/}"
+    tail="/$part$tail"
+    probe="${probe%/*}"
+    [ -n "$probe" ] || probe="/"
+  done
+  ancestor="$(cd -- "$probe" && pwd -P)"
+  printf '%s\n' "$ancestor$tail" | awk -F/ '
+    {
+      count = 0
+      for (i = 1; i <= NF; i++) {
+        if ($i == "" || $i == ".") continue
+        if ($i == "..") { if (count > 0) count--; continue }
+        parts[++count] = $i
+      }
+      if (count == 0) { print "/"; next }
+      result = ""
+      for (i = 1; i <= count; i++) result = result "/" parts[i]
+      print result
+    }
+  '
+}
+
 repo_root="$(cd -- "$REPO" && pwd -P)"
 src_root="$(cd -- "$REPO/skills" && pwd -P)"
-dest_root="$(cd -- "$DEST" && pwd -P)"
+dest_root="$(resolve_before_create "$DEST")"
 case "$dest_root/" in
   "$src_root/"*|"$repo_root/")
     echo "✗ refusing to install into $DEST — it overlaps this repo's skills/ (source tree)"
     exit 1
     ;;
 esac
+mkdir -p -- "$DEST"
 
 echo "Installing cork skills v$VERSION → $DEST"
 echo
@@ -48,8 +83,25 @@ for s in "${SKILLS[@]}"; do
   if [ -L "$DEST/$s" ]; then
     echo "  ⚠ $s: $DEST/$s is a symlink — replacing it with a copy"
   fi
-  rm -rf -- "$DEST/$s"
-  mv -- "$tmp" "$DEST/$s"
+  prev="$DEST/.$s.prev.$$"
+  had_previous=0
+  if [ -e "$DEST/$s" ] || [ -L "$DEST/$s" ]; then
+    if ! mv -- "$DEST/$s" "$prev"; then
+      echo "  ✗ $s: could not preserve previous copy — install aborted" >&2
+      rm -rf -- "$tmp"
+      exit 1
+    fi
+    had_previous=1
+  fi
+  if ! mv -- "$tmp" "$DEST/$s"; then
+    echo "  ✗ $s: install swap failed — restoring previous copy" >&2
+    rm -rf -- "$tmp"
+    if [ "$had_previous" -eq 1 ] && ! mv -- "$prev" "$DEST/$s"; then
+      echo "  ✗ $s: rollback also failed; previous copy remains at $prev" >&2
+    fi
+    exit 1
+  fi
+  rm -rf -- "$prev"
   echo "  ✓ $s installed (stamp v${stamp:-?})"
 done
 

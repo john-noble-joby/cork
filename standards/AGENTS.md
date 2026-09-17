@@ -64,8 +64,9 @@ out good patterns by name — affirmation matters.
   throwing parse turns expected bad input into exception flow control.
 - **Locale/culture:** every parse/format of numbers, dates, and URIs pinned to an invariant
   or explicit culture.
-- **Nullability escape hatches:** every null-forgiving assertion (`!` and equivalents)
-  needs a justification or a refactor that removes it.
+- **Nullability escape hatches:** nullability annotations are reviewed for correctness;
+  every null-forgiving assertion (`!` and equivalents) needs a justification or a refactor
+  that removes it.
 - **Public surface docs:** public library APIs get doc comments — coverage, not only
   freshness.
 - **Type design:** primitive obsession (raw string/int for IDs, money, paths) where a small
