@@ -134,6 +134,42 @@ class InstallSafetyTest(unittest.TestCase):
                     self.assertIn("overlaps this repo's skills/", result.stdout)
                     self._assert_clean_fixture(repo)
 
+    def test_identity_guard_refuses_alias_when_string_guard_is_removed(self):
+        # Kills deletion of the -ef identity layer: this fixture removes the
+        # string guard, leaving filesystem identity as the only refusal path.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, skills = self._guard_fixture(root)
+            link = root / "skills-alias"
+            link.symlink_to(skills, target_is_directory=True)
+            script = repo / "install.sh"
+            contents = script.read_text()
+            string_guard = '''case "$dest_root/" in
+  "$src_root/"*|"$repo_root/")
+    echo "✗ refusing to install into $DEST — it overlaps this repo's skills/ (source tree)"
+    exit 1
+    ;;
+esac
+'''
+            self.assertIn(string_guard, contents)
+            script.write_text(contents.replace(string_guard, "", 1))
+            subprocess.run(["git", "add", "install.sh"], cwd=repo, check=True)
+            subprocess.run(
+                [
+                    "git", "-c", "user.name=Test", "-c",
+                    "user.email=test@example.com", "commit", "-qm",
+                    "test fixture without string overlap guard",
+                ],
+                cwd=repo,
+                check=True,
+            )
+
+            result = self._run(repo, link)
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("overlaps this repo's skills/", result.stdout)
+            self._assert_clean_fixture(repo)
+
     def test_repo_root_with_or_without_trailing_slashes_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, _ = self._guard_fixture(Path(tmp))
@@ -271,6 +307,11 @@ class InstallSafetyTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn(
                 "↩ coding-standards: recovered previous copy from interrupted install",
+                result.stdout,
+            )
+            self.assertIn(
+                f"⚠ coding-standards: {destination}/coding-standards is a dangling "
+                "symlink — removing it",
                 result.stdout,
             )
             installed = destination / "coding-standards"

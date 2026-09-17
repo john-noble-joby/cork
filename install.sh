@@ -76,7 +76,33 @@ repo_root="$(cd -- "$REPO" && pwd -P)"
 src_root="$(cd -- "$REPO/skills" && pwd -P)"
 dest_root="$(resolve_before_create "$DEST")" || exit 1
 [ -n "$dest_root" ] || { echo "✗ could not resolve destination $DEST"; exit 1; }
-# This comparison is case-sensitive; refusal is best-effort on case-insensitive filesystems.
+dest_ancestor="$dest_root"
+while [ ! -e "$dest_ancestor" ] && [ ! -L "$dest_ancestor" ]; do
+  dest_ancestor="${dest_ancestor%/*}"
+  [ -n "$dest_ancestor" ] || dest_ancestor="/"
+done
+
+# Two layers are deliberate: -ef catches filesystem aliases and case-insensitive
+# equivalence; the string case remains a readable second check before any mkdir.
+identity_path="$dest_ancestor"
+identity_overlap=0
+while :; do
+  if [ "$identity_path" -ef "$src_root" ]; then
+    identity_overlap=1
+    break
+  fi
+  [ "$identity_path" = "/" ] && break
+  identity_path="${identity_path%/*}"
+  [ -n "$identity_path" ] || identity_path="/"
+done
+if [ "$dest_root" = "$dest_ancestor" ] && [ "$dest_ancestor" -ef "$repo_root" ]; then
+  identity_overlap=1
+fi
+if [ "$identity_overlap" -eq 1 ]; then
+  echo "✗ refusing to install into $DEST — it overlaps this repo's skills/ (source tree)"
+  exit 1
+fi
+
 case "$dest_root/" in
   "$src_root/"*|"$repo_root/")
     echo "✗ refusing to install into $DEST — it overlaps this repo's skills/ (source tree)"
@@ -117,6 +143,7 @@ for s in "${SKILLS[@]}"; do
   : "${s:?skill name must not be empty}"
   rm -rf -- "$DEST/.$s.tmp."*
   if [ -L "$DEST/$s" ] && [ ! -e "$DEST/$s" ]; then
+    echo "  ⚠ $s: $DEST/$s is a dangling symlink — removing it"
     rm -f -- "$DEST/$s"
   fi
   if [ ! -e "$DEST/$s" ] && [ ! -L "$DEST/$s" ]; then
@@ -143,8 +170,9 @@ for s in "${SKILLS[@]}"; do
     echo "  ⚠ $s: $DEST/$s is a symlink — replacing it with a copy"
   fi
   # Accepted trade-off: the installed path is absent for the instant between these two
-  # moves. The install lock prevents writers interleaving; a racing reader sees an old
-  # or new complete copy, never a partially-copied directory.
+  # moves. The lock only serializes writers; a racing reader may see the path missing,
+  # or an old or new complete copy — never a partial one. Atomic indirection was
+  # deliberately not used (see CHANGELOG).
   prev="$DEST/.$s.prev.$$"
   had_previous=0
   if [ -e "$DEST/$s" ] || [ -L "$DEST/$s" ]; then
