@@ -2327,7 +2327,8 @@ def main() -> None:
     story_group.add_argument("--story-file", metavar="PATH",
                              help="Review-only story/acceptance contract read as UTF-8.")
     story_group.add_argument("--story", metavar="TEXT",
-                             help="Review-only story/acceptance contract supplied inline.")
+                             help="Review-only story/acceptance contract supplied inline. "
+                                  "Use --story=TEXT when TEXT starts with '-'.")
     args = parser.parse_args()
 
     if args.status:

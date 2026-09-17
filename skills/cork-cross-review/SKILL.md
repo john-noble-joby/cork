@@ -242,7 +242,7 @@ sliced review, write a story file per slice with that slice's contract excerpt a
 then pass it with `--story-file` in that slice's lane loop. Harness lanes run with the
 scratch worktree as their working directory — `orchestrate.py` passes it as `cwd` and applies the
 read-only flags; you do not need to add prompt text for that. The story text for every lane
-carries this rule, verbatim:
+carries this rule, verbatim. Keep `story.md` to a few KB; put long material in the diff, not the story.
 
 > The DIFF is the object of review; the checkout is read-only CONTEXT at the PR head. If you have
 > read tools, verify your claims against it — callers, definitions, pinned dependencies, tests —
