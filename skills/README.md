@@ -22,6 +22,7 @@ Then invoke by phrase in any session:
 - **copilot-review-loop** — "run the copilot review loop on this branch"
 - **devit** — "devit <TICKET>"
 - **cork-setup** — "set up cork"
+- **cork-cross-review** — "cross review PR <n>" / "cork cross-review"
 
 ## Skills
 
@@ -55,6 +56,15 @@ Guided, interactive first-time setup. Say "set up cork" and it walks through the
 token (`login`), review models (`config init`/`preflight`), the pause-between-reviews
 preference (`interactive_review`), the status line, and Linear/mem0 MCP checks. Run it after
 `install.sh` + a restart.
+
+### cork-cross-review
+Top-level, cross-vendor PR verification. The session acts as tech lead, never as reviewer: it
+fetches the PR diff + acceptance contract, stands up a detached scratch worktree at the PR head,
+runs the repo's gates there, then fans the review out to independent lanes from vendors other
+than the author's — agentic harness reviewers (`codex/…`, `claude/…`, `opencode/…`, `pi/…`) that
+run read-only inside the scratch tree and can verify their claims, plus Copilot API models —
+consolidates the reports into one verdict with a `Reviewer | Vendor | Model | Slice` table, routes
+blocking findings back to the author, and re-reviews only the delta. Never merges.
 
 ## Configuration
 

@@ -21,6 +21,22 @@ change, and add a section here.
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-09-17
+
+### Added
+- **`cork-cross-review` skill** — top-level, cross-vendor PR verification driven from a Claude
+  Code session acting as tech lead. Fetches the PR diff + acceptance contract, creates a detached
+  scratch worktree at the PR head, runs the repo's deterministic gates there, fans the review out
+  in parallel to independent lanes from vendors other than the author's (harness reviewers
+  `codex/…`, `claude/…`, `opencode/…`, `pi/…` running read-only inside the scratch tree, plus
+  Copilot API models), slices large PRs by concern, uses `pi`/GLM as the tie-breaker between
+  disagreeing vendors, consolidates into one verdict with a `Reviewer | Vendor | Model | Slice`
+  roster and a tamper check on the scratch tree, routes blocking findings back to the author and
+  re-reviews only the delta. The human merges. Depends on the harness lanes (0.11.0/0.12.0) and
+  `auth status` (0.10.0); the herdr mapping is documented as a manual path until a native
+  transport lands.
+- `install.sh` installs the new skill; `skills/README.md` documents the invocation phrase.
+
 ## [0.11.0] — 2026-09-17
 
 ### Added
