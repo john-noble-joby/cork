@@ -36,9 +36,12 @@ class ArgvTest(HarnessBase):
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         status, text = orchestrate._harness_call("codex", "gpt-5.6-sol", "SYS", "USER", "/repo")
         argv, kw = fake.calls[0]
+        ro = orchestrate.HARNESSES["codex"]["read_only"]
         self.assertEqual(argv, ["codex", "exec", "-m", "gpt-5.6-sol", "--ephemeral",
                                 "--skip-git-repo-check", "-C", "/repo", "--color", "never", "-",
-                                "-s", "read-only"])  # sandbox flag last
+                                *ro])  # read-only flags last
+        for flag in ("read-only", "--ignore-user-config", "shell_tool", "unified_exec"):
+            self.assertIn(flag, ro)
         self.assertEqual(kw["cwd"], "/repo")
         self.assertEqual(kw["timeout"], 900)
         # no system flag -> standards prepended to the stdin body with a separator
@@ -65,7 +68,8 @@ class ArgvTest(HarnessBase):
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         orchestrate._harness_call("codex", "m", "S", "U", "/repo")
         argv = fake.calls[0][0]
-        self.assertEqual(argv[-2:], ["-s", "read-only"]); self.assertIn("--ephemeral", argv)
+        ro = orchestrate.HARNESSES["codex"]["read_only"]
+        self.assertEqual(argv[-len(ro):], ro); self.assertIn("--ephemeral", argv)
         self.assertNotIn("--x", argv)
 
     def test_bin_env_and_extra_args_and_timeout_from_config(self):
@@ -77,7 +81,8 @@ class ArgvTest(HarnessBase):
         orchestrate._harness_call("codex", "m", "S", "U", "/repo")
         argv, kw = fake.calls[0]
         self.assertEqual(argv[0], "/opt/codex")
-        self.assertEqual(argv[-3:], ["--foo", "-s", "read-only"])  # extra_args before read-only
+        ro = orchestrate.HARNESSES["codex"]["read_only"]
+        self.assertEqual(argv[-len(ro) - 1:], ["--foo", *ro])  # extra_args before read-only
         self.assertEqual(kw["timeout"], 30)
 
     def test_explicit_timeout_overrides_config(self):
@@ -203,6 +208,27 @@ class ConfigAndProbeTest(HarnessBase):
                     {"extra_args": "--a"}, {"extra_args": [1]}, {"bin": ""}, {"bin": 3}, "str"):
             with self.assertRaises(SystemExit, msg=repr(bad)):
                 orchestrate._validate_config({**base, "providers": {"codex": bad}})
+
+    def test_providers_must_be_a_mapping_of_objects(self):
+        base = {"rotation": [{"provider": "copilot", "model": "m"}]}
+        for bad in (None, [], "x", {"copilot": None}, {"copilot": []}):
+            with self.assertRaises(SystemExit, msg=repr(bad)):
+                orchestrate._validate_config({**base, "providers": bad})
+
+    def test_enabled_must_be_json_boolean_for_every_provider(self):
+        base = {"rotation": [{"provider": "copilot", "model": "m"}]}
+        for name in ("copilot", "codex"):
+            for bad in ("false", "true", 0, 1, None, []):
+                with self.assertRaises(SystemExit, msg=f"{name}={bad!r}"):
+                    orchestrate._validate_config({**base, "providers": {name: {"enabled": bad}}})
+        orchestrate._validate_config({**base, "providers": {"codex": {"enabled": False}}})
+
+    def test_eligible_rotation_requires_enabled_is_true(self):
+        # Belt and braces behind validation: a truthy non-bool must never select a lane.
+        orchestrate.shutil.which = lambda b: "/usr/bin/" + b
+        cfg = {"providers": {"codex": {"enabled": "false"}},
+               "rotation": [{"provider": "codex", "model": "m"}]}
+        self.assertEqual(orchestrate._eligible_rotation(cfg), [])
 
     def test_default_config_has_harnesses_disabled(self):
         for h in orchestrate.HARNESSES:
