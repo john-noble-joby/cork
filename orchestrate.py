@@ -504,6 +504,8 @@ def _validate_config(cfg: dict) -> None:
         if key in seen:
             fail(f"duplicate rotation entry: {key}")
         seen.add(key)
+    for name in HARNESSES:
+        _validate_harness_cfg(name, cfg.get("providers", {}).get(name, {}))
     count = cfg.get("count", 3)
     if not isinstance(count, int) or count < 1:
         fail("config.count must be a positive integer")
@@ -511,6 +513,21 @@ def _validate_config(cfg: dict) -> None:
         fail("config.interactive_review must be true or false (a JSON boolean)")
     if not isinstance(cfg.get("default_standards", True), bool):
         fail("config.default_standards must be true or false (a JSON boolean)")
+
+
+def _validate_harness_cfg(name: str, hc: dict) -> None:
+    # Malformed values would otherwise surface as a traceback (or no timeout at all)
+    # from subprocess.run instead of the documented skipped-review sentinel.
+    if not isinstance(hc, dict):
+        fail(f"config.providers.{name} must be an object")
+    if "bin" in hc and (not isinstance(hc["bin"], str) or not hc["bin"].strip()):
+        fail(f"config.providers.{name}.bin must be a non-empty string")
+    ea = hc.get("extra_args", [])
+    if not isinstance(ea, list) or not all(isinstance(a, str) for a in ea):
+        fail(f"config.providers.{name}.extra_args must be a list of strings")
+    t = hc.get("timeout", 1)
+    if isinstance(t, bool) or not isinstance(t, (int, float)) or t <= 0:
+        fail(f"config.providers.{name}.timeout must be a positive number of seconds")
 
 
 def load_config(quiet: bool = False) -> dict:
@@ -845,7 +862,7 @@ def _harness_call(provider: str, model: str, system: str, user_msg: str,
                            timeout=timeout, **run_kw)
     except subprocess.TimeoutExpired:
         return 504, f"{provider} timed out after {timeout}s"
-    except OSError as e:  # binary vanished between preflight and review
+    except OSError as e:  # binary gone since preflight, or argv too long (E2BIG)
         return 404, f"cannot run {spec['bin']}: {e}"
     if r.returncode != 0:
         return 500, f"{provider} exited {r.returncode}: {r.stderr.strip()[-2000:]}"

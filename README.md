@@ -204,7 +204,13 @@ another reviewer's `/tmp/cork-review-*` output (claude's `--restricted` closes t
 claude lane). Codex has no system-prompt flag, so the standards are prepended to the prompt
 body under a `=== END OF REVIEW STANDARDS ===` separator. Claude's standards travel as one
 `--system-prompt` argument, so a standards layer over ~128 KiB hits the Linux per-argument
-limit and the lane is skipped with `Argument list too long`.
+limit and the lane is skipped with `Argument list too long`. **Trust boundary:** the
+reviewer follows instructions from the branch under review (`code-review/AGENTS.md`, file
+contents) with your local login, so a hostile branch could steer it into reading and quoting
+files it can reach (`--restricted` limits claude to the repo; codex's sandbox does not).
+Run harness lanes only on branches you would run the repo's own hooks or tests from — the
+same trust you already extend to the implementer step. A timeout kills the CLI process
+itself; tool subprocesses it spawned are not tracked.
 
 Per-harness config keys — the only ones read: `bin` (or env `CORK_CLAUDE_BIN` /
 `CORK_CODEX_BIN`, which wins), `extra_args` (appended verbatim, *before* the read-only
