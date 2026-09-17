@@ -49,8 +49,8 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 python3 "$CORK_HOME/orchestrate.py" --version
 # PENDING PR #11 (0.10.0, merging separately) — not in this release:
 #   python3 "$CORK_HOME/orchestrate.py" auth status   # Copilot token source + per-harness login state
-# Until it merges, a logged-out lane surfaces only at review time, as the skipped sentinel with the
-# CLI's stderr in review-<lane>.err.
+# Until it merges, a logged-out lane surfaces only at review time, as the skipped sentinel in
+# review-<lane>.txt (the CLI's stderr tail is quoted in the → diagnostic line above it; .err stays empty).
 python3 "$CORK_HOME/orchestrate.py" preflight          # the lanes that will actually run on this seat
 ```
 
@@ -102,8 +102,9 @@ git fetch origin "$BASE" "pull/$N/head"        # fetch the base too, so origin/$
 git worktree add --detach "/tmp/cork-pr$N/wt" "$HEAD"
 ```
 
-Run these in **your own clone** of the PR's repo (`origin` = the GitHub remote) — never in the
-author's checkout.
+Run these in **your own clone** of the PR's repo (`origin` = the GitHub remote). For someone
+else's PR that is never the author's checkout; for your own PR it is, and that is fine — fetch and
+`worktree add` do not touch the working tree.
 
 Run the repo's own tests / lint / typecheck **inside that worktree first** (use the commands the
 repo's `CLAUDE.md` documents). If a gate is red, stop: report the failing gate to the author and
@@ -177,7 +178,8 @@ Lane-specific rules learned the hard way:
 
 - **`pi` / GLM — PLANNED lane (0.12.0, in flight; absent from 0.13.0's `HARNESSES`)** — when it
   lands, pin `pi/glm-internal/glm-5.3-onprem` (or the current on-prem model from
-  `pi --list-models glm`; a `glm-only` shim rejects ids off its allowlist at boot). That lane spec
+  `pi --list-models glm`; some pi installs are wrapped in a `glm-only` shim that rejects ids off
+  its allowlist at boot — check yours). That lane spec
   will close stdin (pi blocks on an open pipe) and pass `--no-session --no-context-files`; nothing
   in 0.13.0 does this yet. GLM is the **tie-breaker**: when a Claude finding and a GPT finding
   disagree, or when you are tempted to overrule a reviewer from your own knowledge, run one more
@@ -192,7 +194,7 @@ Lane-specific rules learned the hard way:
   (no CLAUDE.md, no hooks, no MCP, no shell tool — that absence is what keeps the lane blind; file
   tools confined to the scratch tree). If `ANTHROPIC_API_KEY` is set but invalid the lane hangs
   silently until timeout — check `review-claude-*.err` and try unsetting the key (an `env_key`
-  flag in `auth status` is pending PR #11 / 0.12.0).
+  flag in `auth status` is pending PR #11 (0.10.0)).
 - **`codex`** — `exec -s read-only --ephemeral`; it may take 30–45 s to fail on missing auth. Its
   sandbox can read outside the repo, so keep other lanes' report files out of its `cwd`.
 - **A lane that returns the `… — skipped]` sentinel or an empty file** is a failed lane, not a
