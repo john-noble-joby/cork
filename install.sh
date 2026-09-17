@@ -13,6 +13,18 @@ VERSION="$(tr -d '[:space:]' < "$REPO/VERSION")"
 SKILLS=(coding-standards copilot-review-loop cork cork-setup devit)
 : "${DEST:?DEST must not be empty}"
 
+dest_logical="$DEST"
+case "$dest_logical" in
+  /*) ;;
+  *) dest_logical="$PWD/$dest_logical" ;;
+esac
+while [ "$dest_logical" != "/" ] && [ "${dest_logical%/}" != "$dest_logical" ]; do
+  dest_logical="${dest_logical%/}"
+done
+statusline_dir="${dest_logical%/*}"
+[ -n "$statusline_dir" ] || statusline_dir="/"
+statusline_path="$statusline_dir/statusline.py"
+
 resolve_before_create() {
   local candidate="$1" probe part tail ancestor
   case "/$candidate/" in
@@ -64,6 +76,7 @@ repo_root="$(cd -- "$REPO" && pwd -P)"
 src_root="$(cd -- "$REPO/skills" && pwd -P)"
 dest_root="$(resolve_before_create "$DEST")" || exit 1
 [ -n "$dest_root" ] || { echo "✗ could not resolve destination $DEST"; exit 1; }
+# This comparison is case-sensitive; refusal is best-effort on case-insensitive filesystems.
 case "$dest_root/" in
   "$src_root/"*|"$repo_root/")
     echo "✗ refusing to install into $DEST — it overlaps this repo's skills/ (source tree)"
@@ -103,12 +116,16 @@ for s in "${SKILLS[@]}"; do
 
   : "${s:?skill name must not be empty}"
   rm -rf -- "$DEST/.$s.tmp."*
+  if [ -L "$DEST/$s" ] && [ ! -e "$DEST/$s" ]; then
+    rm -f -- "$DEST/$s"
+  fi
   if [ ! -e "$DEST/$s" ] && [ ! -L "$DEST/$s" ]; then
     newest_prev=""
-    for candidate in "$DEST/.$s.prev."*; do
-      if [ -e "$candidate" ] || [ -L "$candidate" ]; then
-        if [ -z "$newest_prev" ] || [ "$candidate" -nt "$newest_prev" ]; then
-          newest_prev="$candidate"
+    # Glob order is lexical, so equal mtimes keep the first recovery copy found.
+    for prev_candidate in "$DEST/.$s.prev."*; do
+      if [ -e "$prev_candidate" ] || [ -L "$prev_candidate" ]; then
+        if [ -z "$newest_prev" ] || [ "$prev_candidate" -nt "$newest_prev" ]; then
+          newest_prev="$prev_candidate"
         fi
       fi
     done
@@ -155,9 +172,9 @@ echo
 # Status line: deploy the cork status-line script (shows the active ticket/branch).
 # Activation is opt-in — add to ~/.claude/settings.json:
 #   "statusLine": { "type": "command", "command": "~/.claude/statusline.py" }
-cp "$REPO/statusline.py" "$DEST/../statusline.py"
-chmod +x "$DEST/../statusline.py"
-echo "  ✓ statusline.py installed to $(cd "$DEST/.." && pwd)/statusline.py"
+cp -- "$REPO/statusline.py" "$statusline_path"
+chmod +x "$statusline_path"
+echo "  ✓ statusline.py installed to $statusline_path"
 if ! grep -q '"statusLine"' "$HOME/.claude/settings.json" 2>/dev/null; then
   echo "    (not yet enabled — add a statusLine block to ~/.claude/settings.json; see README)"
 fi

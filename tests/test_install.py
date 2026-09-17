@@ -209,6 +209,14 @@ class InstallSafetyTest(unittest.TestCase):
             destination = Path(tmp) / "skills"
             first = self._run_real_install(destination)
             self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertTrue(
+                (
+                    destination
+                    / "coding-standards"
+                    / "references"
+                    / "review-checklist.md"
+                ).is_file()
+            )
             stale_file = destination / "coding-standards" / "references" / "OLD.md"
             stale_file.write_text("stale\n")
             (destination / ".cork.tmp.dead").mkdir()
@@ -222,6 +230,53 @@ class InstallSafetyTest(unittest.TestCase):
             )
             self.assertNotIn("⚠", second.stdout)
             self.assertFalse(stale_file.exists())
+            self._assert_no_install_artifacts(destination)
+
+    def test_statusline_is_installed_next_to_logical_symlinked_destination(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            logical_parent = home / ".claude"
+            logical_parent.mkdir(parents=True)
+            physical_parent = root / "physical"
+            physical_destination = physical_parent / "skills"
+            physical_destination.mkdir(parents=True)
+            logical_destination = logical_parent / "skills"
+            logical_destination.symlink_to(physical_destination, target_is_directory=True)
+
+            result = self._run(
+                ROOT,
+                logical_destination,
+                HOME=str(home),
+                CORK_HOME=str(ROOT),
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue((logical_parent / "statusline.py").is_file())
+            self.assertFalse((physical_parent / "statusline.py").exists())
+
+    def test_dangling_skill_symlink_yields_to_orphan_recovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "skills"
+            destination.mkdir()
+            orphan = destination / ".coding-standards.prev.123"
+            orphan.mkdir()
+            (orphan / "PREVIOUS_INSTALL").write_text("old\n")
+            (destination / "coding-standards").symlink_to(
+                destination / "missing-skill-target", target_is_directory=True
+            )
+
+            result = self._run_real_install(destination)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(
+                "↩ coding-standards: recovered previous copy from interrupted install",
+                result.stdout,
+            )
+            installed = destination / "coding-standards"
+            self.assertTrue(installed.is_dir())
+            self.assertFalse(installed.is_symlink())
+            self.assertTrue((installed / "SKILL.md").is_file())
             self._assert_no_install_artifacts(destination)
 
     def test_failed_staged_move_restores_previous_copy_and_cleans_artifacts(self):
