@@ -140,7 +140,7 @@ Correctness and standards say nothing about whether the change implements the *r
 
 ## Project-specific bindings
 
-This file is deliberately project-agnostic. Concrete bindings (file paths, ticket references, service names, hardware-safety rollback commands) belong in each repo's own standards file — e.g. a repo's `code-review/AGENTS.md` binding class 9 to its own parser/schema/handler files and class 12 to its device parameter tables. The spec-source lookup is a binding too: how a ticket id found in a branch or commit resolves to a fetched issue (tracker CLI or MCP tool, id pattern) lives in the repo file, never here. Both live in the cork repo: this skill (`skills/coding-standards/`) is the canonical, fuller treatment; `standards/AGENTS.md` is the condensed copy cork injects into blind reviewer models. A rule added here gets a line there in the same change.
+This file is deliberately project-agnostic. Concrete bindings (file paths, ticket references, service names, hardware-safety rollback commands) belong in each repo's own standards file — e.g. a repo's `code-review/AGENTS.md` binding class 9 to its own parser/schema/handler files and class 12 to its device parameter tables. The spec-source lookup is a binding too: how a ticket id found in a branch or commit resolves to a fetched issue (tracker CLI or MCP tool, id pattern) lives in the repo file, never here. Both live in the cork repo: this skill (`skills/coding-standards/`) is the canonical, fuller treatment; `standards/AGENTS.md` is the condensed copy cork injects into blind reviewer models. Every defect class and material rule added here gets a condensed line there in the same change; stack-specific elaboration and the long-form review protocol stay here.
 
 ## Deliberate exclusions
 

@@ -98,7 +98,14 @@ You are a senior code reviewer. For each issue output exactly:
 FILE: <path> | LINE: <n> | ISSUE: <description> | FIX: <suggestion>
 Be specific. Reference exact file paths and line numbers.
 Cover: correctness, error handling, edge cases,
-style consistency with surrounding code, test coverage.\
+style consistency with surrounding code, test coverage.
+
+Also report spec conformance as its own section: under `## Spec conformance`, list
+(a) requirements in the Story / Task that are missing or partial, (b) behaviour in
+the diff that wasn't asked for, (c) requirements that look implemented but wrong —
+quoting the story line for each. If the Story / Task states no checkable requirements,
+write the single line `no spec available`. Never merge or rerank these findings into
+the severity sections.\
 """
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
