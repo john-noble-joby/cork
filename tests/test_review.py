@@ -211,7 +211,7 @@ class ReviewDiffTest(unittest.TestCase):
         self.assertIn("Spec conformance sections", fix_prompt)
         self.assertIn("do NOT delete behaviour flagged as unrequested", fix_prompt)
 
-    def test_review_system_prompt_carries_spec_axis_with_custom_instructions(self):
+    def test_review_system_prompt_carries_spec_axis_on_both_branches(self):
         for instructions in ("Custom project rules", ""):
             with self.subTest(instructions=instructions):
                 with patch.object(
@@ -230,6 +230,27 @@ class ReviewDiffTest(unittest.TestCase):
                     self.assertIn(instructions, system)
                 else:
                     self.assertIn("For each issue in the main list", system)
+
+    def test_review_budget_uses_final_system_prompt(self):
+        story = "Implement the widget"
+        diff = "diff"
+        with (
+            patch.object(orchestrate, "_budget_files", return_value=("", 0)) as budget,
+            patch.object(
+                orchestrate, "_call_and_extract", return_value=(200, "review output")
+            ) as call_api,
+        ):
+            result = orchestrate.review(
+                "copilot", "model", "Custom project rules", story, diff, {},
+                char_budget=10_000,
+            )
+
+        self.assertEqual(result, "review output")
+        system = call_api.call_args.args[2]
+        expected_files_budget = 10_000 - (
+            len(system) + len(story) + len(diff) + 500
+        )
+        self.assertEqual(budget.call_args.args[1], expected_files_budget)
 
 
 if __name__ == "__main__":

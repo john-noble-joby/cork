@@ -24,12 +24,16 @@ resolve_before_create() {
   done
   probe="$candidate"
   tail=""
-  while [ ! -e "$probe" ]; do
+  while [ ! -e "$probe" ] && [ ! -L "$probe" ]; do
     part="${probe##*/}"
     tail="/$part$tail"
     probe="${probe%/*}"
     [ -n "$probe" ] || probe="/"
   done
+  if [ -L "$probe" ] && [ ! -e "$probe" ]; then
+    echo "✗ refusing to install into $DEST — path traverses a dangling symlink ($probe)" >&2
+    return 1
+  fi
   ancestor="$(cd -- "$probe" && pwd -P)"
   printf '%s\n' "$ancestor$tail" | awk -F/ '
     {
@@ -57,6 +61,11 @@ case "$dest_root/" in
     ;;
 esac
 mkdir -p -- "$DEST"
+mkdir -- "$DEST/.cork-install.lock" 2>/dev/null || {
+  echo "✗ another cork install is running (lock: $DEST/.cork-install.lock) — remove it if stale"
+  exit 1
+}
+trap 'rmdir -- "$DEST/.cork-install.lock" 2>/dev/null' EXIT
 
 echo "Installing cork skills v$VERSION → $DEST"
 echo
@@ -75,6 +84,7 @@ for s in "${SKILLS[@]}"; do
   fi
 
   : "${s:?skill name must not be empty}"
+  rm -rf -- "$DEST/.$s.tmp."* "$DEST/.$s.prev."*
   tmp="$(mktemp -d -- "$DEST/.$s.tmp.XXXXXX")"
   if ! cp -r -- "$REPO/skills/$s/." "$tmp/"; then
     rm -rf -- "$tmp"
@@ -83,6 +93,9 @@ for s in "${SKILLS[@]}"; do
   if [ -L "$DEST/$s" ]; then
     echo "  ⚠ $s: $DEST/$s is a symlink — replacing it with a copy"
   fi
+  # Accepted trade-off: the installed path is absent for the instant between these two
+  # moves. The install lock prevents writers interleaving; a racing reader sees an old
+  # or new complete copy, never a partially-copied directory.
   prev="$DEST/.$s.prev.$$"
   had_previous=0
   if [ -e "$DEST/$s" ] || [ -L "$DEST/$s" ]; then

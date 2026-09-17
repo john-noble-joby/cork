@@ -102,13 +102,13 @@ style consistency with surrounding code, test coverage.\
 """
 
 SPEC_CONFORMANCE_SUFFIX = """\
-After the issue list, add a separate free-form section headed `## Spec conformance`
-(not issue records): list
+Add a separate, free-form `## Spec conformance` section of its own (not issue records).
+Under it, list
 (a) requirements in the Story / Task that are missing or partial, (b) behaviour in
 the diff that wasn't asked for, (c) requirements that look implemented but wrong —
 quoting the story line for each. If the Story / Task states no checkable requirements,
-write the single line `no spec available`. Never merge these findings into the per-issue
-list above; keep them under their own heading.\
+write the single line `no spec available`. Never merge these findings into the findings
+above; keep them under their own heading.\
 """
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
