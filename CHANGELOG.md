@@ -21,6 +21,28 @@ change, and add a section here.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-09-17
+
+### Added
+- **`coding-standards` skill now lives in this repo** (`skills/coding-standards/`) and is
+  installed by `install.sh` alongside the other four — cork is the source of truth for the
+  shared coding & review rubric that Claude Code, Codex (via symlink), and Pi (via its
+  `skills` path) all load. Previously it existed only as a loose copy in `~/.claude/skills`.
+- **Spec-conformance review axis.** Both the skill and `standards/AGENTS.md` now run a
+  second, separately-reported axis — does the diff do what the story asked (missing /
+  partial / unrequested / implemented-wrong, quoting the spec line) — never reranked against
+  correctness/standards findings. Spec-source lookup (ticket id → fetched issue) is a
+  per-repo binding in `code-review/AGENTS.md`. Adapted from mattpocock/skills `code-review`.
+- **Fowler structural smell baseline** (Mysterious Name, Feature Envy, Data Clumps, Repeated
+  Switches, Shotgun Surgery, Divergent Change, Speculative Generality, Message Chains,
+  Middle Man, Refused Bequest) as labelled judgement calls; a documented repo standard that
+  endorses the pattern overrides the smell.
+
+### Changed
+- Review protocol: pin the base first (`git diff <base>...HEAD`, verify the ref resolves and
+  the diff is non-empty before fanning out); skip anything tooling already enforces; report
+  format gains `## Spec conformance`; verdict names the worst item per axis.
+
 ## [0.8.3] — 2026-08-03
 
 ### Fixed

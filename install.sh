@@ -3,14 +3,14 @@
 #
 # orchestrate.py is NOT installed: the skills invoke it via $CORK_HOME
 # (default ~/dev/cork), so it runs from this repo clone directly — a git pull
-# is all it takes to update the script. Only the SKILL.md files are copies that
-# can drift, which is what this script keeps in sync and version-checks.
+# is all it takes to update the script. Only the skill directories are copies
+# that can drift, which is what this script keeps in sync and version-checks.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
 VERSION="$(tr -d '[:space:]' < "$REPO/VERSION")"
-SKILLS=(copilot-review-loop cork cork-setup devit)
+SKILLS=(coding-standards copilot-review-loop cork cork-setup devit)
 
 echo "Installing cork skills v$VERSION → $DEST"
 echo

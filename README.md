@@ -36,8 +36,8 @@ steps below are manual.
    ```bash
    cd ~/dev/cork && ./install.sh
    ```
-   Copies `cork`, `copilot-review-loop`, `devit`, and `cork-setup` into `~/.claude/skills/` and
-   `statusline.py` into `~/.claude/`, and verifies every version stamp matches `VERSION`.
+   Copies `coding-standards`, `cork`, `copilot-review-loop`, `devit`, and `cork-setup` into
+   `~/.claude/skills/` and `statusline.py` into `~/.claude/`, and verifies every version stamp matches `VERSION`.
    Re-run after a `git pull` to update. (`orchestrate.py` itself isn't copied — the skills
    run it straight from `$CORK_HOME`, so `git pull` updates the engine.) `install.sh` can also
    write `CORK_HOME` into `~/.claude/settings.json` if you clone to a non-default path.
@@ -120,8 +120,15 @@ opted out (see below).
 
 ### Coding & review standards (layering)
 
-cork ships a generalized **coding & review rubric** (`standards/AGENTS.md`) used by both
-devit's implementer and the blind review models. The **effective** rubric for a repo is:
+cork's fuller **coding & review rubric** lives at `skills/coding-standards/` and is installed
+by `install.sh`. `standards/AGENTS.md` is the condensed copy injected into blind reviewer
+models; the two are kept in step. Other harnesses share the installed skill:
+
+- **Codex:** symlink `~/.codex/skills/coding-standards` to
+  `~/.claude/skills/coding-standards`.
+- **Pi:** add `"skills": ["~/.claude/skills"]` to `~/.pi/agent/settings.json`.
+
+The **effective** rubric for a repo is:
 
   cork's universal default  +  that repo's own `code-review/AGENTS.md` (if present)
 
