@@ -1255,6 +1255,9 @@ def cmd_login() -> None:
 
 def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True) -> None:
     require_base_ref(repo, base)
+    diff = git_diff_branch(repo, base)
+    if not diff.strip():
+        fail(f"No diff vs {base} — nothing to review.")
     provider, model = _split_model_ref(model_ref)
     if validate:
         verdict = _probe(provider, model)
@@ -1263,9 +1266,6 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     instructions, instructions_path = load_agent_instructions(repo)
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
-    diff = git_diff_branch(repo, base)
-    if not diff.strip():
-        fail(f"No diff vs {base} — nothing to review.")
     files = changed_files_branch(repo, base)
     _st = load_state(tid)
     story = (_st.get("done", {}).get("summary") or _st.get("summary")

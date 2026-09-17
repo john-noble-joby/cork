@@ -47,7 +47,13 @@ git rev-parse --abbrev-ref HEAD                         # current branch
 git rev-parse --abbrev-ref HEAD | grep -oP 'MXE-\d+'    # ticket ID, if branch follows convention
 pwd                                                     # worktree path
 git log {BASE}..HEAD --oneline                          # commits vs base
+git rev-parse --verify --quiet "{BASE}^{commit}" >/dev/null || { echo "base {BASE} does not resolve"; exit 1; }
+git merge-base "{BASE}" HEAD >/dev/null      || { echo "no merge base with {BASE}"; exit 1; }
+[ -n "$(git diff {BASE}...HEAD)" ]           || { echo "empty diff vs {BASE} — nothing to review"; exit 1; }
 ```
+
+Stop here on any of those — an unrelated base or an empty diff must fail once, up front,
+not once per background `--review-model` process.
 
 If `standards status` shows *no project standards* and the default is on, mention once (non-blocking): the repo has no project standards layer — `standards init` adds one, `--opt-out` skips the default. Proceed regardless.
 
