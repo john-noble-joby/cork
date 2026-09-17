@@ -85,6 +85,12 @@ class ArgvTest(HarnessBase):
         self.assertEqual(argv[-len(ro) - 1:], ["--foo", *ro])  # extra_args before read-only
         self.assertEqual(kw["timeout"], 30)
 
+    def test_output_decoding_is_lenient(self):
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        orchestrate._harness_call("codex", "m", "S", "U", "/repo")
+        kw = fake.calls[0][1]
+        self.assertEqual((kw["encoding"], kw["errors"]), ("utf-8", "replace"))
+
     def test_explicit_timeout_overrides_config(self):
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         orchestrate._harness_call("codex", "m", "S", "U", "/repo", timeout=7)

@@ -875,8 +875,10 @@ def _harness_call(provider: str, model: str, system: str, user_msg: str,
     else:
         argv.append(prompt); run_kw = {"stdin": subprocess.DEVNULL}
     try:
+        # utf-8 + replace: a stray byte from a wrapper must not raise UnicodeDecodeError
+        # past the sentinel handling below.
         r = subprocess.run(argv, cwd=repo, capture_output=True, text=True,
-                           timeout=timeout, **run_kw)
+                           encoding="utf-8", errors="replace", timeout=timeout, **run_kw)
     except subprocess.TimeoutExpired:
         return 504, f"{provider} timed out after {timeout}s"
     except OSError as e:  # binary gone since preflight, or argv too long (E2BIG)
