@@ -72,7 +72,10 @@ out good patterns by name — affirmation matters.
   wrapper carries the invariant; "fat" constructors with many deps (usually an SRP split).
 - **Readability:** chains/pipelines too long to set a breakpoint in; allocations inside hot
   loops; conditional nesting 3+ deep (use early returns / extraction); stringly-typed states
-  that should be an enum/const.
+  that should be an enum/const; manual state where the language has a declarative form;
+  materializing collections inside loops.
+- **Hidden allocations (hot paths only):** string concatenation in tight loops; boxing via
+  untyped variadic logging — use structured templates; per-call closures in hot pipelines.
 - **Doc/comment freshness:** comments must describe what the code does *now*. After a
   behavior change, grep for every comment/doc/README line describing the old behavior and
   update it. Watch null-meaning comments ("null = X") and timing comments ("captured before

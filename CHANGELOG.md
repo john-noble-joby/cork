@@ -54,6 +54,7 @@ change, and add a section here.
 
 ### Fixed
 - Review diffs are now merge-base (`git diff <base>...HEAD`) in `orchestrate.py` and the cork skill's self-review, and the base ref (a reachable commit) and its merge base with HEAD are validated up front in every mode (review-only, full run, seed-only) — a bad `--base-branch` fails before any implementation step runs, and a base branch that advanced after forking no longer leaks base-only changes into the review.
+- `install.sh` now replaces each installed skill directory instead of merging into it, so files removed upstream don't linger after an upgrade.
 
 ## [0.8.3] — 2026-08-03
 

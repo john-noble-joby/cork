@@ -3,8 +3,8 @@
 #
 # orchestrate.py is NOT installed: the skills invoke it via $CORK_HOME
 # (default ~/dev/cork), so it runs from this repo clone directly — a git pull
-# is all it takes to update the script. Only the skill directories are copies
-# that can drift, which is what this script keeps in sync and version-checks.
+# is all it takes to update the script. The skill directories are copies that
+# this script replaces in full and version-checks on each run.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,6 +28,8 @@ for s in "${SKILLS[@]}"; do
     rc=1
   fi
 
+  [ -n "$DEST" ] && [ -n "$s" ]
+  rm -rf -- "$DEST/$s"
   mkdir -p "$DEST/$s"
   cp -r "$REPO/skills/$s/." "$DEST/$s/"
   echo "  ✓ $s installed (stamp v${stamp:-?})"
