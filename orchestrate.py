@@ -104,8 +104,8 @@ Also report spec conformance as its own section: under `## Spec conformance`, li
 (a) requirements in the Story / Task that are missing or partial, (b) behaviour in
 the diff that wasn't asked for, (c) requirements that look implemented but wrong —
 quoting the story line for each. If the Story / Task states no checkable requirements,
-write the single line `no spec available`. Never merge or rerank these findings into
-the severity sections.\
+write the single line `no spec available`. Never merge these findings into the per-issue
+list above; keep them under their own heading.\
 """
 
 # ── Auth ──────────────────────────────────────────────────────────────────────

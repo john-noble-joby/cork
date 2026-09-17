@@ -70,7 +70,7 @@ class ReviewDiffTest(unittest.TestCase):
     def test_require_base_ref_rejects_missing_merge_base(self):
         checks = [
             Mock(returncode=0, stderr=""),
-            Mock(returncode=1, stderr="fatal: refusing unrelated histories\n"),
+            Mock(returncode=1, stderr="fatal: Not a valid object name HEAD\n"),
         ]
         error = io.StringIO()
         with (
@@ -103,7 +103,7 @@ class ReviewDiffTest(unittest.TestCase):
                 ),
             ],
         )
-        self.assertIn("fatal: refusing unrelated histories", error.getvalue())
+        self.assertIn("fatal: Not a valid object name HEAD", error.getvalue())
 
     def test_require_base_ref_omits_empty_merge_base_reason(self):
         checks = [

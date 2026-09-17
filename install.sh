@@ -28,10 +28,13 @@ for s in "${SKILLS[@]}"; do
     rc=1
   fi
 
-  [ -n "$DEST" ] && [ -n "$s" ]
+  : "${DEST:?DEST must not be empty}" "${s:?skill name must not be empty}"
+  if [ -L "$DEST/$s" ]; then
+    echo "  ⚠ $s: $DEST/$s is a symlink — replacing it with a copy"
+  fi
   rm -rf -- "$DEST/$s"
-  mkdir -p "$DEST/$s"
-  cp -r "$REPO/skills/$s/." "$DEST/$s/"
+  mkdir -p -- "$DEST/$s"
+  cp -r -- "$REPO/skills/$s/." "$DEST/$s/"
   echo "  ✓ $s installed (stamp v${stamp:-?})"
 done
 
