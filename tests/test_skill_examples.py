@@ -25,7 +25,8 @@ python3() {
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "calls.txt"
             script = (shim + (snapshot if include_snapshot else "")
-                      + '\nHERDR_PREF="$LATER_PREF"\n'
+                      + '\nprintf "dispatch-planned\\n" >> "$CALL_LOG"\n'
+                      + 'HERDR_PREF="$LATER_PREF"\n'
                       + example.replace("/tmp/cork-review-", tmp + "/review-"))
             env = {**os.environ, "CORK_HOME": tmp, "HERDR_PREF": preference,
                    "LATER_PREF": later_preference if later_preference is not None else preference,
@@ -37,6 +38,7 @@ python3() {
                                     capture_output=True, text=True, timeout=10)
             calls = log.read_text() if log.exists() else ""
             self.assertEqual(calls.count("config-read"), 1 if include_snapshot else 0)
+            self.assertEqual(calls.count("dispatch-planned"), int(config_status == 0))
         return result.returncode, re.findall(r"--review-model (\S+)", calls)
 
     def test_herdr_enabled_excludes_only_native_claude(self):
