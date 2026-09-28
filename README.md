@@ -270,7 +270,8 @@ Cork's Copilot or Anthropic API credentials. Herdr is an optional **terminal man
 a billing provider. Confirm the intended account with `claude --safe-mode --restricted auth status`;
 Enterprise usage limits/pricing still apply. Never copy Claude OAuth tokens into Cork's
 API token store. Model IDs are passed to the selected provider unchanged; verify access
-on your own seat.
+on your own seat. For example, Opus 5.5 is `claude-opus-5-5` in Claude Code, versus
+`claude-opus-5.5` on Copilot.
 
 Example hybrid rotation (merge these fields into your config):
 
@@ -285,7 +286,7 @@ Example hybrid rotation (merge these fields into your config):
   },
   "rotation": [
     {"provider": "copilot", "model": "gpt-6-sol"},
-    {"provider": "claude", "model": "claude-opus-5.5"},
+    {"provider": "claude", "model": "claude-opus-5-5"},
     {"provider": "copilot", "model": "gpt-6-astra"}
   ]
 }
