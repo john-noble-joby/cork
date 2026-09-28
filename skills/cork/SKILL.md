@@ -38,14 +38,21 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 
 ### Step 0 — Gather context & pick mode
 
-Read `python3 "$CORK_HOME/orchestrate.py" config get herdr_claude_reviews` after resolving
-`CORK_HOME`. When true, run each `claude/…` lane using **Herdr execution** below instead
-of the ordinary bash invocation. This is a session-driven skill preference, not an engine
-transport; API lanes and direct/headless CLI invocations remain unchanged. If Herdr is
-unavailable, stop and ask — do not silently change the requested execution or billing route.
+Freeze routing **once, before any dispatch**, for the whole run:
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
+HERDR_CLAUDE_REVIEWS="$(python3 "$CORK_HOME/orchestrate.py" config get herdr_claude_reviews)" || exit 1
+readonly HERDR_CLAUDE_REVIEWS
+```
+
+Carry this exact `HERDR_CLAUDE_REVIEWS` value into later shell tool calls; never reread the
+preference mid-run. Both Herdr launches and shell exclusion use this snapshot, even if the
+config changes. When true, run each `claude/…` lane using **Herdr execution** below instead
+of the ordinary invocation. This is a skill preference, not an engine transport. If Herdr
+is unavailable, stop and ask — do not silently change the execution or billing route.
+
+```bash
 python3 "$CORK_HOME/orchestrate.py" --version            # cork version — announce it (see below)
 git rev-parse --verify --quiet "{BASE}^{commit}" >/dev/null || { echo "base {BASE} does not resolve"; exit 1; }
 git merge-base "{BASE}" HEAD >/dev/null      || { echo "no merge base with {BASE}"; exit 1; }
@@ -115,6 +122,10 @@ Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it p
 - **`false`:** behave autonomously (you apply the valid findings, push back with reasoning
   where wrong, and commit) — the flow described below.
 
+For each lane, use the frozen Step 0 `HERDR_CLAUDE_REVIEWS` value. When true, run
+`claude/…` lanes via **Herdr execution** instead of the command below. Do not run both;
+all other lanes (or a false snapshot) use the ordinary invocation:
+
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch develop
@@ -146,16 +157,18 @@ Because no fixes land between passes, **every reviewer sees the identical diff**
 
 ### R1 — Fan out all reviewers at once
 
-Dispatch concurrently, then collect when all return. With `herdr_claude_reviews=true`,
-launch each `claude/…` lane using **Herdr execution** and exclude it from the shell loop
-below. Launch the remaining lanes while the Herdr job runs; never run a lane twice.
+Dispatch concurrently, then collect when all return. Use the **same frozen Step 0**
+`HERDR_CLAUDE_REVIEWS` value for both launch paths — never query config again here.
+When true, launch each `claude/…` lane using **Herdr execution** and exclude it from the
+shell loop below. Carry the snapshot into that shell call explicitly. Launch the remaining
+lanes while Herdr runs; never run a lane twice, and never silently drop a selected lane.
 
 - **Self-review:** dispatch your own parallel review subagents over `git diff {BASE}...HEAD`. Gather findings only — apply nothing.
 - **Each model from the `preflight` rotation** (captured in Step 0), all launched together (background processes, then `wait`):
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-HERDR_CLAUDE_REVIEWS="$(python3 "$CORK_HOME/orchestrate.py" config get herdr_claude_reviews)" || exit 1
+: "${HERDR_CLAUDE_REVIEWS:?Carry the frozen Step 0 value into this shell call}"
 # PREFLIGHT_MODELS is the space-separated list of "provider/model" lines from Step 0 preflight
 for M in $PREFLIGHT_MODELS; do
   if [[ "$HERDR_CLAUDE_REVIEWS" == true && "$M" == claude/* ]]; then

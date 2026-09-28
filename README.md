@@ -43,13 +43,17 @@ steps below are manual.
    run it straight from `$CORK_HOME`, so `git pull` updates the engine.) `install.sh` can also
    write `CORK_HOME` into `~/.claude/settings.json` if you clone to a non-default path.
 
-3. **Get a Copilot token** (required — this is what unlocks the review models):
+3. **Choose providers, then authenticate.** Copilot is the default, but Claude-only reviews
+   need only Claude Code's login. Run `config init`, configure your intended rotation (see
+   *Harness reviewers* below), then get a Copilot token **only if using Copilot lanes**:
    ```bash
    python3 ~/dev/cork/orchestrate.py login
    ```
    GitHub device flow → writes `~/.config/cork/auth.json` (chmod 600). cork **refreshes this
    token automatically** (it persists the refresh token, good ~6 months), so you rarely need
    to re-run `login` — only if the refresh token expires or is revoked.
+   For Claude-only use, enable `claude`, disable `copilot`, and replace the default rotation
+   with your chosen `claude/<model>` entries; skip the Copilot login above entirely.
 
 4. **Connect Linear + mem0 in Claude Code** (MCP): `devit` fetches the story from Linear
    (and files split sub-stories there); cork pulls codebase context from mem0. Configure
@@ -302,7 +306,9 @@ checks completion/exit status/skipped-lane diagnostics, and returns findings to 
 review workflow. It never reuses the implementer's conversation. Outside Herdr it asks
 rather than silently falling back. See **Herdr execution** in `skills/cork/SKILL.md` for
 failure handling and cleanup. This requires an agent with shell/file tools and the installed
-Herdr CLI; it does not depend on Claude-specific slash commands.
+Herdr CLI; it does not depend on Claude-specific slash commands. The skill currently mirrors
+the engine's config/binary resolution rules; keep it in sync if those rules change. A public
+resolved-harness-info command is deliberately deferred from this small, skill-level adapter.
 
 ### Interactive review (`interactive_review`, default on)
 
