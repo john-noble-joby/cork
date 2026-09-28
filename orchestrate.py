@@ -591,13 +591,13 @@ def _copilot_chat(payload: dict, timeout: int = 300) -> tuple[int, object]:
 
 
 _RESPONSES_MAX_OUTPUT = 32_000      # ceiling, not a target — reasoning + findings share it
-_RESPONSES_EFFORT     = "medium"    # reasoning effort for gpt-5.x review calls
+_REVIEW_EFFORT        = "high"      # reasoning effort for the configured reviewer rotation
 
 
 def _uses_responses_api(model: str) -> bool:
-    # gpt-5.x and codex models are gated to the Responses endpoint on Copilot —
-    # /chat/completions returns 400 unsupported_api_for_model for them.
-    return model.startswith("gpt-5") or "codex" in model
+    # GPT-5, GPT-6, and codex models require the Responses endpoint on Copilot —
+    # /chat/completions is not supported for them.
+    return model.startswith(("gpt-5", "gpt-6")) or "codex" in model
 
 
 def _copilot_responses(payload: dict, timeout: int = 300) -> tuple[int, object]:
@@ -984,13 +984,17 @@ def _openai_compatible_call(provider: str, model: str, system: str,
         return _http_post_json(f"{base}/responses", headers, {
             "model": model, "instructions": system, "input": user_msg,
             "max_output_tokens": max_out or _RESPONSES_MAX_OUTPUT,
-            "reasoning": {"effort": _RESPONSES_EFFORT},
+            "reasoning": {"effort": _REVIEW_EFFORT},
         }, timeout)
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": user_msg}],
     }
+    # Copilot exposes Opus 5.5 effort through its OpenAI-compatible chat API.
+    # Leave other chat models alone: not all support reasoning_effort.
+    if provider == "copilot" and model == "claude-opus-5.5":
+        payload["reasoning_effort"] = _REVIEW_EFFORT
     if max_out is not None:
         payload["max_tokens"] = max_out
     return _http_post_json(f"{base}/chat/completions", headers, payload, timeout)
