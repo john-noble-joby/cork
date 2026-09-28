@@ -119,6 +119,8 @@ DEFAULT_CONFIG = {
     "count": 3,
     "interactive_review": True,
     "default_standards": True,
+    "responses_effort": "medium",
+    "herdr_claude_reviews": False,  # session-driven skill preference; CLI stays headless
     "providers": {
         "copilot":   {"enabled": True},
         "openai":    {"enabled": False},
@@ -591,7 +593,6 @@ def _copilot_chat(payload: dict, timeout: int = 300) -> tuple[int, object]:
 
 
 _RESPONSES_MAX_OUTPUT = 32_000      # ceiling, not a target — reasoning + findings share it
-_REVIEW_EFFORT        = "high"      # reasoning effort for the configured reviewer rotation
 
 
 def _uses_responses_api(model: str) -> bool:
@@ -663,6 +664,10 @@ def _validate_config(cfg: dict) -> None:
         fail("config.interactive_review must be true or false (a JSON boolean)")
     if not isinstance(cfg.get("default_standards", True), bool):
         fail("config.default_standards must be true or false (a JSON boolean)")
+    if cfg.get("responses_effort", "medium") not in ("low", "medium", "high"):
+        fail("config.responses_effort must be low, medium, or high")
+    if not isinstance(cfg.get("herdr_claude_reviews", False), bool):
+        fail("config.herdr_claude_reviews must be true or false (a JSON boolean)")
 
 
 def _validate_harness_cfg(name: str, hc: dict) -> None:
@@ -715,7 +720,7 @@ def cmd_config_show() -> None:
     print(json.dumps(load_config(), indent=2))
 
 
-_SETTABLE_KEYS = {"interactive_review", "default_standards"}  # scalar bool prefs settable via `config set`; structural fields are edited in config.json directly
+_SETTABLE_KEYS = {"interactive_review", "default_standards", "herdr_claude_reviews"}  # scalar bool prefs settable via `config set`; structural fields are edited in config.json directly
 
 
 def cmd_config_get(key: str) -> None:
@@ -984,17 +989,13 @@ def _openai_compatible_call(provider: str, model: str, system: str,
         return _http_post_json(f"{base}/responses", headers, {
             "model": model, "instructions": system, "input": user_msg,
             "max_output_tokens": max_out or _RESPONSES_MAX_OUTPUT,
-            "reasoning": {"effort": _REVIEW_EFFORT},
+            "reasoning": {"effort": load_config(quiet=True).get("responses_effort", "medium")},
         }, timeout)
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": user_msg}],
     }
-    # Copilot exposes Opus 5.5 effort through its OpenAI-compatible chat API.
-    # Leave other chat models alone: not all support reasoning_effort.
-    if provider == "copilot" and model == "claude-opus-5.5":
-        payload["reasoning_effort"] = _REVIEW_EFFORT
     if max_out is not None:
         payload["max_tokens"] = max_out
     return _http_post_json(f"{base}/chat/completions", headers, payload, timeout)

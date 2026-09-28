@@ -66,7 +66,8 @@ class CopilotRoutingTest(unittest.TestCase):
                     {"type": "output_text", "text": "review findings"}]}]}
                     if responses else {"choices": [
                         {"message": {"content": "review findings"}}]})
-                with patch.object(orchestrate, "_provider_headers", return_value={}), \
+                with patch.object(orchestrate, "load_config", return_value={"responses_effort": "high"}), \
+                     patch.object(orchestrate, "_provider_headers", return_value={}), \
                      patch.object(orchestrate, "_http_post_json",
                                   return_value=(200, body)) as post:
                     result = orchestrate._call_and_extract(
@@ -83,29 +84,19 @@ class CopilotRoutingTest(unittest.TestCase):
                 else:
                     self.assertEqual(payload["messages"][-1]["content"], "diff")
                     self.assertEqual(payload["max_tokens"], 16)
-                    if model == "claude-opus-5.5":
-                        self.assertEqual(payload["reasoning_effort"], "high")
-                    else:
-                        self.assertNotIn("reasoning_effort", payload)
+                    self.assertNotIn("reasoning_effort", payload)
 
-    def test_opus_chat_effort_is_copilot_specific(self):
-        with patch.object(orchestrate, "_provider_headers", return_value={}), \
-             patch.object(orchestrate, "_http_post_json", return_value=(200, {})) as post:
-            orchestrate._openai_compatible_call(
-                "openai", "claude-opus-5.5", "standards", "diff")
-        self.assertNotIn("reasoning_effort", post.call_args.args[2])
-
-    def test_review_sized_calls_request_high_effort(self):
-        for model in ("gpt-6-sol", "claude-opus-5.5", "gpt-6-astra"):
-            with self.subTest(model=model), \
-                 patch.object(orchestrate, "_provider_headers", return_value={}), \
-                 patch.object(orchestrate, "_http_post_json", return_value=(200, {})) as post:
-                orchestrate._openai_compatible_call("copilot", model, "standards", "diff")
-                payload = post.call_args.args[2]
-                if model == "claude-opus-5.5":
-                    self.assertEqual(payload["reasoning_effort"], "high")
-                else:
-                    self.assertEqual(payload["reasoning"], {"effort": "high"})
+    def test_review_effort_uses_config_or_legacy_default(self):
+        for provider in ("copilot", "openai"):
+            for configured in (None, "low", "medium", "high"):
+                cfg = {} if configured is None else {"responses_effort": configured}
+                with self.subTest(provider=provider, configured=configured), \
+                     patch.object(orchestrate, "load_config", return_value=cfg), \
+                     patch.object(orchestrate, "_provider_headers", return_value={}), \
+                     patch.object(orchestrate, "_http_post_json", return_value=(200, {})) as post:
+                    orchestrate._openai_compatible_call(provider, "gpt-6-sol", "standards", "diff")
+                    self.assertEqual(post.call_args.args[2]["reasoning"],
+                                     {"effort": configured or "medium"})
 
 
 if __name__ == "__main__":

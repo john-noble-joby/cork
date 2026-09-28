@@ -7,7 +7,7 @@ description: Use when the user says "cork" / "run cork" on a branch (full mode �
 
 "Cork" = **C**ode **Or**chestrator **R**eview **K**ickoff.
 
-**Version:** 0.11.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
+**Version:** 0.12.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
 
 **The active Claude session is the coding agent.** Unlike the legacy headless mode (where `orchestrate.py` spawned `claude --print` subprocesses), here *you* — the session with full codebase + conversation context — do the implementing and fixing. The orchestrator script is used only as a stateless review tool: `--review-model MODEL` returns one outside model's findings on the current branch diff.
 
@@ -37,6 +37,12 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 ## When invoked, do this
 
 ### Step 0 — Gather context & pick mode
+
+Read `python3 "$CORK_HOME/orchestrate.py" config get herdr_claude_reviews` after resolving
+`CORK_HOME`. When true, run each `claude/…` lane using **Herdr execution** below instead
+of the ordinary bash invocation. This is a session-driven skill preference, not an engine
+transport; API lanes and direct/headless CLI invocations remain unchanged. If Herdr is
+unavailable, stop and ask — do not silently change the requested execution or billing route.
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
@@ -91,7 +97,7 @@ Review your own diff with subagents (dispatch parallel reviewers), apply fixes, 
 
 **Division of labour (do not blur):** each Copilot model is a *read-only reviewer* — it only returns findings on the current diff. It never edits the worktree, never commits, never applies its own suggestions. **You — the active Claude Code session — are the only thing that writes code.** You read each model's findings, decide what's valid, apply the fixes yourself, run tests, and commit. The `--review-model` call is a one-shot, stateless "give me your review of this diff" — nothing more.
 
-Rotation — use the `provider/model` lines printed by `preflight` in Step 0, in order. One review→fix cycle per model: (1) the model reviews the diff, (2) you apply/reject its findings and commit. Save the strongest model for last so it reviews after the others' fixes have landed. (`gpt-5.5`/`gpt-5.x` models are reached via Copilot's `/responses` endpoint; `orchestrate.py` routes them there automatically — nothing to configure.)
+Rotation — use the `provider/model` lines printed by `preflight` in Step 0, in order. One review→fix cycle per model: (1) the model reviews the diff, (2) you apply/reject its findings and commit. Save the strongest model for last so it reviews after the others' fixes have landed. (`gpt-5.x`/`gpt-6.x` models are reached via Copilot's `/responses` endpoint; `orchestrate.py` routes them there automatically — nothing to configure.)
 
 **Interactive review (default on).** Read the preference once before the rotation:
 
@@ -118,7 +124,7 @@ python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} -
 
 This command **only prints the model's review to stdout** — it makes no changes. Applying the findings is your job (next paragraph).
 
-**Model availability** is seat-dependent — that's exactly what `preflight` checks. If a model errors mid-run with "not found in your Copilot account" or "not accessible", drop it and continue. `gpt-5.x`/codex are reachable via Copilot but only via the `/responses` endpoint — `orchestrate.py` routes them there automatically. Gemini is no longer served to this integrator. For openai/anthropic models, `preflight` needs the matching provider token (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` env vars, or keys `"openai"` / `"anthropic"` in `~/.config/cork/auth.json` — chmod 600; tokens never go in `config.json`).
+**Model availability** is seat-dependent — that's exactly what `preflight` checks. If a model errors mid-run with "not found in your Copilot account" or "not accessible", drop it and continue. `gpt-5.x`/`gpt-6.x`/codex are reachable via Copilot but only via the `/responses` endpoint — `orchestrate.py` routes them there automatically. Gemini is no longer served to this integrator. For openai/anthropic models, `preflight` needs the matching provider token (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` env vars, or keys `"openai"` / `"anthropic"` in `~/.config/cork/auth.json` — chmod 600; tokens never go in `config.json`).
 
 **Harness reviewers.** `preflight` may also print `claude/<model>` or `codex/<model>` lines: those are locally installed coding-agent CLIs run by `orchestrate.py` as read-only reviewers (`claude --safe-mode --restricted` with only `Read,Grep,Glob` in plan mode; `codex exec -s read-only --ephemeral` with its shell/exec tools and user MCP config disabled, so codex reviews from the prompt alone). Treat them exactly like API models — same `--review-model` ref, same output format, same consolidation. They are selected when `providers.<harness>.enabled` is true and the binary is found (on PATH, or at the configured absolute `bin` path); a harness that fails or times out prints the usual `… — skipped]` sentinel and the rotation continues.
 
@@ -140,7 +146,9 @@ Because no fixes land between passes, **every reviewer sees the identical diff**
 
 ### R1 — Fan out all reviewers at once
 
-Dispatch concurrently, then collect when all return:
+Dispatch concurrently, then collect when all return. With `herdr_claude_reviews=true`,
+launch each `claude/…` lane using **Herdr execution** and exclude it from the shell loop
+below. Launch the remaining lanes while the Herdr job runs; never run a lane twice.
 
 - **Self-review:** dispatch your own parallel review subagents over `git diff {BASE}...HEAD`. Gather findings only — apply nothing.
 - **Each model from the `preflight` rotation** (captured in Step 0), all launched together (background processes, then `wait`):
@@ -157,7 +165,7 @@ done
 wait
 ```
 
-Each `--review-model` call is stateless and read-only — it only prints findings. Pass `--skip-validation` here: every reviewer otherwise fires a per-model validation call (one premium request each), so skipping it across the parallel fan-out saves ~one request per model. The positional ticket arg isn't used by review output, so any placeholder is fine when there's no ticket. `gpt-5.5`/`gpt-5.x` models are auto-routed to Copilot's `/responses` endpoint. If a model errors, drop it and keep the rest (see *Model availability* under full mode).
+Each `--review-model` call is stateless and read-only — it only prints findings. Pass `--skip-validation` here: every reviewer otherwise fires a per-model validation call (one premium request each), so skipping it across the parallel fan-out saves ~one request per model. The positional ticket arg isn't used by review output, so any placeholder is fine when there's no ticket. `gpt-5.x`/`gpt-6.x` models are auto-routed to Copilot's `/responses` endpoint. If a model errors, drop it and keep the rest (see *Model availability* under full mode).
 
 ### R2 — Consolidate into one report
 
@@ -172,6 +180,59 @@ Merge the self-review and every model's findings into a single markdown report:
 - **Uncertain / needs human judgment:** a trailing section aggregating items reviewers flagged as judgment calls or out of scope.
 
 Print the report and stop. If the user then wants fixes applied, that's a separate full-mode (or manual) pass.
+
+## Herdr execution (opt-in, Claude Code subscription lane)
+
+This wraps the existing `--review-model claude/<model>` command in a visible Herdr pane.
+It does **not** start a conversational Claude agent or forward this session's transcript:
+Cork still builds the blind review inputs and enforces its harness read-only flags.
+
+1. Require `HERDR_ENV=1` before any Herdr inspection or control. Load `herdr --skill` unless
+   already loaded, then follow its installed CLI syntax and safety rules. Never control an
+   unrelated focused session from outside Herdr. Require `claude` in the selected rotation;
+   `copilot/claude-…` and `anthropic/claude-…` are API lanes, not subscription lanes.
+2. Create a sibling pane in the caller's current tab, using the **review worktree** as cwd
+   and `--no-focus`. Inspect `herdr pane layout --current`; prefer right for wide panes,
+   down for narrow/tall ones. Parse the returned pane ID; never guess it. Do not create a
+   new worktree/workspace. Keep any run artifacts **outside** the review repo so its
+   read-enabled reviewer cannot see other lanes' findings.
+3. Verify authentication **in that pane**, before spending a turn. Resolve the same Claude
+   binary as Cork (`CORK_CLAUDE_BIN`, then `providers.claude.bin`, then `claude`); propagate
+   the invoking session's binary override and absolute `CORK_CONFIG_FILE` if set. Run that
+   binary's `--safe-mode --restricted auth status` and confirm `loggedIn`,
+   `authMethod=claude.ai`, `apiProvider=firstParty`, and the intended subscription/account
+   (Enterprise for enterprise requests). Check for API/provider overrides in the pane's
+   environment; report only their presence, never values. An API key or different account
+   is **not** an acceptable fallback — stop and ask the user to resolve it. Recheck for
+   every fresh pane; the Herdr server's environment can differ from this session's.
+   Cork's harness preflight only checks binary presence, **not** login or model access.
+4. Use `mktemp -d` for a private, unique run directory outside the repo. Write a small shell
+   runner there using the ordinary write tool. It must invoke the exact same Cork command
+   (absolute engine/config/repo paths, selected model, ticket and confirmed base;
+   `--skip-validation` after preflight), redirect stdout/stderr to `findings.txt`, then
+   capture `$?` immediately and atomically rename a temporary exit-status file to `exit`.
+   Quote every substituted shell argument (e.g. Python `shlex.quote`); do not interpolate
+   raw ticket, branch or path text. Use `umask 077`. No `set -e` before capturing failures.
+   Only command/config/path data goes in the runner — never credentials or prior findings.
+5. Launch it with `herdr pane run <returned-id> "bash <quoted-runner-path>"`. Record the
+   pane ID, artifact path and start time **before** launch. Poll the `exit` file with a
+   bounded wait (configured Claude timeout, default 900s, plus ~60s startup margin).
+   A shell-ready pane, silence, or a prompt-submission acknowledgement is not completion.
+   Do not resubmit after a transport timeout: first inspect the existing pane and artifacts.
+6. Once `exit` exists, read the full `findings.txt` with the file tool, paging if necessary.
+   Nonzero exit, an empty review, or Cork's `returned no usable content — skipped` sentinel
+   means a **failed lane**, never a clean review (the sentinel can accompany exit 0).
+   On timeout/missing exit status, report the pane and artifact path and stop/wait for the
+   user; do not auto-retry or close a possibly live review. Preserve failed-run diagnostics.
+   Only after a successful result has been collected may you close **the pane you created**.
+   Keep artifacts until the report is delivered; remove only this run's artifacts afterward.
+7. In full mode, present findings and honor `interactive_review` before fixing or advancing.
+   In review-only mode, include this lane in the same consolidation as the API lanes,
+   explicitly reporting failures. Never feed other reviewers' results into this Claude run.
+
+Herdr manages terminals, **not billing**. Claude Code's authenticated subscription governs
+charges/limits; this does not promise free usage. Never extract OAuth tokens into an API
+provider. The direct CLI remains available without Herdr when explicitly requested.
 
 ## Notes
 

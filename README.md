@@ -191,8 +191,13 @@ Cork picks reviewers at runtime. The ranked candidate list and desired count liv
 `count` survivors (errors only if none survive). Before probing, preflight names the active
 Copilot credential source. Environment overrides are informational; warnings are reserved for
 a non-refreshable cork file or the opencode fallback. Auth failures (401/403) are fatal and name
-the rejected source plus the `login` recovery command. `gpt-5.x`/codex are reached via
-Copilot's `/responses` endpoint automatically; everything else uses `/chat/completions`.
+the rejected source plus the `login` recovery command. `gpt-5.x`/`gpt-6.x`/codex are reached via
+Copilot's `/responses` endpoint automatically; other OpenAI-compatible models use `/chat/completions`.
+
+`responses_effort` controls reasoning for Responses API calls (both reviews and probes):
+`"low"`, `"medium"` (the backward-compatible default), or `"high"`. Edit this field in
+`config.json`; chat-completions, native Anthropic, and harness lanes are unaffected.
+For Claude Code, set `providers.claude.extra_args` to `["--effort", "high"]` instead.
 
 **Providers:** Copilot is the default and recommended path (one flat-rate seat). `openai`
 and `anthropic` are supported but disabled by default; enable a provider in `config.json`
@@ -257,6 +262,46 @@ argv template and read-only flags are not configurable. `preflight` selects a
 harness iff its binary is found — on PATH, or at the configured absolute `bin` path — no spend. A harness that exits non-zero, times out,
 or prints nothing is reported and skipped (`[codex/<m> returned no usable content — skipped]`);
 there is no retry.
+
+### Claude Enterprise reviews in Herdr (session-driven skill)
+
+The `claude/…` harness can use your existing Claude Code subscription login instead of
+Cork's Copilot or Anthropic API credentials. Herdr is an optional **terminal manager**, not
+a billing provider. Confirm the intended account with `claude --safe-mode --restricted auth status`;
+Enterprise usage limits/pricing still apply. Never copy Claude OAuth tokens into Cork's
+API token store. Model IDs are passed to the selected provider unchanged; verify access
+on your own seat.
+
+Example hybrid rotation (merge these fields into your config):
+
+```json
+{
+  "count": 3,
+  "responses_effort": "high",
+  "herdr_claude_reviews": true,
+  "providers": {
+    "copilot": {"enabled": true},
+    "claude": {"enabled": true, "extra_args": ["--effort", "high"]}
+  },
+  "rotation": [
+    {"provider": "copilot", "model": "gpt-6-sol"},
+    {"provider": "claude", "model": "claude-opus-5.5"},
+    {"provider": "copilot", "model": "gpt-6-astra"}
+  ]
+}
+```
+
+Enable with `python3 orchestrate.py config set herdr_claude_reviews true` (default false).
+This is a **skill preference**, not a transport implemented by `orchestrate.py`: direct and
+headless CLI calls still invoke Claude as an ordinary subprocess. The session-driven Cork
+skill, when running inside Herdr (`HERDR_ENV=1`), creates a no-focus sibling pane and runs
+Cork's existing blind `--review-model claude/<model>` command there. It verifies the
+Claude account inside that pane, captures the complete findings outside the review repo,
+checks completion/exit status/skipped-lane diagnostics, and returns findings to the normal
+review workflow. It never reuses the implementer's conversation. Outside Herdr it asks
+rather than silently falling back. See **Herdr execution** in `skills/cork/SKILL.md` for
+failure handling and cleanup. This requires an agent with shell/file tools and the installed
+Herdr CLI; it does not depend on Claude-specific slash commands.
 
 ### Interactive review (`interactive_review`, default on)
 

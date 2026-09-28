@@ -62,6 +62,16 @@ class ArgvTest(HarnessBase):
         self.assertNotIn("--bare", argv)       # --bare refuses OAuth logins; --safe-mode keeps auth
         self.assertNotIn("Bash", ",".join(argv))
 
+    def test_claude_high_effort_preserves_read_only_flags(self):
+        orchestrate.CONFIG_PATH.write_text('{"rotation":[{"provider":"claude","model":"opus"}],'
+                                           '"providers":{"claude":{"enabled":true,'
+                                           '"extra_args":["--effort","high"]}}}')
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        orchestrate._harness_call("claude", "opus", "SYS", "USER", "/repo")
+        argv = fake.calls[0][0]
+        ro = orchestrate.HARNESSES["claude"]["read_only"]
+        self.assertEqual(argv[-len(ro) - 2:], ["--effort", "high", *ro])
+
     def test_config_cannot_override_read_only_or_argv(self):
         orchestrate.CONFIG_PATH.write_text('{"rotation":[{"provider":"codex","model":"m"}],'
                                            '"providers":{"codex":{"enabled":true,"read_only":[],'

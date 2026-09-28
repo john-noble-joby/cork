@@ -43,6 +43,16 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             orchestrate.load_config()
 
+    def test_responses_effort_validation(self):
+        for effort in ("low", "medium", "high"):
+            with self.subTest(effort=effort):
+                cfg = {**orchestrate.DEFAULT_CONFIG, "responses_effort": effort}
+                self.path.write_text(json.dumps(cfg))
+                self.assertEqual(orchestrate.load_config()["responses_effort"], effort)
+        for effort in (None, True, 1, [], {}, "", "HIGH", " high", "max"):
+            with self.subTest(invalid=effort), self.assertRaises(SystemExit):
+                orchestrate._validate_config({**orchestrate.DEFAULT_CONFIG, "responses_effort": effort})
+
     def test_duplicate_rotation_fails(self):
         self.path.write_text(json.dumps({
             "rotation": [
@@ -124,6 +134,20 @@ class ConfigGetSetTest(unittest.TestCase):
         }))
         with self.assertRaises(SystemExit):
             orchestrate.load_config()
+
+    def test_herdr_preference_defaults_off_and_is_settable(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            orchestrate.cmd_config_get("herdr_claude_reviews")
+        self.assertEqual(buf.getvalue().strip(), "false")
+        for value in ("true", "false"):
+            orchestrate.cmd_config_set("herdr_claude_reviews", value)
+            self.assertEqual(orchestrate.load_config()["herdr_claude_reviews"], value == "true")
+
+    def test_herdr_preference_requires_boolean(self):
+        for invalid in (None, 0, 1, "false", [], {}):
+            with self.subTest(invalid=invalid), self.assertRaises(SystemExit):
+                orchestrate._validate_config({**orchestrate.DEFAULT_CONFIG, "herdr_claude_reviews": invalid})
 
     def test_get_default_standards_defaults_true(self):
         buf = io.StringIO()
