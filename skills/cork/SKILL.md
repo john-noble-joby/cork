@@ -155,8 +155,12 @@ below. Launch the remaining lanes while the Herdr job runs; never run a lane twi
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
+HERDR_CLAUDE_REVIEWS="$(python3 "$CORK_HOME/orchestrate.py" config get herdr_claude_reviews)" || exit 1
 # PREFLIGHT_MODELS is the space-separated list of "provider/model" lines from Step 0 preflight
 for M in $PREFLIGHT_MODELS; do
+  if [[ "$HERDR_CLAUDE_REVIEWS" == true && "$M" == claude/* ]]; then
+    continue # already launched via Herdr execution above; never duplicate this lane
+  fi
   safe="${M//\//-}"
   python3 "$CORK_HOME/orchestrate.py" "${TICKET:-REVIEW}" {WORKTREE} \
     --review-model "$M" --base-branch {BASE} --skip-validation \
@@ -196,10 +200,16 @@ Cork still builds the blind review inputs and enforces its harness read-only fla
    down for narrow/tall ones. Parse the returned pane ID; never guess it. Do not create a
    new worktree/workspace. Keep any run artifacts **outside** the review repo so its
    read-enabled reviewer cannot see other lanes' findings.
-3. Verify authentication **in that pane**, before spending a turn. Resolve the same Claude
-   binary as Cork (`CORK_CLAUDE_BIN`, then `providers.claude.bin`, then `claude`); propagate
-   the invoking session's binary override and absolute `CORK_CONFIG_FILE` if set. Run that
-   binary's `--safe-mode --restricted auth status` and confirm `loggedIn`,
+3. Before entering the pane, resolve the **invoking session's** effective config to an
+   absolute path (`CORK_CONFIG_FILE`, otherwise its `$HOME/.config/cork/config.json`).
+   Resolve Cork's Claude binary (`CORK_CLAUDE_BIN`, then `providers.claude.bin`, then
+   `claude`) to an absolute executable path using the caller's PATH/cwd. In **both** the
+   pane's auth check and its review runner, always export that resolved `CORK_CONFIG_FILE`
+   and `CORK_CLAUDE_BIN` — even when neither override was originally set. Require that
+   config file and executable to exist and be accessible in the pane; stop and ask if not.
+   Never let the pane's HOME or PATH select a different config or binary.
+   Verify authentication **in that pane**, before spending a turn. Run the pinned binary's
+   `--safe-mode --restricted auth status` and confirm `loggedIn`,
    `authMethod=claude.ai`, `apiProvider=firstParty`, and the intended subscription/account
    (Enterprise for enterprise requests). Check for API/provider overrides in the pane's
    environment; report only their presence, never values. An API key or different account

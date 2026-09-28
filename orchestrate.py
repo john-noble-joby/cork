@@ -68,6 +68,9 @@ _CORK_AUTH     = Path(os.environ.get("CORK_AUTH_FILE",
 # use). Overridable in case GitHub rotates it.
 _COPILOT_CLIENT_ID = os.environ.get("CORK_COPILOT_CLIENT_ID", "Iv1.b507a08c87ecfe98")
 _DEFAULT_CHAR_BUDGET = 192_000  # fallback if /models fetch fails
+_RESPONSES_MAX_OUTPUT = 32_000  # reasoning + findings share this ceiling
+_RESPONSES_EFFORTS = ("low", "medium", "high")
+_DEFAULT_RESPONSES_EFFORT = "medium"
 
 CONFIG_PATH = Path(os.environ.get("CORK_CONFIG_FILE",
                    str(Path.home() / ".config/cork/config.json")))
@@ -119,7 +122,7 @@ DEFAULT_CONFIG = {
     "count": 3,
     "interactive_review": True,
     "default_standards": True,
-    "responses_effort": "medium",
+    "responses_effort": _DEFAULT_RESPONSES_EFFORT,
     "herdr_claude_reviews": False,  # session-driven skill preference; CLI stays headless
     "providers": {
         "copilot":   {"enabled": True},
@@ -592,9 +595,6 @@ def _copilot_chat(payload: dict, timeout: int = 300) -> tuple[int, object]:
                            _copilot_headers(), payload, timeout)
 
 
-_RESPONSES_MAX_OUTPUT = 32_000      # ceiling, not a target — reasoning + findings share it
-
-
 def _uses_responses_api(model: str) -> bool:
     # GPT-5, GPT-6, and codex models require the Responses endpoint on Copilot —
     # /chat/completions is not supported for them.
@@ -664,7 +664,7 @@ def _validate_config(cfg: dict) -> None:
         fail("config.interactive_review must be true or false (a JSON boolean)")
     if not isinstance(cfg.get("default_standards", True), bool):
         fail("config.default_standards must be true or false (a JSON boolean)")
-    if cfg.get("responses_effort", "medium") not in ("low", "medium", "high"):
+    if cfg.get("responses_effort", _DEFAULT_RESPONSES_EFFORT) not in _RESPONSES_EFFORTS:
         fail("config.responses_effort must be low, medium, or high")
     if not isinstance(cfg.get("herdr_claude_reviews", False), bool):
         fail("config.herdr_claude_reviews must be true or false (a JSON boolean)")
@@ -989,7 +989,7 @@ def _openai_compatible_call(provider: str, model: str, system: str,
         return _http_post_json(f"{base}/responses", headers, {
             "model": model, "instructions": system, "input": user_msg,
             "max_output_tokens": max_out or _RESPONSES_MAX_OUTPUT,
-            "reasoning": {"effort": load_config(quiet=True).get("responses_effort", "medium")},
+            "reasoning": {"effort": load_config(quiet=True).get("responses_effort", _DEFAULT_RESPONSES_EFFORT)},
         }, timeout)
     payload = {
         "model": model,

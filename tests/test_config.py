@@ -75,6 +75,21 @@ class ConfigGetSetTest(unittest.TestCase):
         orchestrate.CONFIG_PATH = self._orig
         self.tmp.cleanup()
 
+    def test_get_responses_effort_default_legacy_and_override(self):
+        cases = (
+            (None, "medium"),
+            ({"rotation": [{"provider": "copilot", "model": "gpt-6-sol"}]}, "medium"),
+            ({**orchestrate.DEFAULT_CONFIG, "responses_effort": "high"}, "high"),
+        )
+        for config, expected in cases:
+            with self.subTest(config=config):
+                if config is not None:
+                    self.path.write_text(json.dumps(config))
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    orchestrate.cmd_config_get("responses_effort")
+                self.assertEqual(json.loads(buf.getvalue()), expected)
+
     def test_get_interactive_review_defaults_true_when_no_file(self):
         buf = io.StringIO()
         with redirect_stdout(buf):
