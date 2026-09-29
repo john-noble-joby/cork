@@ -1,4 +1,10 @@
+import contextlib
+import io
+import json
+import os
+import tempfile
 import unittest
+from pathlib import Path
 import orchestrate
 
 
@@ -21,8 +27,46 @@ class ClassifyTest(unittest.TestCase):
     def test_other(self):
         self.assertEqual(orchestrate._classify_preflight(503, "busy"), "other")
 
+    def test_probe_reports_timeout_distinctly(self):
+        original = orchestrate._call_and_extract
+        def time_out(*args, **kwargs):
+            raise TimeoutError()
+        orchestrate._call_and_extract = time_out
+        try:
+            self.assertEqual(orchestrate._probe("copilot", "model"), "timeout")
+        finally:
+            orchestrate._call_and_extract = original
+
+    def test_probe_reports_connection_failure_distinctly(self):
+        original = orchestrate._call_and_extract
+        def connection_error(*args, **kwargs):
+            raise orchestrate.urllib.error.URLError("dns unavailable")
+        orchestrate._call_and_extract = connection_error
+        try:
+            self.assertEqual(orchestrate._probe("copilot", "model"), "connection")
+        finally:
+            orchestrate._call_and_extract = original
+
+    def test_probe_reports_wrapped_connect_timeout_as_timeout(self):
+        # urlopen wraps a connect-phase timeout as URLError(reason=TimeoutError)
+        original = orchestrate._call_and_extract
+        def wrapped_timeout(*args, **kwargs):
+            raise orchestrate.urllib.error.URLError(TimeoutError("timed out"))
+        orchestrate._call_and_extract = wrapped_timeout
+        try:
+            self.assertEqual(orchestrate._probe("copilot", "model"), "timeout")
+        finally:
+            orchestrate._call_and_extract = original
+
 
 class SelectTest(unittest.TestCase):
+    def setUp(self):
+        self._resolve = orchestrate._resolve_copilot_auth
+        orchestrate._resolve_copilot_auth = lambda: ("TOKEN", "cork", 9_999_999_999.0, True)
+
+    def tearDown(self):
+        orchestrate._resolve_copilot_auth = self._resolve
+
     def test_stops_at_count_and_skips_dead(self):
         rotation = [
             {"provider": "copilot", "model": "dead1"},
@@ -53,6 +97,19 @@ class SelectTest(unittest.TestCase):
         finally:
             orchestrate._probe = orig
 
+    def test_connection_failure_has_distinct_preflight_tick(self):
+        orig = orchestrate._probe
+        orchestrate._probe = lambda provider, model: "connection"
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
+                orchestrate.preflight(
+                    [{"provider": "copilot", "model": "offline"}], count=1)
+        finally:
+            orchestrate._probe = orig
+        self.assertIn("✗ copilot/offline dropped (connection error)", out.getvalue())
+        self.assertNotIn("dropped (timeout)", out.getvalue())
+
     def test_auth_halts(self):
         orig = orchestrate._probe
         orchestrate._probe = lambda p, m: "auth"
@@ -62,6 +119,164 @@ class SelectTest(unittest.TestCase):
                     [{"provider": "copilot", "model": "m"}], count=1)
         finally:
             orchestrate._probe = orig
+
+    def test_native_only_rotation_does_not_resolve_copilot_auth(self):
+        orchestrate._resolve_copilot_auth = lambda: self.fail("must not resolve Copilot")
+        orig = orchestrate._probe
+        orchestrate._probe = lambda provider, model: "ok"
+        try:
+            selected = orchestrate.preflight(
+                [{"provider": "openai", "model": "gpt-4o"}], count=1)
+        finally:
+            orchestrate._probe = orig
+        self.assertEqual(selected, [{"provider": "openai", "model": "gpt-4o"}])
+
+
+class AuthVisibilityTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cork = Path(self.tmp.name) / "auth.json"
+        self.opencode = Path(self.tmp.name) / "opencode.json"
+        self._cork, self._opencode = orchestrate._CORK_AUTH, orchestrate._OPENCODE_AUTH
+        self._probe, self._now = orchestrate._probe, orchestrate._now
+        self._load_config = orchestrate.load_config
+        self._env = os.environ.pop("CORK_COPILOT_TOKEN", None)
+        orchestrate._CORK_AUTH, orchestrate._OPENCODE_AUTH = self.cork, self.opencode
+
+    def tearDown(self):
+        orchestrate._CORK_AUTH, orchestrate._OPENCODE_AUTH = self._cork, self._opencode
+        orchestrate._probe, orchestrate._now = self._probe, self._now
+        orchestrate.load_config = self._load_config
+        os.environ.pop("CORK_COPILOT_TOKEN", None)  # tests set it; never leak it to later modules
+        if self._env is not None:
+            os.environ["CORK_COPILOT_TOKEN"] = self._env
+        self.tmp.cleanup()
+
+    def test_preflight_warns_when_using_opencode_fallback(self):
+        orchestrate._now = lambda: 1000.0
+        self.opencode.write_text(json.dumps({
+            "github-copilot": {
+                "access": "EXPIRED",
+                "refresh": "FALLBACK",
+                "expires": 0,
+            }
+        }))
+        orchestrate._probe = lambda provider, model: "ok"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            selected = orchestrate.preflight(
+                [{"provider": "copilot", "model": "gpt-4.1"}], count=1)
+        self.assertEqual(selected, [{"provider": "copilot", "model": "gpt-4.1"}])
+        text = out.getvalue()
+        self.assertIn("WARNING: Copilot token: opencode fallback", text)
+        self.assertIn(str(self.opencode), text)
+        self.assertIn("no expiry, not refreshable", text)
+        self.assertIn(orchestrate._LOGIN_COMMAND, text)
+        self.assertLess(text.index("opencode fallback"), text.index("✓ copilot/gpt-4.1"))
+
+    def test_preflight_401_names_token_only_cork_file_and_relogin(self):
+        self.cork.write_text(json.dumps({"token": "STALE"}))
+        orchestrate._probe = lambda provider, model: "auth"
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit) as raised:
+            orchestrate.preflight(
+                [{"provider": "copilot", "model": "gpt-4.1"}], count=1)
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn("WARNING: Copilot token: cork", out.getvalue())
+        self.assertIn("no expiry, refreshable no", out.getvalue())
+        self.assertIn("token-only cork file", err.getvalue())
+        self.assertIn(str(self.cork), err.getvalue())
+        self.assertIn("re-login to replace its Copilot fields", err.getvalue())
+        self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
+
+    def test_preflight_rejected_refresh_fails_loudly_not_traceback(self):
+        orchestrate._now = lambda: 10000.0
+        self.cork.write_text(json.dumps(
+            {"token": "OLD", "refresh_token": "DEAD", "expires_at": 5000}))
+        original_post = orchestrate._post_form
+        orchestrate._post_form = lambda *a, **k: {"error": "invalid_grant"}
+        orchestrate._probe = lambda provider, model: self.fail("must not probe after a rejected refresh")
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                    self.assertRaises(SystemExit) as raised:
+                orchestrate.preflight([{"provider": "copilot", "model": "gpt-4.1"}], count=1)
+        finally:
+            orchestrate._post_form = original_post
+        self.assertEqual(raised.exception.code, 1)  # fail(), never a RuntimeError traceback
+        self.assertIn("invalid_grant", err.getvalue())
+        self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
+
+    def test_preflight_reports_expired_token_without_probing(self):
+        orchestrate._now = lambda: 10000.0
+        self.cork.write_text(json.dumps({"token": "OLD", "expires_at": 5000}))
+        orchestrate._probe = lambda provider, model: self.fail("must not probe expired auth")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit):
+            orchestrate.preflight(
+                [{"provider": "copilot", "model": "gpt-4.1"}], count=1)
+        self.assertIn("WARNING: Copilot token: cork", out.getvalue())
+        self.assertIn("expired 1970-01-01T01:23:20Z", out.getvalue())
+        self.assertIn(orchestrate._LOGIN_COMMAND, out.getvalue())
+        self.assertIn("No usable models", err.getvalue())
+
+    def test_cmd_preflight_no_token_prints_source_aware_login_guidance(self):
+        orchestrate.load_config = lambda quiet=False: {
+            "count": 1,
+            "providers": {"copilot": {"enabled": True}},
+            "rotation": [{"provider": "copilot", "model": "model"}],
+        }
+        orchestrate._probe = lambda provider, model: self.fail("must not probe without auth")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit):
+            orchestrate.cmd_preflight()
+        self.assertIn(f"Copilot token: none — run `{orchestrate._LOGIN_COMMAND}`", out.getvalue())
+        self.assertIn("✗ copilot/model skipped (no copilot token)", out.getvalue())
+        self.assertIn("No usable models", err.getvalue())
+
+    def test_main_full_run_preserves_no_token_guidance(self):
+        original_argv, original_state_dir = orchestrate.sys.argv, orchestrate.STATE_DIR
+        original_base_check = orchestrate.require_base_ref
+        # The temp dir is not a git repo; auth guidance, not base validation, is under test.
+        orchestrate.require_base_ref = lambda repo, base: None
+        orchestrate.sys.argv = ["orchestrate.py", "TEST-1", self.tmp.name]
+        orchestrate.STATE_DIR = Path(self.tmp.name) / "state"
+        orchestrate.load_config = lambda quiet=False: {
+            "count": 1,
+            "providers": {"copilot": {"enabled": True}},
+            "rotation": [{"provider": "copilot", "model": "full-run-model"}],
+        }
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                    self.assertRaises(SystemExit):
+                orchestrate.main()
+        finally:
+            orchestrate.sys.argv, orchestrate.STATE_DIR = original_argv, original_state_dir
+            orchestrate.require_base_ref = original_base_check
+        self.assertIn(f"Copilot token: none — run `{orchestrate._LOGIN_COMMAND}`", out.getvalue())
+        self.assertIn("✗ copilot/full-run-model skipped (no copilot token)", out.getvalue())
+
+    def test_normal_preflight_keeps_native_fallback_when_copilot_missing(self):
+        cfg = {
+            "providers": {"copilot": {"enabled": True}, "openai": {"enabled": True}},
+            "rotation": [
+                {"provider": "copilot", "model": "copilot-model"},
+                {"provider": "openai", "model": "native-model"},
+            ],
+        }
+        original = orchestrate._provider_token_available
+        orchestrate._provider_token_available = lambda provider: provider == "openai"
+        orchestrate._probe = lambda provider, model: "ok"
+        try:
+            selected = orchestrate.preflight(
+                orchestrate._eligible_rotation(cfg, keep_unavailable_copilot=True), count=1)
+        finally:
+            orchestrate._provider_token_available = original
+        self.assertEqual(selected, [{"provider": "openai", "model": "native-model"}])
 
 
 class EligibleRotationTest(unittest.TestCase):
