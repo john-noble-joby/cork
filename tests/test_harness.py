@@ -379,6 +379,45 @@ class ConfigAndProbeTest(HarnessBase):
                          ["codex/gpt-5.6-sol", "claude/claude-opus-4.7"])
 
 
+class CodexCopilotPassthroughDocTest(HarnessBase):
+    # The README's cork-lane example is the only supported way to give the codex lane the
+    # Copilot provider: the lane passes --ignore-user-config, so ~/.codex/config.toml is
+    # never read and the whole provider must travel as `-c` overrides in extra_args.
+    def _readme_example(self) -> dict:
+        import json, re
+        text = (Path(__file__).resolve().parents[1] / "README.md").read_text()
+        block = re.search(r'```json\n(\{\n  "providers": \{\n    "codex": \{\n      "enabled": true,.*?\n\})\n```', text, re.S)
+        self.assertIsNotNone(block, "README cork-lane codex example not found")
+        return json.loads(block.group(1))
+
+    def test_readme_example_is_valid_config(self):
+        cfg = {**orchestrate.DEFAULT_CONFIG, **self._readme_example()}
+        orchestrate._validate_config(cfg)  # no raise
+
+    def test_readme_example_defines_the_whole_provider_via_overrides(self):
+        args = self._readme_example()["providers"]["codex"]["extra_args"]
+        overrides = [a for i, a in enumerate(args) if i % 2 == 1]
+        self.assertEqual(args[::2], ["-c"] * len(overrides))
+        keys = [o.split("=", 1)[0] for o in overrides]
+        for required in ("model_provider", "model_providers.copilot.base_url",
+                         "model_providers.copilot.wire_api", "model_providers.copilot.auth.command",
+                         "model_providers.copilot.auth.args"):
+            self.assertIn(required, keys)
+        self.assertIn("auth print-token", " ".join(overrides))
+
+    def test_readme_example_reaches_codex_before_the_isolation_flags(self):
+        import json
+        cfg = {**orchestrate.DEFAULT_CONFIG, **self._readme_example()}
+        orchestrate.CONFIG_PATH.write_text(json.dumps(cfg))
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        orchestrate._harness_call("codex", "gpt-5.5", "SYS", "USER", "/repo")
+        argv = fake.calls[0][0]
+        extra = cfg["providers"]["codex"]["extra_args"]
+        start = argv.index(extra[0], argv.index("-"))  # after the stdin marker
+        self.assertEqual(argv[start:start + len(extra)], extra)
+        self.assertLess(start, argv.index("--ignore-user-config"))  # -c overrides precede isolation flags
+
+
 class SplitRefTest(unittest.TestCase):
     def test_harness_refs(self):
         self.assertEqual(orchestrate._split_model_ref("claude/x"), ("claude", "x"))

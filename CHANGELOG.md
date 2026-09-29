@@ -21,7 +21,7 @@ change, and add a section here.
 
 ## [Unreleased]
 
-## [0.12.0] — 2026-09-28
+## [0.13.0] — 2026-09-29
 
 ### Added
 - Opt-in `pi` harness: prompt-only, ephemeral reviews using Pi's existing login and
@@ -36,6 +36,22 @@ change, and add a section here.
 - Quote skill descriptions so YAML frontmatter parsers accept embedded colons.
 - Route GPT-6 models, including Sol and Astra, through `/responses` rather than unsupported
   chat completions; share the same response extraction as GPT-5 and Codex.
+
+## [0.12.0] — 2026-09-29
+
+### Added
+- **One cork login can authenticate the local Codex reviewer lane.** `auth print-token`
+  exposes the resolved, automatically refreshed Copilot credential as exact plain text or
+  structured JSON for Codex's command-backed provider auth. The README documents the verified
+  Codex 0.146 custom Responses provider, static Copilot headers, refresh interval, and lane
+  selection, including the unsupported-integration and subprocess-pipe security caveats.
+
+### Fixed
+- The Codex-lane Copilot passthrough is configured entirely through `-c` overrides in
+  `providers.codex.extra_args`. The lane passes `--ignore-user-config`, so a provider defined
+  only in `~/.codex/config.toml` was never loaded (`Model provider \`copilot\` not found`);
+  the README example now carries the whole provider + auth-command definition and a test
+  guards that it stays valid config and reaches Codex ahead of the isolation flags.
 
 ## [0.11.0] — 2026-09-17
 
