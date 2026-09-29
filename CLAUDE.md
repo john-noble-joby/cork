@@ -6,7 +6,7 @@ Serial multi-model coding pipeline that takes a Linear ticket and produces revie
 
 1. **Claude Code** fetches the story via Linear MCP, searches mem0 for codebase context, creates a feature branch, implements the story
 2. **Claude Code** reviews its own diff (multi-agent), then applies the findings
-3. Each blind reviewer from the **preflight-selected ranked rotation** (copilot/openai/anthropic, up to `count` models from `~/.config/cork/config.json`) reviews the current code state in turn — never prior review text — and **Claude Code** applies each model's findings before the next reviewer runs
+3. Each blind reviewer from the **preflight-selected ranked rotation** (configured API and CLI-harness providers, up to `count` models from `~/.config/cork/config.json`) reviews the current code state in turn — never prior review text — and **Claude Code** applies each model's findings before the next reviewer runs
 4. **Claude Code** applies the final model's findings and saves decisions to mem0
 
 The pipeline is `3 + 2×N` committed steps (N = number of preflight-selected models). mem0 and Linear are accessed through Claude Code's existing MCP connections — the Python script never calls those APIs directly.
