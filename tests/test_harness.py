@@ -36,12 +36,13 @@ class ArgvTest(HarnessBase):
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         status, text = orchestrate._harness_call("codex", "gpt-5.6-sol", "SYS", "USER", "/repo")
         argv, kw = fake.calls[0]
-        ro = orchestrate.HARNESSES["codex"]["read_only"]
+        # The protected flag set is spelled out literally: reading it from HARNESSES would
+        # let a removed flag update both sides of the assertion and pass.
         self.assertEqual(argv, ["codex", "exec", "-m", "gpt-5.6-sol", "--ephemeral",
                                 "--skip-git-repo-check", "-C", "/repo", "--color", "never", "-",
-                                *ro])  # read-only flags last
-        for flag in ("read-only", "--ignore-user-config", "shell_tool", "unified_exec"):
-            self.assertIn(flag, ro)
+                                "-s", "read-only", "--ignore-user-config",
+                                "--disable", "shell_tool", "--disable", "unified_exec",
+                                "--disable", "code_mode_host", "--disable", "apps"])  # read-only flags last
         self.assertEqual(kw["cwd"], "/repo")
         self.assertEqual(kw["timeout"], 900)
         # no system flag -> standards prepended to the stdin body with a separator
@@ -224,7 +225,7 @@ class ConfigAndProbeTest(HarnessBase):
         for ok in ("codex", "/opt/codex", "~/bin/codex"):
             with self.subTest(bin=ok):
                 orchestrate._validate_harness_cfg("codex", {"bin": ok})
-        for bad in ("./tools/codex", "tools/codex", "../codex"):
+        for bad in ("./tools/codex", "tools/codex", "../codex", "~no-such-user-xyz/bin/codex"):
             with self.subTest(bin=bad), self.assertRaises(SystemExit):
                 orchestrate._validate_harness_cfg("codex", {"bin": bad})
 
@@ -310,6 +311,17 @@ class ConfigAndProbeTest(HarnessBase):
         finally:
             orchestrate._http_post_json = orig
 
+    def test_eligible_rotation_missing_absolute_bin_is_not_reported_as_path_lookup(self):
+        orchestrate.CONFIG_PATH.write_text('{"rotation":[{"provider":"codex","model":"m"}],'
+                                           '"providers":{"codex":{"enabled":true,"bin":"/opt/codex"}}}')
+        orchestrate.shutil.which = lambda b: None
+        import contextlib, io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(orchestrate._eligible_rotation(orchestrate.load_config(quiet=True)), [])
+        self.assertIn("/opt/codex", out.getvalue())
+        self.assertNotIn("not on PATH", out.getvalue())
+
     def test_eligible_rotation_skip_line_names_binary(self):
         import io
         from contextlib import redirect_stdout
@@ -319,7 +331,7 @@ class ConfigAndProbeTest(HarnessBase):
         buf = io.StringIO()
         with redirect_stdout(buf):
             self.assertEqual(orchestrate._eligible_rotation(cfg), [])
-        self.assertIn("binary not on PATH", buf.getvalue())
+        self.assertIn("binary not found: ", buf.getvalue())
 
     def test_preflight_selects_harness_without_http(self):
         orchestrate.shutil.which = lambda b: "/usr/bin/" + b

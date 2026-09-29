@@ -1001,7 +1001,10 @@ def _harness_bin_path(raw: str, origin: str) -> str:
     # (review) agree. A path must be absolute: preflight resolves a relative path from
     # cork's cwd but the harness runs with cwd=repo, so `./tools/codex` would pass
     # preflight and then fail at review time.
-    expanded = Path(raw).expanduser()
+    try:
+        expanded = Path(raw).expanduser()
+    except RuntimeError:  # `~nosuchuser/...` — no home directory to expand
+        fail(f"{origin}: cannot expand {raw!r} (unknown user)")
     if "/" in raw and not expanded.is_absolute():
         fail(f"{origin} must be a bare command name or an absolute path, got {raw!r}")
     return str(expanded) if "/" in raw else raw
@@ -1130,7 +1133,8 @@ def _eligible_rotation(cfg: dict, keep_unavailable_copilot: bool = False) -> lis
             kept.append(entry)
             continue
         if not _provider_token_available(provider):
-            why = "binary not on PATH" if provider in HARNESSES else f"no {provider} token"
+            why = (f"binary not found: {_harness_bin(provider)}" if provider in HARNESSES
+                   else f"no {provider} token")
             print(f"  ✗ {provider}/{model} skipped ({why})", flush=True)
             continue
         kept.append(entry)
