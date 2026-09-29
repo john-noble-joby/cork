@@ -7,7 +7,7 @@ description: Use when the user says "cork" / "run cork" on a branch (full mode �
 
 "Cork" = **C**ode **Or**chestrator **R**eview **K**ickoff.
 
-**Version:** 0.8.3 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
+**Version:** 0.9.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
 
 **The active Claude session is the coding agent.** Unlike the legacy headless mode (where `orchestrate.py` spawned `claude --print` subprocesses), here *you* — the session with full codebase + conversation context — do the implementing and fixing. The orchestrator script is used only as a stateless review tool: `--review-model MODEL` returns one outside model's findings on the current branch diff.
 
@@ -41,6 +41,8 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 python3 "$CORK_HOME/orchestrate.py" --version            # cork version — announce it (see below)
+git rev-parse --verify --quiet "{BASE}^{commit}" >/dev/null || { echo "base {BASE} does not resolve"; exit 1; }
+git merge-base "{BASE}" HEAD >/dev/null      || { echo "no merge base with {BASE}"; exit 1; }
 python3 "$CORK_HOME/orchestrate.py" preflight            # probe & select models for this seat
 python3 "$CORK_HOME/orchestrate.py" standards status .   # show the active review-standards layers
 git rev-parse --abbrev-ref HEAD                         # current branch
@@ -48,6 +50,9 @@ git rev-parse --abbrev-ref HEAD | grep -oP 'MXE-\d+'    # ticket ID, if branch f
 pwd                                                     # worktree path
 git log {BASE}..HEAD --oneline                          # commits vs base
 ```
+
+Stop here if the base is unresolvable or unrelated — fail once, locally, before probing
+providers or starting any review process.
 
 If `standards status` shows *no project standards* and the default is on, mention once (non-blocking): the repo has no project standards layer — `standards init` adds one, `--opt-out` skips the default. Proceed regardless.
 
@@ -72,6 +77,13 @@ Confirm with the user before running (lead with the captured `{VERSION}` and the
 If the branch has no commits vs develop, implement the story now (in-session), then commit. If implementation is already committed, skip to Step 2.
 
 ### Step 2 — Self-review
+
+```bash
+[ -n "$(git diff {BASE}...HEAD)" ] || { echo "empty diff vs {BASE} — nothing was implemented"; exit 1; }
+```
+
+After the implementation commit, stop here if the diff is still empty; do not fan out
+reviewers for a branch that implemented nothing.
 
 Review your own diff with subagents (dispatch parallel reviewers), apply fixes, commit.
 
@@ -120,11 +132,15 @@ You apply **nothing** in this mode: no edits, no commits, no push, no PR, no mem
 
 Because no fixes land between passes, **every reviewer sees the identical diff** — so the reviews are independent and you run them **in parallel** (the opposite of full mode, where fixes between passes force sequencing).
 
+```bash
+[ -n "$(git diff {BASE}...HEAD)" ] || { echo "empty diff vs {BASE} — nothing to review"; exit 1; }
+```
+
 ### R1 — Fan out all reviewers at once
 
 Dispatch concurrently, then collect when all return:
 
-- **Self-review:** dispatch your own parallel review subagents over `git diff {BASE}..HEAD`. Gather findings only — apply nothing.
+- **Self-review:** dispatch your own parallel review subagents over `git diff {BASE}...HEAD`. Gather findings only — apply nothing.
 - **Each model from the `preflight` rotation** (captured in Step 0), all launched together (background processes, then `wait`):
 
 ```bash
@@ -146,6 +162,9 @@ Each `--review-model` call is stateless and read-only — it only prints finding
 Merge the self-review and every model's findings into a single markdown report:
 
 - **Group by severity:** Critical / Important / Minor / Nits.
+- **Promotion candidates:** its own section — what should move to central/shared
+  configuration or version management, with scope and one-time migration cost S/M/L.
+- **Spec conformance:** its own section, per reviewer, never merged into the severity groups; "no spec available" if every reviewer said so.
 - **Per finding:** `path:line` · description · suggested fix · **flagged by** (which reviewers — e.g. `gpt-4.1, opus, self`). Keep overlap as a confidence signal: something 4/5 reviewers caught is high-confidence; a lone flag is weaker.
 - **Dedupe:** merge near-identical findings across models into one entry rather than repeating them.
 - **Uncertain / needs human judgment:** a trailing section aggregating items reviewers flagged as judgment calls or out of scope.

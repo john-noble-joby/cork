@@ -7,7 +7,8 @@ the active Claude session implements, then several independent models review the
 diff — each seeing only the current code, never prior reviewers' notes — so every
 model hunts for issues with fresh eyes.
 
-It ships three skills:
+It ships three user-facing skills (plus `cork-setup` and the auto-loaded
+`coding-standards` rubric):
 
 | Skill | Say | What it does |
 |-------|-----|--------------|
@@ -36,8 +37,8 @@ steps below are manual.
    ```bash
    cd ~/dev/cork && ./install.sh
    ```
-   Copies `cork`, `copilot-review-loop`, `devit`, and `cork-setup` into `~/.claude/skills/` and
-   `statusline.py` into `~/.claude/`, and verifies every version stamp matches `VERSION`.
+   Copies `coding-standards`, `cork`, `copilot-review-loop`, `devit`, and `cork-setup` into
+   `~/.claude/skills/` and `statusline.py` into `~/.claude/`, and verifies every version stamp matches `VERSION`.
    Re-run after a `git pull` to update. (`orchestrate.py` itself isn't copied — the skills
    run it straight from `$CORK_HOME`, so `git pull` updates the engine.) `install.sh` can also
    write `CORK_HOME` into `~/.claude/settings.json` if you clone to a non-default path.
@@ -120,10 +121,20 @@ opted out (see below).
 
 ### Coding & review standards (layering)
 
-cork ships a generalized **coding & review rubric** (`standards/AGENTS.md`) used by both
-devit's implementer and the blind review models. The **effective** rubric for a repo is:
+cork's fuller **coding & review rubric** lives at `skills/coding-standards/` and is
+installed by `install.sh`. `standards/AGENTS.md` is the condensed copy injected into blind
+reviewer models and followed by devit's implementer; the two are kept in step. Other
+harnesses share the installed skill:
 
-  cork's universal default  +  that repo's own `code-review/AGENTS.md` (if present)
+- **Codex:** symlink `~/.codex/skills/coding-standards` to
+  `~/.claude/skills/coding-standards`.
+- **Pi:** add `"skills": ["~/.claude/skills"]` to `~/.pi/agent/settings.json`.
+
+The **effective** rubric for a repo is:
+
+  cork's universal default  +  the repo's own standards file (first match of
+  `code-review/AGENTS.md`, `code-review/agent.md`, `AGENTS.md`, `agent.md`,
+  `.github/AGENTS.md`)
 
 - **Use the default** (on by default): nothing to do — every review/implementation carries
   the baseline.
@@ -132,6 +143,10 @@ devit's implementer and the blind review models. The **effective** rubric for a 
   precedence); fill in your stack's conventions.
 - **Opt a repo out:** `standards init <repo> --opt-out` (writes `code-review/.cork-standards-off`).
 - **Opt out everywhere:** `python3 orchestrate.py config set default_standards false`.
+- **Scope of the opt-out:** these toggles control what `orchestrate.py` injects into API
+  reviewers and the devit implementer prompt. The installed `coding-standards` skill is a
+  harness-level default and stays loaded in interactive sessions; uninstall it (delete
+  `~/.claude/skills/coding-standards`) if you don't want it at all.
 - **See what applies:** `python3 orchestrate.py standards status <repo>`.
 
 Two ways to run it:

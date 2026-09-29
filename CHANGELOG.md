@@ -16,10 +16,48 @@ cork uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) —
 
 The **single source of truth is the `VERSION` file**. Every skill's
 `**Version:**` stamp and `orchestrate.py --version` must match it — `install.sh`
-warns on drift. Bump `VERSION` and all four skill stamps together in the same
+warns on drift. Bump `VERSION` and every skill stamp together in the same
 change, and add a section here.
 
 ## [Unreleased]
+
+## [0.9.0] — 2026-09-17
+
+### Added
+- **`coding-standards` skill now lives in this repo** (`skills/coding-standards/`) and is
+  installed by `install.sh` alongside the other four — cork is the source of truth for the
+  shared coding & review rubric that Claude Code, Codex (via symlink), and Pi (via its
+  `skills` path) all load. Previously it existed only as a loose copy in `~/.claude/skills`.
+- **Spec-conformance review axis.** Both the skill and `standards/AGENTS.md` now run a
+  second, separately-reported axis — does the diff do what the story asked (missing /
+  partial / unrequested / implemented-wrong, quoting the spec line) — never reranked against
+  correctness/standards findings. Spec-source lookup (ticket id → fetched issue) is a
+  per-repo binding in `code-review/AGENTS.md`. Adapted from mattpocock/skills `code-review`.
+- **Fowler structural smell baseline** (Mysterious Name, Feature Envy, Data Clumps, Repeated
+  Switches, Shotgun Surgery, Divergent Change, Speculative Generality, Message Chains,
+  Middle Man, Refused Bequest) as labelled judgement calls; a documented repo standard that
+  endorses the pattern overrides the smell.
+
+### Changed
+- Skill review protocol: pin the base first (`git diff <base>...HEAD`, verify the ref resolves and
+  the diff is non-empty before fanning out); skip anything tooling already enforces; report
+  format gains `## Spec conformance`; verdict names the worst item per axis.
+- cork review-only consolidated report gains a `## Spec conformance` section; the injected
+  rubric's output format gains `## Promotion candidates` (the fixer prompt already expected it).
+- `prompt_fix` now covers the `## Spec conformance` section (implement missing/partial
+  requirements; never auto-delete unrequested behaviour). `standards/AGENTS.md` gains a
+  condensed `Recurring defect classes` section so the injected rubric carries the skill's
+  defect classes.
+- The pipeline's self-review prompt now carries the implementer's summary as `## Story / Task`
+  so the spec-conformance axis is actionable there; `standards/AGENTS.md` mirrors the skill's
+  remaining universal smells and test rules.
+- The spec-conformance instruction is appended to the API reviewer's system prompt on
+  every path (custom instructions or fallback), so every review produces the same report
+  shape.
+
+### Fixed
+- Review diffs are now merge-base (`git diff <base>...HEAD`) in `orchestrate.py` and the cork skill's self-review, and the base ref (a reachable commit) and its merge base with HEAD are validated up front in every mode (review-only, full run, seed-only) — a bad `--base-branch` fails before any implementation step runs, and a base branch that advanced after forking no longer leaks base-only changes into the review. The cork skill validates the base before provider preflight, then applies its empty-diff guard per mode: before review-only fan-out, or after full-mode implementation.
+- `install.sh` now replaces each installed skill directory instead of merging into it, stages each skill in a temp dir, keeps or recovers a rollback copy until the new one is in place (with a brief reader-visible gap during the rename swap), serializes installs with a lock, sweeps stale staging/rollback dirs, and refuses overlapping, dangling-symlink, or `..` destinations before creating them.
 
 ## [0.8.3] — 2026-08-03
 
