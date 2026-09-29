@@ -350,9 +350,12 @@ regardless, and the value is parsed as TOML, so the whole definition travels as 
 ```
 
 For **interactive Codex use outside cork**, the same definition can live in
-`~/.codex/config.toml` instead (cork's lane does not read it):
+`~/.codex/config.toml` instead (cork's lane does not read it). Registering the provider is
+not enough — select it too, or Codex keeps using its default provider:
 
 ```toml
+model_provider = "copilot"
+
 [model_providers.copilot]
 name = "GitHub Copilot"
 base_url = "https://api.githubcopilot.com"
