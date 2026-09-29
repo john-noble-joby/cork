@@ -812,8 +812,9 @@ def _validate_harness_cfg(name: str, hc: dict) -> None:
     if not isinstance(hc, dict):
         fail(f"config.providers.{name} must be an object")
     unknown = sorted(set(hc) - {"enabled", *_HARNESS_CONFIG_KEYS})
-    if unknown:
-        print(f"  ⚠ config.providers.{name}: ignoring unknown keys: {', '.join(unknown)}")
+    if unknown:  # stderr: stdout of `auth status --json` / `config show` must stay parseable
+        print(f"  ⚠ config.providers.{name}: ignoring unknown keys: {', '.join(unknown)}",
+              file=sys.stderr)
     if "bin" in hc and (not isinstance(hc["bin"], str) or not hc["bin"].strip()):
         fail(f"config.providers.{name}.bin must be a non-empty string")
     if "bin" in hc:
@@ -821,6 +822,10 @@ def _validate_harness_cfg(name: str, hc: dict) -> None:
     ea = hc.get("extra_args", [])
     if not isinstance(ea, list) or not all(isinstance(a, str) for a in ea):
         fail(f"config.providers.{name}.extra_args must be a list of strings")
+    if "--" in ea:
+        # The read-only flags are appended AFTER extra_args; an option terminator there
+        # would make the CLI read every protected flag as positional input.
+        fail(f"config.providers.{name}.extra_args must not contain the option terminator '--'")
     t = hc.get("timeout", 1)
     try:
         valid = (not isinstance(t, bool) and isinstance(t, (int, float))

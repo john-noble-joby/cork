@@ -358,17 +358,26 @@ class ConfigAndProbeTest(HarnessBase):
                "rotation": [{"provider": "codex", "model": "m"}]}
         self.assertEqual(orchestrate._eligible_rotation(cfg), [])
 
-    def test_validate_warns_only_for_unknown_harness_keys(self):
+    def test_validate_warns_only_for_unknown_harness_keys_on_stderr(self):
+        import contextlib
         base = {"rotation": [{"provider": "opencode", "model": "p/m"}]}
         for extra, expected in (({"env": {}},
                                  "  ⚠ config.providers.opencode: ignoring unknown keys: env\n"),
                                 ({}, "")):
             with self.subTest(extra=extra):
-                buf = io.StringIO()
-                with redirect_stdout(buf):
+                out, err = io.StringIO(), io.StringIO()
+                with redirect_stdout(out), contextlib.redirect_stderr(err):
                     orchestrate._validate_config({
                         **base, "providers": {"opencode": {"enabled": True, **extra}}})
-                self.assertEqual(buf.getvalue(), expected)
+                self.assertEqual(err.getvalue(), expected)
+                self.assertEqual(out.getvalue(), "")  # stdout stays parseable for --json callers
+
+    def test_validate_rejects_option_terminator_in_extra_args(self):
+        # `--` in extra_args would demote every protected flag appended after it to a positional.
+        for lane in ("pi", "opencode", "codex", "claude"):
+            with self.subTest(lane=lane), self.assertRaises(SystemExit):
+                orchestrate._validate_harness_cfg(lane, {"extra_args": ["--thinking", "high", "--"]})
+        orchestrate._validate_harness_cfg("pi", {"extra_args": ["--thinking", "high"]})  # ok
 
     def test_default_config_has_harnesses_disabled(self):
         for h in orchestrate.HARNESSES:
