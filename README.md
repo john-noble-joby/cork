@@ -214,7 +214,7 @@ same rotation/preflight/consolidation. Harnesses are disabled by default; enable
 | `claude` | Safe/restricted plan mode; only `Read,Grep,Glob` | `claude auth status --text` |
 | `codex` | Read-only sandbox; ephemeral session | `codex login status` |
 | `opencode` | Env-denied write/shell/network/task tools; project config disabled | `opencode auth list` credential count |
-| `pi` | Only `read,grep,find,ls`; no session, context files, or project approval | `pi auth check … --no-refresh` |
+| `pi` | No tools at all (prompt-only); no session, extensions, skills, templates, themes, context files, or project approval | `pi auth check … --no-refresh` |
 
 ```json
 "providers": { "codex": {"enabled": true}, "opencode": {"enabled": true}, "pi": {"enabled": true} },
@@ -231,8 +231,9 @@ codex exec -m <m> --ephemeral --skip-git-repo-check -C <repo> --color never - -s
        --ignore-user-config --disable shell_tool --disable unified_exec \
        --disable code_mode_host --disable apps                                          # prompt on stdin
 opencode run -m <provider/model> --agent plan --format default --dir <repo> --pure -- <prompt>
-pi -p --model <provider/model> --system-prompt <standards> --tools read,grep,find,ls \
-   --no-session --no-context-files --no-approve -- <prompt> </dev/null
+pi -p --model <provider/model> --system-prompt <standards> --no-tools --no-extensions --no-skills \
+   --no-prompt-templates --no-themes --no-context-files --no-approve --no-session \
+   --append-system-prompt "" -- <prompt> </dev/null
 ```
 
 **Read-only guarantees and their limits.** `claude` runs with `--safe-mode` (no CLAUDE.md,
@@ -251,8 +252,11 @@ writes, so cork injects `OPENCODE_PERMISSION` denies for `bash`; `edit` (which g
 write and patch tools); `task`; `webfetch`; `websearch`; and `external_directory` access.
 `OPENCODE_DISABLE_PROJECT_CONFIG=1` prevents a branch's
 `.opencode/` configuration or project instructions from weakening that policy; `--pure` also
-disables external plugins. Pi receives only `read,grep,find,ls`, disables sessions and context
-files, ignores project-local `.pi/` resources with `--no-approve`, and reads stdin from
+disables external plugins. Pi runs with **no tools at all**: its `read` and `find` accept
+absolute paths, so a read allowlist would still let a prompt-injected review reach other
+reviewers' `/tmp/cork-review-*` files. Its extensions, skills, prompt templates, themes,
+context files and ambient `APPEND_SYSTEM.md` are disabled too; it keeps no session, ignores
+project-local `.pi/` resources with `--no-approve`, and reads stdin from
 `/dev/null` so `-p` cannot wait forever for EOF on a held-open pipe. None can modify the repo (the manual checks in the
 release PRs show `git status --porcelain` identical before and after). Codex and OpenCode have
 no system-prompt flag, so the standards are prepended to the prompt body under a

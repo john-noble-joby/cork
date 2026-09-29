@@ -35,12 +35,17 @@ change, and add a section here.
 - **Immutable OpenCode isolation** — through `OPENCODE_PERMISSION`, cork denies `bash`; `edit`
   (which governs write and patch tools); `task`; `webfetch`; `websearch`; and
   `external_directory`. It also disables branch-controlled OpenCode project configuration.
-  Pi ignores project-local `.pi/` resources with `--no-approve`.
+  Pi runs prompt-only — `--no-tools` (its `read`/`find` accept absolute paths, so a read
+  allowlist cannot confine it to the repo), no extensions/skills/templates/themes/context files,
+  ambient `APPEND_SYSTEM.md` suppressed — and ignores project-local `.pi/` resources with
+  `--no-approve`.
 
 ### Fixed
 - OpenCode's auth probe is provider-aware: it requires a listed credential for the model's own
   provider instead of any nonzero credential count, so an Anthropic login no longer makes a
   `github-copilot/…` lane look live.
+- `<provider>/<model>` refs for OpenCode/Pi lanes must have both parts non-empty (`/model` and
+  `provider/` are rejected at config-load, not at invocation).
 - Harness lanes refuse an argv element over 128 KiB (Linux `MAX_ARG_STRLEN`) up front — an
   OpenCode/Pi prompt or a `--system-prompt` standards layer that large is skipped with an
   explicit size message instead of an `Argument list too long` error.

@@ -81,9 +81,14 @@ class ArgvTest(HarnessBase):
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         orchestrate._harness_call("pi", "glm-internal/glm-5.3-onprem", "SYS", "USER", "/repo")
         argv, kw = fake.calls[0]
+        # Spelled out literally (not read from HARNESSES): pi must have NO tools — its
+        # read/find accept absolute paths — and no ambient resources.
         self.assertEqual(argv, ["pi", "-p", "--model", "glm-internal/glm-5.3-onprem",
-                                "--system-prompt", "SYS", "--tools", "read,grep,find,ls",
-                                "--no-session", "--no-context-files", "--no-approve", "--", "USER"])
+                                "--system-prompt", "SYS",
+                                "--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates",
+                                "--no-themes", "--no-context-files", "--no-approve", "--no-session",
+                                "--append-system-prompt", "", "--", "USER"])
+        self.assertNotIn("--tools", argv)
         self.assertEqual(kw["cwd"], "/repo")
         self.assertNotIn("input", kw)
         self.assertIs(kw["stdin"], subprocess.DEVNULL)
@@ -100,7 +105,7 @@ class ArgvTest(HarnessBase):
         self.assertNotIn("--x", argv)
 
     def test_new_lane_read_only_flags_follow_extra_args(self):
-        for lane, marker in (("opencode", "--agent"), ("pi", "--tools")):
+        for lane, marker in (("opencode", "--agent"), ("pi", "--no-tools")):
             with self.subTest(lane=lane):
                 orchestrate.CONFIG_PATH.write_text(
                     '{"rotation":[{"provider":"' + lane + '","model":"p/m"}],'
@@ -314,6 +319,13 @@ class ConfigAndProbeTest(HarnessBase):
         os.environ["CORK_CODEX_BIN"] = "./tools/codex"
         with self.assertRaises(SystemExit):
             orchestrate._harness_settings("codex")
+
+    def test_validate_rejects_empty_provider_or_model_component(self):
+        for lane in ("opencode", "pi"):
+            orchestrate._validate_config({"rotation": [{"provider": lane, "model": "p/m"}]})  # ok
+            for bad in ("/model", "provider/", "/", " /m", "p/ ", "no-slash", 3):
+                with self.subTest(lane=lane, model=bad), self.assertRaises(SystemExit):
+                    orchestrate._validate_config({"rotation": [{"provider": lane, "model": bad}]})
 
     def test_validate_harness_keys_types(self):
         base = {"rotation": [{"provider": "codex", "model": "m"}]}

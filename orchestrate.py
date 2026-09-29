@@ -219,8 +219,13 @@ HARNESSES: dict[str, dict] = {
     "pi": {  # pi 0.85.x — verified against `pi --help`
         "bin": "pi", "bin_env": "CORK_PI_BIN",
         "argv": ["-p", "--model", "{model}"],
-        "read_only": ["--tools", "read,grep,find,ls", "--no-session", "--no-context-files",
-                      "--no-approve", "--"],
+        # Prompt-only: pi's `read`/`find` take absolute paths, so a read allowlist cannot
+        # confine it to the repo (it could read other reviewers' /tmp/cork-review-* files).
+        # Ambient extensions/skills/templates/themes/context files and APPEND_SYSTEM.md
+        # (via an empty --append-system-prompt) are all disabled.
+        "read_only": ["--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates",
+                      "--no-themes", "--no-context-files", "--no-approve", "--no-session",
+                      "--append-system-prompt", "", "--"],
         "system_flag": "--system-prompt", "prompt_via": "arg", "timeout": 900,
         "model_ref_parts": 2,
         "auth_probe": {"argv": ["auth", "check", "--provider", "{model_provider}",
@@ -764,9 +769,11 @@ def _validate_config(cfg: dict) -> None:
             fail(f"unknown provider '{entry['provider']}' "
                  f"(known: {', '.join([*PROVIDER_BASE, *HARNESSES])})")
         spec = HARNESSES.get(entry["provider"])
-        if (spec and spec.get("model_ref_parts", 1) > 1
-                and (not isinstance(entry["model"], str) or "/" not in entry["model"])):
-            fail(f"{entry['provider']} model must be <provider>/<model>: {entry['model']!r}")
+        if spec and spec.get("model_ref_parts", 1) > 1:
+            parts = entry["model"].split("/", 1) if isinstance(entry["model"], str) else []
+            if len(parts) != 2 or not all(part.strip() for part in parts):
+                fail(f"{entry['provider']} model must be <provider>/<model> with both parts "
+                     f"non-empty: {entry['model']!r}")
         key = f"{entry['provider']}/{entry['model']}"
         if key in seen:
             fail(f"duplicate rotation entry: {key}")
