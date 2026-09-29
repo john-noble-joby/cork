@@ -21,7 +21,7 @@ change, and add a section here.
 
 ## [Unreleased]
 
-## [0.11.1] — 2026-09-29
+## [0.12.0] — 2026-09-29
 
 ### Added
 - **One cork login can authenticate the local Codex reviewer lane.** `auth print-token`
