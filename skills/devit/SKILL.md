@@ -1,6 +1,6 @@
 ---
 name: devit
-description: Use when the user says "devit <TICKET>", "run devit on <TICKET>", or "dev loop <TICKET>" — runs the full Linear-story dev loop: verify the story, gate on size (propose a split if too big), cut a worktree + branch from develop, implement (parallel subagents when decomposable), run cork review+fix, open a PR, run the Copilot review loop, and surface all pushbacks. Orchestrates the cork and copilot-review-loop skills; does not auto-merge.
+description: "Use when the user says \"devit <TICKET>\", \"run devit on <TICKET>\", or \"dev loop <TICKET>\" — runs the full Linear-story dev loop: verify the story, gate on size (propose a split if too big), cut a worktree + branch from develop, implement (parallel subagents when decomposable), run cork review+fix, open a PR, run the Copilot review loop, and surface all pushbacks. Orchestrates the cork and copilot-review-loop skills; does not auto-merge."
 ---
 
 # devit — Linear-story dev loop

@@ -123,7 +123,6 @@ DEFAULT_CONFIG = {
     "interactive_review": True,
     "default_standards": True,
     "responses_effort": _DEFAULT_RESPONSES_EFFORT,
-    "herdr_claude_reviews": False,  # session-driven skill preference; CLI stays headless
     "providers": {
         "copilot":   {"enabled": True},
         "openai":    {"enabled": False},
@@ -666,8 +665,6 @@ def _validate_config(cfg: dict) -> None:
         fail("config.default_standards must be true or false (a JSON boolean)")
     if cfg.get("responses_effort", _DEFAULT_RESPONSES_EFFORT) not in _RESPONSES_EFFORTS:
         fail("config.responses_effort must be low, medium, or high")
-    if not isinstance(cfg.get("herdr_claude_reviews", False), bool):
-        fail("config.herdr_claude_reviews must be true or false (a JSON boolean)")
 
 
 def _validate_harness_cfg(name: str, hc: dict) -> None:
@@ -720,7 +717,7 @@ def cmd_config_show() -> None:
     print(json.dumps(load_config(), indent=2))
 
 
-_SETTABLE_KEYS = {"interactive_review", "default_standards", "herdr_claude_reviews"}  # scalar bool prefs settable via `config set`; structural fields are edited in config.json directly
+_SETTABLE_KEYS = {"interactive_review", "default_standards"}  # scalar bool prefs settable via `config set`; structural fields are edited in config.json directly
 
 
 def cmd_config_get(key: str) -> None:

@@ -1,6 +1,6 @@
 ---
 name: copilot-review-loop
-description: Use when the user says to run the Copilot review loop on a branch or PR — iterative Copilot code review with automated comment resolution, re-requesting after each clean pass, stopping when Copilot has no comments or after a maximum number of passes.
+description: "Use when the user says to run the Copilot review loop on a branch or PR — iterative Copilot code review with automated comment resolution, re-requesting after each clean pass, stopping when Copilot has no comments or after a maximum number of passes."
 ---
 
 # Copilot Review Loop

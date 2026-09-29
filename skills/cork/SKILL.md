@@ -1,6 +1,6 @@
 ---
 name: cork
-description: Use when the user says "cork" / "run cork" on a branch (full mode — implement, iteratively apply each model's fixes, open a PR) or "cork review" / "review only" / "review this branch without fixing" (review-only mode — run every model's review in parallel and print a consolidated findings report, applying nothing). Session-driven multi-model pipeline where the active Claude session drives models selected by `preflight` (copilot/openai/anthropic, ranked by config) for blind reviews.
+description: "Use when the user says \"cork\" / \"run cork\" on a branch (full mode — implement, iteratively apply each model's fixes, open a PR) or \"cork review\" / \"review only\" / \"review this branch without fixing\" (review-only mode — run every model's review in parallel and print a consolidated findings report, applying nothing). Session-driven multi-model pipeline where the active Claude session drives models selected by `preflight` (copilot/openai/anthropic, ranked by config) for blind reviews."
 ---
 
 # Cork — Session-Driven Multi-Model Review Pipeline
@@ -38,21 +38,8 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 
 ### Step 0 — Gather context & pick mode
 
-Freeze routing **once, before any dispatch**, for the whole run:
-
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-HERDR_CLAUDE_REVIEWS="$(python3 "$CORK_HOME/orchestrate.py" config get herdr_claude_reviews)" || exit 1
-readonly HERDR_CLAUDE_REVIEWS
-```
-
-Carry this exact `HERDR_CLAUDE_REVIEWS` value into later shell tool calls; never reread the
-preference mid-run. Both Herdr launches and shell exclusion use this snapshot, even if the
-config changes. When true, run each `claude/…` lane using **Herdr execution** below instead
-of the ordinary invocation. This is a skill preference, not an engine transport. If Herdr
-is unavailable, stop and ask — do not silently change the execution or billing route.
-
-```bash
 python3 "$CORK_HOME/orchestrate.py" --version            # cork version — announce it (see below)
 git rev-parse --verify --quiet "{BASE}^{commit}" >/dev/null || { echo "base {BASE} does not resolve"; exit 1; }
 git merge-base "{BASE}" HEAD >/dev/null      || { echo "no merge base with {BASE}"; exit 1; }
@@ -122,10 +109,6 @@ Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it p
 - **`false`:** behave autonomously (you apply the valid findings, push back with reasoning
   where wrong, and commit) — the flow described below.
 
-For each lane, use the frozen Step 0 `HERDR_CLAUDE_REVIEWS` value. When true, run
-`claude/…` lanes via **Herdr execution** instead of the command below. Do not run both;
-all other lanes (or a false snapshot) use the ordinary invocation:
-
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch develop
@@ -157,23 +140,15 @@ Because no fixes land between passes, **every reviewer sees the identical diff**
 
 ### R1 — Fan out all reviewers at once
 
-Dispatch concurrently, then collect when all return. Use the **same frozen Step 0**
-`HERDR_CLAUDE_REVIEWS` value for both launch paths — never query config again here.
-When true, launch each `claude/…` lane using **Herdr execution** and exclude it from the
-shell loop below. Carry the snapshot into that shell call explicitly. Launch the remaining
-lanes while Herdr runs; never run a lane twice, and never silently drop a selected lane.
+Dispatch concurrently, then collect when all return:
 
 - **Self-review:** dispatch your own parallel review subagents over `git diff {BASE}...HEAD`. Gather findings only — apply nothing.
 - **Each model from the `preflight` rotation** (captured in Step 0), all launched together (background processes, then `wait`):
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-: "${HERDR_CLAUDE_REVIEWS:?Carry the frozen Step 0 value into this shell call}"
 # PREFLIGHT_MODELS is the space-separated list of "provider/model" lines from Step 0 preflight
 for M in $PREFLIGHT_MODELS; do
-  if [[ "$HERDR_CLAUDE_REVIEWS" == true && "$M" == claude/* ]]; then
-    continue # already launched via Herdr execution above; never duplicate this lane
-  fi
   safe="${M//\//-}"
   python3 "$CORK_HOME/orchestrate.py" "${TICKET:-REVIEW}" {WORKTREE} \
     --review-model "$M" --base-branch {BASE} --skip-validation \
@@ -197,65 +172,6 @@ Merge the self-review and every model's findings into a single markdown report:
 - **Uncertain / needs human judgment:** a trailing section aggregating items reviewers flagged as judgment calls or out of scope.
 
 Print the report and stop. If the user then wants fixes applied, that's a separate full-mode (or manual) pass.
-
-## Herdr execution (opt-in, Claude Code subscription lane)
-
-This wraps the existing `--review-model claude/<model>` command in a visible Herdr pane.
-It does **not** start a conversational Claude agent or forward this session's transcript:
-Cork still builds the blind review inputs and enforces its harness read-only flags.
-
-1. Require `HERDR_ENV=1` before any Herdr inspection or control. Load `herdr --skill` unless
-   already loaded, then follow its installed CLI syntax and safety rules. Never control an
-   unrelated focused session from outside Herdr. Require `claude` in the selected rotation;
-   `copilot/claude-…` and `anthropic/claude-…` are API lanes, not subscription lanes.
-2. Create a sibling pane in the caller's current tab, using the **review worktree** as cwd
-   and `--no-focus`. Inspect `herdr pane layout --current`; prefer right for wide panes,
-   down for narrow/tall ones. Parse the returned pane ID; never guess it. Do not create a
-   new worktree/workspace. Keep any run artifacts **outside** the review repo so its
-   read-enabled reviewer cannot see other lanes' findings.
-3. Before entering the pane, resolve the **invoking session's** effective config to an
-   absolute path (`CORK_CONFIG_FILE`, otherwise its `$HOME/.config/cork/config.json`).
-   Resolve Cork's Claude binary (`CORK_CLAUDE_BIN`, then `providers.claude.bin`, then
-   `claude`) to an absolute executable path using the caller's PATH/cwd. In **both** the
-   pane's auth check and its review runner, always export that resolved `CORK_CONFIG_FILE`
-   and `CORK_CLAUDE_BIN` — even when neither override was originally set. Require that
-   config file and executable to exist and be accessible in the pane; stop and ask if not.
-   Never let the pane's HOME or PATH select a different config or binary.
-   Verify authentication **in that pane**, before spending a turn. Run the pinned binary's
-   `--safe-mode --restricted auth status` and confirm `loggedIn`,
-   `authMethod=claude.ai`, `apiProvider=firstParty`, and the intended subscription/account
-   (Enterprise for enterprise requests). Check for API/provider overrides in the pane's
-   environment; report only their presence, never values. An API key or different account
-   is **not** an acceptable fallback — stop and ask the user to resolve it. Recheck for
-   every fresh pane; the Herdr server's environment can differ from this session's.
-   Cork's harness preflight only checks binary presence, **not** login or model access.
-4. Use `mktemp -d` for a private, unique run directory outside the repo. Write a small shell
-   runner there using the ordinary write tool. It must invoke the exact same Cork command
-   (absolute engine/config/repo paths, selected model, ticket and confirmed base;
-   `--skip-validation` after preflight), redirect stdout/stderr to `findings.txt`, then
-   capture `$?` immediately and atomically rename a temporary exit-status file to `exit`.
-   Quote every substituted shell argument (e.g. Python `shlex.quote`); do not interpolate
-   raw ticket, branch or path text. Use `umask 077`. No `set -e` before capturing failures.
-   Only command/config/path data goes in the runner — never credentials or prior findings.
-5. Launch it with `herdr pane run <returned-id> "bash <quoted-runner-path>"`. Record the
-   pane ID, artifact path and start time **before** launch. Poll the `exit` file with a
-   bounded wait (configured Claude timeout, default 900s, plus ~60s startup margin).
-   A shell-ready pane, silence, or a prompt-submission acknowledgement is not completion.
-   Do not resubmit after a transport timeout: first inspect the existing pane and artifacts.
-6. Once `exit` exists, read the full `findings.txt` with the file tool, paging if necessary.
-   Nonzero exit, an empty review, or Cork's `returned no usable content — skipped` sentinel
-   means a **failed lane**, never a clean review (the sentinel can accompany exit 0).
-   On timeout/missing exit status, report the pane and artifact path and stop/wait for the
-   user; do not auto-retry or close a possibly live review. Preserve failed-run diagnostics.
-   Only after a successful result has been collected may you close **the pane you created**.
-   Keep artifacts until the report is delivered; remove only this run's artifacts afterward.
-7. In full mode, present findings and honor `interactive_review` before fixing or advancing.
-   In review-only mode, include this lane in the same consolidation as the API lanes,
-   explicitly reporting failures. Never feed other reviewers' results into this Claude run.
-
-Herdr manages terminals, **not billing**. Claude Code's authenticated subscription governs
-charges/limits; this does not promise free usage. Never extract OAuth tokens into an API
-provider. The direct CLI remains available without Herdr when explicitly requested.
 
 ## Notes
 

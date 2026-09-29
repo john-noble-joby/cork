@@ -267,15 +267,15 @@ harness iff its binary is found — on PATH, or at the configured absolute `bin`
 or prints nothing is reported and skipped (`[codex/<m> returned no usable content — skipped]`);
 there is no retry.
 
-### Claude Enterprise reviews in Herdr (session-driven skill)
+### High-effort Copilot + Claude Enterprise rotation
 
-The `claude/…` harness can use your existing Claude Code subscription login instead of
-Cork's Copilot or Anthropic API credentials. Herdr is an optional **terminal manager**, not
-a billing provider. Confirm the intended account with `claude --safe-mode --restricted auth status`;
-Enterprise usage limits/pricing still apply. Never copy Claude OAuth tokens into Cork's
-API token store. Model IDs are passed to the selected provider unchanged; verify access
-on your own seat. For example, Opus 5.5 is `claude-opus-5-5` in Claude Code, versus
-`claude-opus-5.5` on Copilot.
+The `claude/…` harness runs Claude Code directly as a subprocess using its existing login,
+not Cork's Copilot or Anthropic API credentials. No terminal manager or extra pane is needed.
+Before reviewing, confirm the intended account with the configured Claude binary's
+`--safe-mode --restricted auth status` and check for API/provider environment overrides
+without displaying secret values. Enterprise usage limits/pricing still apply. Never copy
+Claude OAuth tokens into Cork's API token store. Model IDs are passed through unchanged:
+Opus 5.5 is `claude-opus-5-5` in Claude Code, versus `claude-opus-5.5` on Copilot.
 
 Example hybrid rotation (merge these fields into your config):
 
@@ -283,7 +283,6 @@ Example hybrid rotation (merge these fields into your config):
 {
   "count": 3,
   "responses_effort": "high",
-  "herdr_claude_reviews": true,
   "providers": {
     "copilot": {"enabled": true},
     "claude": {"enabled": true, "extra_args": ["--effort", "high"]}
@@ -295,20 +294,6 @@ Example hybrid rotation (merge these fields into your config):
   ]
 }
 ```
-
-Enable with `python3 orchestrate.py config set herdr_claude_reviews true` (default false).
-This is a **skill preference**, not a transport implemented by `orchestrate.py`: direct and
-headless CLI calls still invoke Claude as an ordinary subprocess. The session-driven Cork
-skill, when running inside Herdr (`HERDR_ENV=1`), creates a no-focus sibling pane and runs
-Cork's existing blind `--review-model claude/<model>` command there. It verifies the
-Claude account inside that pane, captures the complete findings outside the review repo,
-checks completion/exit status/skipped-lane diagnostics, and returns findings to the normal
-review workflow. It never reuses the implementer's conversation. Outside Herdr it asks
-rather than silently falling back. See **Herdr execution** in `skills/cork/SKILL.md` for
-failure handling and cleanup. This requires an agent with shell/file tools and the installed
-Herdr CLI; it does not depend on Claude-specific slash commands. The skill currently mirrors
-the engine's config/binary resolution rules; keep it in sync if those rules change. A public
-resolved-harness-info command is deliberately deferred from this small, skill-level adapter.
 
 ### Interactive review (`interactive_review`, default on)
 

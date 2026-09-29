@@ -150,20 +150,6 @@ class ConfigGetSetTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             orchestrate.load_config()
 
-    def test_herdr_preference_defaults_off_and_is_settable(self):
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            orchestrate.cmd_config_get("herdr_claude_reviews")
-        self.assertEqual(buf.getvalue().strip(), "false")
-        for value in ("true", "false"):
-            orchestrate.cmd_config_set("herdr_claude_reviews", value)
-            self.assertEqual(orchestrate.load_config()["herdr_claude_reviews"], value == "true")
-
-    def test_herdr_preference_requires_boolean(self):
-        for invalid in (None, 0, 1, "false", [], {}):
-            with self.subTest(invalid=invalid), self.assertRaises(SystemExit):
-                orchestrate._validate_config({**orchestrate.DEFAULT_CONFIG, "herdr_claude_reviews": invalid})
-
     def test_get_default_standards_defaults_true(self):
         buf = io.StringIO()
         with redirect_stdout(buf):

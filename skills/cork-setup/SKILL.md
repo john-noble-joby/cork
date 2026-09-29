@@ -1,6 +1,6 @@
 ---
 name: cork-setup
-description: Use when the user says "set up cork", "cork setup", "configure cork", or is getting cork working for the first time — guided, interactive setup of review providers and their authentication, models, review preferences, the status line, and required MCP connections.
+description: "Use when the user says \"set up cork\", \"cork setup\", \"configure cork\", or is getting cork working for the first time — guided, interactive setup of review providers and their authentication, models, review preferences, the status line, and required MCP connections."
 ---
 
 # cork-setup — guided setup
@@ -29,7 +29,7 @@ on the approved rotation and show the selected models. Diagnose unavailable/skip
 preflight with fewer lanes is not proof that every requested provider is authenticated.
 - **Claude harness:** uses Claude Code's login, not a Copilot token. Preflight only checks
   binary presence. Verify the intended subscription/account with the configured binary's
-  `--safe-mode --restricted auth status`; for Herdr, also verify inside the pane in step 3c.
+  `--safe-mode --restricted auth status` from the shell that will run the reviews.
   If logged out, ask the user to run `claude auth login` using that binary. Never fall back
   to an API lane or ask for Copilot credentials to fix Claude authentication.
 - **OpenAI/Anthropic API lanes:** require their own credentials; follow **Secrets** below.
@@ -72,21 +72,11 @@ Ask: **"Use cork's built-in coding & review standards as a baseline for all repo
 Persist: `python3 "$CORK_HOME/orchestrate.py" config set default_standards true` (or `false`).
 Mention: per-repo, `standards init` scaffolds a project file that extends the default.
 
-## 3c. Herdr Claude reviews (optional, default off)
-Ask: **"Run Claude Code reviewers in a Herdr pane using your existing subscription login?
-(default no; requires running the Cork skill inside Herdr)."** Persist the answer:
-`python3 "$CORK_HOME/orchestrate.py" config set herdr_claude_reviews true` (or `false`).
-This affects the session-driven skill only; direct/headless CLI calls stay headless.
-If enabled, ensure the rotation contains an enabled `claude/<model>` harness lane, not
-`copilot/claude-…` or `anthropic/claude-…`. Offer to update the rotation; don't silently
-switch providers. Follow **Herdr execution** in `skills/cork/SKILL.md` under `CORK_HOME`
-to verify the account inside the pane. Outside Herdr, ask the user to start there;
-never inspect/control a Herdr session unless `HERDR_ENV=1`.
-
-Also offer effort configuration: `responses_effort` in `config.json` accepts `low`,
-`medium` (default), or `high` for Responses API lanes. Claude Code uses its own
-`providers.claude.extra_args`, e.g. `["--effort", "high"]`. Preserve other config fields.
-Herdr does not determine billing; subscription pricing and limits still apply.
+## 3c. Review effort (optional)
+Offer effort configuration: `responses_effort` in `config.json` accepts `low`, `medium`
+(default), or `high` for Responses API lanes. Claude Code uses its own
+`providers.claude.extra_args`, e.g. `["--effort", "high"]`. Edit these JSON fields directly;
+`config set` accepts only boolean preferences. Preserve unrelated settings and extra args.
 
 ## 4. Status line (optional)
 If `~/.claude/settings.json` has no `statusLine`, offer to add it (so a session shows its
@@ -101,8 +91,7 @@ add them in Claude Code's MCP settings — this skill can't configure MCP for th
 
 ## 6. Summary
 Print a checklist: authentication per chosen provider (Copilot token N/A when unused),
-models selected, interactive_review on/off,
-herdr_claude_reviews on/off, configured API/Claude effort, status line enabled/not,
+models selected, interactive_review on/off, configured API/Claude effort, status line enabled/not,
 Linear ✓/✗, mem0 ✓/✗. If `settings.json` changed, tell them to restart.
 
 ## Secrets

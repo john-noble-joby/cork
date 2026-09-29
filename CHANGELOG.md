@@ -24,14 +24,11 @@ change, and add a section here.
 ## [0.12.0] — 2026-09-28
 
 ### Added
-- Opt-in `herdr_claude_reviews` session-driven skill preference: run the existing Claude
-  harness in a no-focus Herdr pane, verify the subscription account there, and collect
-  blind read-only findings with explicit failure/timeout handling. Direct/headless CLI
-  execution is unchanged; Herdr itself does not determine billing.
 - `responses_effort` config field (`low`/`medium`/`high`, default `medium`) for Responses
   API reviews and probes. Document a hybrid high-effort Copilot + Claude Enterprise setup.
 
 ### Fixed
+- Quote skill descriptions so YAML frontmatter parsers accept embedded colons.
 - Route GPT-6 models, including Sol and Astra, through `/responses` rather than unsupported
   chat completions; share the same response extraction as GPT-5 and Codex.
 
