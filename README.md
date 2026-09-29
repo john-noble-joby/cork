@@ -81,6 +81,7 @@ pause-between-reviews preference, and the status line.
 | Command | Purpose |
 |---------|---------|
 | `python3 orchestrate.py auth status [--json]` | Show the active Copilot token source, expiry, refreshability, and one cheap probe result. |
+| `python3 orchestrate.py auth print-token [--json]` | Print the resolved Copilot token for a command-backed credential consumer. |
 | `python3 orchestrate.py login` | Give cork its own refreshable Copilot token through GitHub's device flow. |
 | `python3 orchestrate.py preflight` | Probe the configured model rotation and select usable reviewers. |
 | `python3 orchestrate.py config init\|show\|get\|set` | Initialize, inspect, or update cork configuration. |
@@ -310,6 +311,68 @@ token-only cork file and the read-only opencode fallback are not refreshable; ru
 | `CLAUDE_BIN` | `~/.local/bin/claude` | Path to Claude Code CLI (headless mode) |
 | `CORK_CLAUDE_BIN` / `CORK_CODEX_BIN` | `claude` / `codex` (PATH) | Harness reviewer binaries (see *Harness reviewers*) |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | — | Native-provider tokens (only if you enable those providers) |
+
+### Using your Copilot seat for the Codex lane
+
+Codex CLI (verified on 0.146 and 0.157) can use cork's resolved Copilot credential through a
+custom Responses provider whose auth is a command: Codex runs `auth print-token` and uses the
+stdout as the bearer token, re-running it every `refresh_interval_ms`. cork's resolver applies
+the same `CORK_COPILOT_TOKEN` → cork auth file → opencode fallback precedence as reviews and
+refreshes an expired, refreshable cork token before printing it. Verify the source first with
+`python3 "${CORK_HOME:-$HOME/dev/cork}/orchestrate.py" auth status`.
+
+**For cork's Codex harness lane, the provider must be defined in `extra_args`.** The lane
+always passes `--ignore-user-config` (see *Harness reviewers*), which tells Codex not to load
+`~/.codex/config.toml` — so a provider defined only there is invisible to cork and the lane
+fails with `Model provider \`copilot\` not found`. Codex's `-c key=value` overrides are read
+regardless, and the value is parsed as TOML, so the whole definition travels as trusted config
+(this needs the harness lanes, cork 0.11+; on 0.10.x it fails validation):
+
+```json
+{
+  "providers": {
+    "codex": {
+      "enabled": true,
+      "extra_args": [
+        "-c", "model_provider=copilot",
+        "-c", "model_providers.copilot.name=\"GitHub Copilot\"",
+        "-c", "model_providers.copilot.base_url=\"https://api.githubcopilot.com\"",
+        "-c", "model_providers.copilot.wire_api=\"responses\"",
+        "-c", "model_providers.copilot.http_headers={ \"x-initiator\" = \"user\", \"Openai-Intent\" = \"conversation-edits\", \"User-Agent\" = \"opencode/0.1.0\" }",
+        "-c", "model_providers.copilot.auth.command=\"sh\"",
+        "-c", "model_providers.copilot.auth.args=[\"-c\", 'python3 \"${CORK_HOME:-$HOME/dev/cork}/orchestrate.py\" auth print-token']",
+        "-c", "model_providers.copilot.auth.refresh_interval_ms=300000"
+      ]
+    }
+  },
+  "rotation": [{"provider": "codex", "model": "gpt-5.5"}]
+}
+```
+
+For **interactive Codex use outside cork**, the same definition can live in
+`~/.codex/config.toml` instead (cork's lane does not read it). Registering the provider is
+not enough — select it too, or Codex keeps using its default provider:
+
+```toml
+model_provider = "copilot"
+
+[model_providers.copilot]
+name = "GitHub Copilot"
+base_url = "https://api.githubcopilot.com"
+wire_api = "responses"
+http_headers = { "x-initiator" = "user", "Openai-Intent" = "conversation-edits", "User-Agent" = "opencode/0.1.0" }
+
+[model_providers.copilot.auth]
+command = "sh"
+args = ["-c", 'python3 "${CORK_HOME:-$HOME/dev/cork}/orchestrate.py" auth print-token']
+refresh_interval_ms = 300000
+```
+
+This passthrough is unsupported by GitHub and may stop working. Codex receives the token from
+the helper's stdout through a subprocess pipe, so do not add any other stdout output to
+`auth print-token` and remember that a process with access to that pipe can read the token.
+Claude Code cannot use this provider: its model API integration uses Anthropic's wire format,
+not the OpenAI Responses format exposed here.
 
 ### Error recovery (headless)
 
