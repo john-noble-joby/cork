@@ -180,7 +180,8 @@ def _read_cork_auth() -> dict:
         data = None
     if not isinstance(data, dict):  # malformed OR valid-but-not-an-object → fail loudly
         fail(f"Refusing to use malformed auth file {_CORK_AUTH} — it may hold other "
-             f"provider tokens. Fix or delete it, then run `{_LOGIN_COMMAND}`")
+             f"provider tokens, so repair the JSON rather than deleting the file, "
+             f"then run `{_LOGIN_COMMAND}`")
     exp = data.get("expires_at")
     if exp is not None and (isinstance(exp, bool) or not isinstance(exp, (int, float))):
         # Checked here, at the boundary, so every expiry comparison downstream can
