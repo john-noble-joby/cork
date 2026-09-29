@@ -31,7 +31,7 @@ change, and add a section here.
   `HARNESSES` table beside `PROVIDER_BASE` (adding a lane is data-only); `providers.claude` /
   `providers.codex` config keys (`enabled` default false, optional `bin`, `extra_args`,
   `timeout`); `CORK_CLAUDE_BIN` / `CORK_CODEX_BIN` env overrides. `preflight` treats
-  "binary on PATH" as the credential and never spends a turn probing. A harness that exits
+  "binary present" (on PATH, or at its configured absolute path) as the credential and never spends a turn probing. A harness that exits
   non-zero, times out or prints nothing yields the existing `— skipped]` sentinel (one attempt,
   no retry). `review()` / `cmd_review` now take `repo` so the harness runs with `cwd=repo`.
   Read-only per lane: `claude --safe-mode --restricted` (no code-running tools, repo-confined);

@@ -501,7 +501,7 @@ def _provider_token(provider: str) -> str:
 
 
 def _provider_token_available(provider: str) -> bool:
-    if provider in HARNESSES:  # no token — the binary on PATH is the credential
+    if provider in HARNESSES:  # no token — a present binary (PATH or absolute path) is the credential
         return shutil.which(_harness_bin(provider)) is not None
     match provider:
         case "copilot":
@@ -1797,9 +1797,10 @@ def main() -> None:
     parser.add_argument("--skip-validation", action="store_true",
                         help="Bypass preflight probes and use the configured rotation's "
                              "first `count` entries directly, with the conservative default "
-                             "char budget. Saves Copilot quota on repeated runs.")
+                             "char budget. Saves provider quota on repeated runs.")
     parser.add_argument("--review-model", metavar="MODEL",
-                        help="Review-only mode: run ONE Copilot model's review of the "
+                        help="Review-only mode: run ONE configured reviewer's (provider/model: "
+                             "copilot, openai, anthropic, or a claude/codex harness) review of the "
                              "branch diff, print findings to stdout, and exit. Stateless "
                              "(reviewer sees only diff + changed files + AGENTS.md). Used by "
                              "the session-driven cork skill, where the active Claude session "

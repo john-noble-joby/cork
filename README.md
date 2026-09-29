@@ -254,7 +254,7 @@ Per-harness config keys — the only ones read: `bin` (or env `CORK_CLAUDE_BIN` 
 cork's cwd while the review runs from the target repo — `extra_args` (appended verbatim, *before* the read-only
 flags; treated as trusted — it is your own config), `timeout` (seconds, default 900). The
 argv template and read-only flags are not configurable. `preflight` selects a
-harness iff its binary is on PATH — no spend. A harness that exits non-zero, times out,
+harness iff its binary is found — on PATH, or at the configured absolute `bin` path — no spend. A harness that exits non-zero, times out,
 or prints nothing is reported and skipped (`[codex/<m> returned no usable content — skipped]`);
 there is no retry.
 
