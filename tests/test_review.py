@@ -280,7 +280,7 @@ class ReviewDiffTest(unittest.TestCase):
         for instructions in ("Custom project rules", ""):
             with self.subTest(instructions=instructions):
                 with patch.object(
-                    orchestrate, "_call_and_extract", return_value=(200, "review output")
+                    orchestrate, "_call_and_extract", return_value=(200, "review output", None)
                 ) as call_api:
                     result = orchestrate.review(
                         "copilot", "model", instructions,
@@ -302,7 +302,7 @@ class ReviewDiffTest(unittest.TestCase):
         with (
             patch.object(orchestrate, "_budget_files", return_value=("", 0)) as budget,
             patch.object(
-                orchestrate, "_call_and_extract", return_value=(200, "review output")
+                orchestrate, "_call_and_extract", return_value=(200, "review output", None)
             ) as call_api,
         ):
             result = orchestrate.review(
