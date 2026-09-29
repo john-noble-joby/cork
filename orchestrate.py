@@ -298,6 +298,9 @@ def _missing_copilot_token_message() -> str:
 def _resolve_copilot_auth() -> tuple[str | None, str, float | None, bool]:
     # Returns token, source, expiry, refreshable. Missing and known-expired auth
     # are explicit results; malformed files and real I/O errors still fail loudly.
+    # A rejected refresh exchange raises RuntimeError — only `auth status` calls
+    # this directly (to report it structurally); everything else goes through
+    # _resolve_copilot_auth_or_fail().
     env_tok = os.environ.get("CORK_COPILOT_TOKEN")
     if env_tok and env_tok.strip():
         return env_tok.strip(), "env", None, False
@@ -337,8 +340,15 @@ def _resolve_copilot_auth() -> tuple[str | None, str, float | None, bool]:
     return None, "none", None, False
 
 
+def _resolve_copilot_auth_or_fail() -> tuple[str | None, str, float | None, bool]:
+    try:
+        return _resolve_copilot_auth()
+    except RuntimeError as e:  # refresh exchange rejected → concise re-login guidance
+        fail(str(e))
+
+
 def _resolve_copilot_token() -> tuple[str | None, str, float | None]:
-    token, source, expires_at, _ = _resolve_copilot_auth()
+    token, source, expires_at, _ = _resolve_copilot_auth_or_fail()
     return token, source, expires_at
 
 
@@ -351,10 +361,7 @@ def _unusable_copilot_token_message(source: str) -> str:
 
 
 def _copilot_token() -> str:
-    try:
-        token, source, _ = _resolve_copilot_token()
-    except RuntimeError as e:  # refresh exchange rejected
-        fail(str(e))
+    token, source, _ = _resolve_copilot_token()
     if token is None:
         fail(_unusable_copilot_token_message(source))
     return token
@@ -456,10 +463,7 @@ def _provider_token(provider: str) -> str:
 def _provider_token_available(provider: str) -> bool:
     match provider:
         case "copilot":
-            try:
-                token, _, _ = _resolve_copilot_token()
-            except RuntimeError as e:  # refresh exchange rejected
-                fail(str(e))
+            token, _, _ = _resolve_copilot_token()
             return token is not None
         case "openai":
             if os.environ.get("OPENAI_API_KEY", "").strip():
@@ -990,7 +994,7 @@ def preflight(rotation: list[dict], count: int) -> list[dict]:
           flush=True)
     copilot_auth: tuple[str | None, str, float | None, bool] | None = None
     if any(entry["provider"] == "copilot" for entry in rotation):
-        copilot_auth = _resolve_copilot_auth()
+        copilot_auth = _resolve_copilot_auth_or_fail()
         _token, source, expires_at, refreshable = copilot_auth
         print(_copilot_auth_summary(source, expires_at, refreshable), flush=True)
     for entry in rotation:

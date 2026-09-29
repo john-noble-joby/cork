@@ -190,6 +190,24 @@ class AuthVisibilityTest(unittest.TestCase):
         self.assertIn("re-login to replace its Copilot fields", err.getvalue())
         self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
 
+    def test_preflight_rejected_refresh_fails_loudly_not_traceback(self):
+        orchestrate._now = lambda: 10000.0
+        self.cork.write_text(json.dumps(
+            {"token": "OLD", "refresh_token": "DEAD", "expires_at": 5000}))
+        original_post = orchestrate._post_form
+        orchestrate._post_form = lambda *a, **k: {"error": "invalid_grant"}
+        orchestrate._probe = lambda provider, model: self.fail("must not probe after a rejected refresh")
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                    self.assertRaises(SystemExit) as raised:
+                orchestrate.preflight([{"provider": "copilot", "model": "gpt-4.1"}], count=1)
+        finally:
+            orchestrate._post_form = original_post
+        self.assertEqual(raised.exception.code, 1)  # fail(), never a RuntimeError traceback
+        self.assertIn("invalid_grant", err.getvalue())
+        self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
+
     def test_preflight_reports_expired_token_without_probing(self):
         orchestrate._now = lambda: 10000.0
         self.cork.write_text(json.dumps({"token": "OLD", "expires_at": 5000}))
