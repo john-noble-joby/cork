@@ -21,7 +21,7 @@ class HarnessBase(unittest.TestCase):
         orchestrate.CONFIG_PATH = Path(self.tmp.name) / "config.json"  # -> DEFAULT_CONFIG
         self._run, self._which = orchestrate.subprocess.run, orchestrate.shutil.which
         self._env = {k: os.environ.pop(k, None)
-                     for k in ("ANTHROPIC_API_KEY", "CORK_CLAUDE_BIN", "CORK_CODEX_BIN")}
+                     for k in ("ANTHROPIC_API_KEY", "CORK_CLAUDE_BIN", "CORK_CODEX_BIN", "CORK_PI_BIN")}
 
     def tearDown(self):
         orchestrate.CONFIG_PATH = self._cfg
@@ -71,6 +71,20 @@ class ArgvTest(HarnessBase):
         argv = fake.calls[0][0]
         ro = orchestrate.HARNESSES["claude"]["read_only"]
         self.assertEqual(argv[-len(ro) - 2:], ["--effort", "high", *ro])
+
+    def test_pi_argv_uses_existing_login_high_effort_and_prompt_only(self) -> None:
+        orchestrate.CONFIG_PATH.write_text('{"rotation":[{"provider":"pi","model":"openai-codex/gpt-6-sol"}],'
+                                           '"providers":{"pi":{"enabled":true,"extra_args":["--thinking","high"]}}}')
+        os.environ["CORK_PI_BIN"] = "/opt/pi"
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        result = orchestrate._call_and_extract("pi", "openai-codex/gpt-6-sol", "SYS", "USER", repo="/repo")
+        argv, kw = fake.calls[0]
+        self.assertEqual(argv, ["/opt/pi", "--print", "--model", "openai-codex/gpt-6-sol", "--no-session",
+                                "--system-prompt", "SYS", "--thinking", "high", "--no-tools", "--no-extensions",
+                                "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files",
+                                "--no-approve", "--append-system-prompt", ""])
+        self.assertEqual((kw["cwd"], kw["input"], kw["timeout"]), ("/repo", "USER", 900))
+        self.assertEqual(result, (200, fake.out, None))
 
     def test_config_cannot_override_read_only_or_argv(self):
         orchestrate.CONFIG_PATH.write_text('{"rotation":[{"provider":"codex","model":"m"}],'
@@ -168,6 +182,13 @@ class FailurePathTest(HarnessBase):
         self.assertEqual(status, 404)
         self.assertIn("null", text.lower())
 
+    def test_pi_failed_or_empty_review_skips_once(self) -> None:
+        for rc, out in ((1, "partial output"), (0, "")):
+            with self.subTest(rc=rc):
+                fake = _FakeRun(rc=rc, out=out); orchestrate.subprocess.run = fake
+                self.assertEqual(self._review("pi"), "[pi/m returned no usable content — skipped]")
+                self.assertEqual(len(fake.calls), 1)
+
     def test_success_returns_stdout_once(self):
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         self.assertEqual(self._review(), fake.out)
@@ -222,7 +243,8 @@ class ApiRoutingUnaffectedTest(HarnessBase):
 class ConfigAndProbeTest(HarnessBase):
     def test_validate_accepts_harness_and_rejects_unknown(self):
         orchestrate._validate_config({"rotation": [{"provider": "claude", "model": "x"},
-                                                   {"provider": "codex", "model": "y"}]})
+                                                   {"provider": "codex", "model": "y"},
+                                                   {"provider": "pi", "model": "openai-codex/gpt-6-sol"}]})
         with self.assertRaises(SystemExit):
             orchestrate._validate_config({"rotation": [{"provider": "opencode", "model": "x"}]})
 
@@ -318,6 +340,7 @@ class ConfigAndProbeTest(HarnessBase):
         orchestrate._http_post_json = lambda *a, **k: (_ for _ in ()).throw(AssertionError("no HTTP"))
         try:
             self.assertEqual(orchestrate._probe("codex", "m"), "ok")
+            self.assertEqual(orchestrate._probe("pi", "openai-codex/gpt-6-sol"), "ok")
         finally:
             orchestrate._http_post_json = orig
 

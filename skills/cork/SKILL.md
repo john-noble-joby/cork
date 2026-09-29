@@ -122,6 +122,10 @@ This command **only prints the model's review to stdout** — it makes no change
 
 **Harness reviewers.** `preflight` may also print `claude/<model>` or `codex/<model>` lines: those are locally installed coding-agent CLIs run by `orchestrate.py` as read-only reviewers (`claude --safe-mode --restricted` with only `Read,Grep,Glob` in plan mode; `codex exec -s read-only --ephemeral` with its shell/exec tools and user MCP config disabled, so codex reviews from the prompt alone). Treat them exactly like API models — same `--review-model` ref, same output format, same consolidation. They are selected when `providers.<harness>.enabled` is true and the binary is found (on PATH, or at the configured absolute `bin` path); a harness that fails or times out prints the usual `… — skipped]` sentinel and the rotation continues.
 
+Pi harness refs retain the inner provider: `pi/openai-codex/gpt-6-sol`. Pi uses its own
+login and `--thinking` effort, with no tools, session persistence or ambient resources.
+As with other harnesses, preflight checks binary presence, not login/model availability.
+
 Read the findings from stdout. For each: apply the fix in the worktree (run tests before committing), or push back with reasoning if wrong. Commit after each model's fixes with message `fix: apply {MODEL} review [{TICKET}]`.
 
 ### Step 6 — Push + PR

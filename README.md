@@ -214,7 +214,7 @@ and `anthropic` are supported but disabled by default; enable a provider in `con
 and supply its token via `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` (or keys `"openai"` /
 `"anthropic"` in `~/.config/cork/auth.json`). Secrets never go in `config.json`.
 
-### Harness reviewers (`claude`, `codex`)
+### Harness reviewers (`claude`, `codex`, `pi`)
 
 Besides API providers, cork can drive a **locally installed coding-agent CLI** as an
 independent, read-only reviewer. It receives the same review inputs as an API model —
@@ -252,7 +252,7 @@ and reviews from the prompt alone, like an API model (verified with a tool-inven
 on codex-cli 0.146.0; it still has web search, image tools and sub-agent tools). Neither
 lane can modify the repo (the manual check in the 0.11.0 PR shows `git status --porcelain`
 identical before and after). Codex has no system-prompt flag, so the standards are prepended to the prompt
-body under a `=== END OF REVIEW STANDARDS ===` separator. Claude's standards travel as one
+body under a `=== END OF REVIEW STANDARDS ===` separator. Claude and Pi pass standards as one
 `--system-prompt` argument, so a standards layer over ~128 KiB hits the Linux per-argument
 limit and the lane is skipped with `Argument list too long`. **Trust boundary:** the
 reviewer follows instructions from the branch under review (`code-review/AGENTS.md`, file
@@ -264,7 +264,7 @@ same trust you already extend to the implementer step. A timeout kills the CLI p
 itself; tool subprocesses it spawned are not tracked.
 
 Per-harness config keys — the only ones read: `bin` (or env `CORK_CLAUDE_BIN` /
-`CORK_CODEX_BIN`, which wins) — a bare command name resolved on `PATH` or an absolute path
+`CORK_CODEX_BIN` / `CORK_PI_BIN`, which wins) — a bare command name resolved on `PATH` or an absolute path
 (`~` is expanded); a relative path is rejected, because preflight would resolve it from
 cork's cwd while the review runs from the target repo — `extra_args` (appended verbatim, *before* the read-only
 flags; treated as trusted — it is your own config), `timeout` (seconds, default 900). The
@@ -300,6 +300,27 @@ Example hybrid rotation (merge these fields into your config):
   ]
 }
 ```
+
+### GPT reviewers through an existing Pi login
+
+Enable `providers.pi` with `{"enabled": true, "extra_args": ["--thinking", "high"]}`.
+To switch the GPT lanes in the example above, disable `copilot` and replace its rotation
+entries with `{"provider": "pi", "model": "openai-codex/gpt-6-sol"}` and
+`{"provider": "pi", "model": "openai-codex/gpt-6-astra"}`. Leave the Claude entry unchanged.
+The full CLI reference is `--review-model pi/openai-codex/gpt-6-sol`.
+
+Pi 0.87.1 was verified with `--print --model <provider/model> --no-session` and
+`--system-prompt <standards>`, with the task on stdin. Cork disables tools, discovered
+extensions, skills, templates, themes, context files and project trust using Pi's
+`--no-*` flags, plus `--append-system-prompt ""` to suppress ambient `APPEND_SYSTEM.md`.
+The reviewer sees only the supplied prompt, not other reviewers' files.
+Pi retains its user-level provider configuration and login; explicit `extra_args` are
+trusted and must not re-enable resources/tools. Cork does not copy or export credentials.
+`openai-codex` uses Pi's ChatGPT OAuth login, distinct from OpenAI API-key billing; account
+limits still apply. Check `pi auth check --provider openai-codex --json` (no credentials
+flag), then smoke-test each model. Harness preflight checks only binary presence, not
+login or model access. No Codex CLI login is required, and `responses_effort` does not
+control Pi: use `--thinking` as above.
 
 ### Interactive review (`interactive_review`, default on)
 
@@ -347,7 +368,7 @@ token-only cork file and the read-only opencode fallback are not refreshable; ru
 | `CORK_COPILOT_TOKEN` | — | Copilot token used directly (highest priority) |
 | `CORK_COPILOT_CLIENT_ID` | `Iv1.b507a08c87ecfe98` | GitHub OAuth client id for `login` |
 | `CLAUDE_BIN` | `~/.local/bin/claude` | Path to Claude Code CLI (headless mode) |
-| `CORK_CLAUDE_BIN` / `CORK_CODEX_BIN` | `claude` / `codex` (PATH) | Harness reviewer binaries (see *Harness reviewers*) |
+| `CORK_CLAUDE_BIN` / `CORK_CODEX_BIN` / `CORK_PI_BIN` | `claude` / `codex` / `pi` (PATH) | Harness reviewer binaries (see *Harness reviewers*) |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | — | Native-provider tokens (only if you enable those providers) |
 
 ### Error recovery (headless)

@@ -99,6 +99,14 @@ HARNESSES: dict[str, dict] = {
                       "--permission-mode", "plan"],
         "system_flag": "--system-prompt", "prompt_via": "stdin", "timeout": 900,
     },
+    "pi": {  # pi 0.87.1 — existing Pi auth, prompt-only blind review
+        "bin": "pi", "bin_env": "CORK_PI_BIN",
+        "argv": ["--print", "--model", "{model}", "--no-session"],
+        "read_only": ["--no-tools", "--no-extensions", "--no-skills",
+                      "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve",
+                      "--append-system-prompt", ""],  # suppress ambient APPEND_SYSTEM.md too
+        "system_flag": "--system-prompt", "prompt_via": "stdin", "timeout": 900,
+    },
     "codex": {  # codex-cli 0.146.x — verified against `codex exec --help`
         "bin": "codex", "bin_env": "CORK_CODEX_BIN",
         "argv": ["exec", "-m", "{model}", "--ephemeral", "--skip-git-repo-check",

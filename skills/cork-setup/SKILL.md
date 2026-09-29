@@ -32,6 +32,12 @@ preflight with fewer lanes is not proof that every requested provider is authent
   `--safe-mode --restricted auth status` from the shell that will run the reviews.
   If logged out, ask the user to run `claude auth login` using that binary. Never fall back
   to an API lane or ask for Copilot credentials to fix Claude authentication.
+- **Pi harness:** use `providers.pi.enabled: true` and qualified model IDs such as
+  `openai-codex/gpt-6-sol` (CLI: `--review-model pi/openai-codex/gpt-6-sol`). Check the
+  configured Pi binary's `auth check --provider openai-codex --json` without credential
+  printing; if needed, have the user `/login` in Pi. Preflight checks only binary presence:
+  smoke-test requested models with Cork's no-tools/resource-disabled harness flags.
+  Pi keeps its own credentials; neither Codex login nor an OpenAI API key is required.
 - **OpenAI/Anthropic API lanes:** require their own credentials; follow **Secrets** below.
 - **Copilot:** only when an enabled Copilot lane is in the chosen rotation, run
   `python3 "$CORK_HOME/orchestrate.py" auth status --json` and parse its JSON stdout
@@ -76,7 +82,8 @@ Mention: per-repo, `standards init` scaffolds a project file that extends the de
 Offer effort configuration: `responses_effort` in `config.json` accepts `low`, `medium`
 (default), or `high` for Responses API lanes. Claude Code uses its own
 `providers.claude.extra_args`, e.g. `["--effort", "high"]`. Edit these JSON fields directly;
-`config set` accepts only boolean preferences. Preserve unrelated settings and extra args.
+`config set` accepts only boolean preferences. For Pi, use `providers.pi.extra_args`:
+`["--thinking", "high"]`. Preserve unrelated settings and extra args.
 
 ## 4. Status line (optional)
 If `~/.claude/settings.json` has no `statusLine`, offer to add it (so a session shows its
@@ -91,7 +98,7 @@ add them in Claude Code's MCP settings — this skill can't configure MCP for th
 
 ## 6. Summary
 Print a checklist: authentication per chosen provider (Copilot token N/A when unused),
-models selected, interactive_review on/off, configured API/Claude effort, status line enabled/not,
+models selected, interactive_review on/off, configured API/harness effort, status line enabled/not,
 Linear ✓/✗, mem0 ✓/✗. If `settings.json` changed, tell them to restart.
 
 ## Secrets

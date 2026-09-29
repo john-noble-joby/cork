@@ -24,6 +24,8 @@ change, and add a section here.
 ## [0.12.0] — 2026-09-28
 
 ### Added
+- Opt-in `pi` harness: prompt-only, ephemeral reviews using Pi's existing login and
+  qualified model IDs, with optional `--thinking high` and `CORK_PI_BIN` override.
 - `responses_effort` config field (`low`/`medium`/`high`, default `medium`) for Responses
   API reviews and probes. Document a hybrid high-effort Copilot + Claude Enterprise setup.
 
