@@ -314,8 +314,43 @@ token-only cork file and the read-only opencode fallback are not refreshable; ru
 
 ### Using your Copilot seat for the Codex lane
 
-Codex CLI 0.146 can use cork's resolved Copilot credential through a custom Responses
-provider. Add this to `~/.codex/config.toml`:
+Codex CLI (verified on 0.146 and 0.157) can use cork's resolved Copilot credential through a
+custom Responses provider whose auth is a command: Codex runs `auth print-token` and uses the
+stdout as the bearer token, re-running it every `refresh_interval_ms`. cork's resolver applies
+the same `CORK_COPILOT_TOKEN` → cork auth file → opencode fallback precedence as reviews and
+refreshes an expired, refreshable cork token before printing it. Verify the source first with
+`python3 "${CORK_HOME:-$HOME/dev/cork}/orchestrate.py" auth status`.
+
+**For cork's Codex harness lane, the provider must be defined in `extra_args`.** The lane
+always passes `--ignore-user-config` (see *Harness reviewers*), which tells Codex not to load
+`~/.codex/config.toml` — so a provider defined only there is invisible to cork and the lane
+fails with `Model provider \`copilot\` not found`. Codex's `-c key=value` overrides are read
+regardless, and the value is parsed as TOML, so the whole definition travels as trusted config
+(this needs the harness lanes, cork 0.11+; on 0.10.x it fails validation):
+
+```json
+{
+  "providers": {
+    "codex": {
+      "enabled": true,
+      "extra_args": [
+        "-c", "model_provider=copilot",
+        "-c", "model_providers.copilot.name=\"GitHub Copilot\"",
+        "-c", "model_providers.copilot.base_url=\"https://api.githubcopilot.com\"",
+        "-c", "model_providers.copilot.wire_api=\"responses\"",
+        "-c", "model_providers.copilot.http_headers={ \"x-initiator\" = \"user\", \"Openai-Intent\" = \"conversation-edits\", \"User-Agent\" = \"opencode/0.1.0\" }",
+        "-c", "model_providers.copilot.auth.command=\"sh\"",
+        "-c", "model_providers.copilot.auth.args=[\"-c\", 'python3 \"${CORK_HOME:-$HOME/dev/cork}/orchestrate.py\" auth print-token']",
+        "-c", "model_providers.copilot.auth.refresh_interval_ms=300000"
+      ]
+    }
+  },
+  "rotation": [{"provider": "codex", "model": "gpt-5.5"}]
+}
+```
+
+For **interactive Codex use outside cork**, the same definition can live in
+`~/.codex/config.toml` instead (cork's lane does not read it):
 
 ```toml
 [model_providers.copilot]
@@ -328,24 +363,6 @@ http_headers = { "x-initiator" = "user", "Openai-Intent" = "conversation-edits",
 command = "sh"
 args = ["-c", 'python3 "${CORK_HOME:-$HOME/dev/cork}/orchestrate.py" auth print-token']
 refresh_interval_ms = 300000
-```
-
-The five-minute refresh interval makes Codex rerun the helper; cork's resolver applies the
-same `CORK_COPILOT_TOKEN` → cork auth file → opencode fallback precedence as reviews and
-refreshes an expired, refreshable cork token before printing it. Verify the source first with
-`python3 "${CORK_HOME:-$HOME/dev/cork}/orchestrate.py" auth status`.
-
-For a cork Codex harness lane, select the provider through `extra_args` and use a
-`codex/<model>` rotation ref. This configuration requires the harness reviewer lanes
-(cork 0.11+); on 0.10.x this config fails validation.
-
-```json
-{
-  "providers": {
-    "codex": {"enabled": true, "extra_args": ["-c", "model_provider=copilot"]}
-  },
-  "rotation": [{"provider": "codex", "model": "gpt-5.5"}]
-}
 ```
 
 This passthrough is unsupported by GitHub and may stop working. Codex receives the token from
