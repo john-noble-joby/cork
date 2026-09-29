@@ -46,6 +46,8 @@ change, and add a section here.
   `github-copilot/…` lane look live.
 - `<provider>/<model>` refs for OpenCode/Pi lanes must have both parts non-empty (`/model` and
   `provider/` are rejected at config-load, not at invocation).
+- Pi's auth JSON is parsed from stdout only, so a warning on stderr no longer turns a valid
+  `{"status":"ready"}` into an `error` verdict.
 - Harness lanes refuse an argv element over 128 KiB (Linux `MAX_ARG_STRLEN`) up front — an
   OpenCode/Pi prompt or a `--system-prompt` standards layer that large is skipped with an
   explicit size message instead of an `Argument list too long` error.

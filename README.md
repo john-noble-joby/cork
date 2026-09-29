@@ -213,7 +213,7 @@ same rotation/preflight/consolidation. Harnesses are disabled by default; enable
 |---------|--------------------|------------|
 | `claude` | Safe/restricted plan mode; only `Read,Grep,Glob` | `claude auth status --text` |
 | `codex` | Read-only sandbox; ephemeral session | `codex login status` |
-| `opencode` | Env-denied write/shell/network/task tools; project config disabled | `opencode auth list` credential count |
+| `opencode` | Env-denied write/shell/network/task tools; project config disabled | `opencode auth list` shows a credential for the model's provider |
 | `pi` | No tools at all (prompt-only); no session, extensions, skills, templates, themes, context files, or project approval | `pi auth check … --no-refresh` |
 
 ```json

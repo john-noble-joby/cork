@@ -88,8 +88,23 @@ def _auth_exit_one(result: subprocess.CompletedProcess, _model: str) -> bool:
     return result.returncode == 1
 
 
+def _strip_ansi(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
 def _plain_auth_output(result: subprocess.CompletedProcess) -> str:
-    return re.sub(r"\x1b\[[0-9;]*m", "", f"{result.stdout}\n{result.stderr}")
+    # stdout + stderr, for human-text patterns (codex prints its login line on stderr).
+    return _strip_ansi(f"{result.stdout}\n{result.stderr}")
+
+
+def _auth_json(result: subprocess.CompletedProcess) -> dict:
+    # JSON is parsed from stdout ONLY: a warning on stderr must not turn a valid
+    # {"status":"ready"} into a JSONDecodeError and a usable login into `error`.
+    try:
+        payload = json.loads(_strip_ansi(result.stdout or ""))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _opencode_credential_providers(result: subprocess.CompletedProcess) -> set[str]:
@@ -124,11 +139,7 @@ def _opencode_auth_logged_out(result: subprocess.CompletedProcess, model: str) -
 
 
 def _pi_auth_payload(result: subprocess.CompletedProcess) -> dict:
-    try:
-        payload = json.loads(_plain_auth_output(result))
-    except json.JSONDecodeError:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    return _auth_json(result)
 
 
 def _pi_auth_ready(result: subprocess.CompletedProcess, _model: str) -> bool:
@@ -147,12 +158,7 @@ def _auth_detail(result: subprocess.CompletedProcess, model: str) -> str:
         match = re.search(pattern, text, re.MULTILINE)
         if match:
             return match.group(1).strip()
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        payload = {}
-    if not isinstance(payload, dict):
-        payload = {}
+    payload = _auth_json(result)
     return str(payload.get("reason") or payload.get("provider")
                or (model.split("/", 1)[0] if "/" in model else ""))
 

@@ -505,6 +505,18 @@ class AuthProbeTest(HarnessBase):
         self.assertEqual(orchestrate._plain_auth_output(completed),
                          "GitHub Copilot oauth\n2 credentials\n")
 
+    def test_pi_json_is_parsed_from_stdout_even_with_stderr_noise(self):
+        # A deprecation/telemetry warning on stderr must not invalidate the stdout JSON.
+        for rc, out, err, expected in (
+            (0, '{"status":"ready","provider":"openai-codex"}', "warning: config migrated\n", "ok"),
+            (1, '{"status":"not_ready","reason":"missing_credentials"}', "note: run /login", "not_logged_in"),
+        ):
+            with self.subTest(expected=expected):
+                orchestrate.subprocess.run = _FakeRun(rc=rc, out=out, err=err)
+                details = {}
+                self.assertEqual(orchestrate._probe("pi", "openai-codex/gpt-6-sol", details), expected)
+        self.assertEqual(details["detail"], "missing_credentials")  # detail still parsed from stdout JSON
+
     def test_pi_provider_not_found_is_error_with_reason(self):
         orchestrate.subprocess.run = _FakeRun(
             rc=1, out='{"status":"not_ready","provider":"bad","reason":"provider_not_found"}')
