@@ -483,10 +483,14 @@ class AuthProbeTest(HarnessBase):
     def test_opencode_auth_is_provider_aware(self):
         # Real `opencode auth list` 1.17.3 shape (ANSI stripped): one bullet per credential.
         listing = "┌  Credentials ~/.local/share/opencode/auth.json\n│\n●  GitHub Copilot oauth\n│\n●  Anthropic oauth\n│\n└  2 credentials\n"
+        # env-backed providers are listed separately as "<Display Name> <ENV_VAR>"
+        with_env = listing + "┌  Environment\n│\n●  OpenAI OPENAI_API_KEY\n│\n└  1 environment variable\n"
         for output, model, expected in (
             (listing, "github-copilot/gpt-5", "ok"),
             (listing, "anthropic/claude-opus-4.7", "ok"),
             (listing, "openai/gpt-5", "not_logged_in"),          # others' credentials don't count
+            (with_env, "openai/gpt-5", "ok"),                    # environment-backed counts for its provider
+            (with_env, "google/gemini", "not_logged_in"),        # footers never parse as providers
             ("└  2 credentials\n", "github-copilot/gpt-5", "not_logged_in"),  # aggregate count alone is not auth
             ("└  0 credentials\n", "github-copilot/gpt-5", "not_logged_in"),
             ("●  GitHub Copilot oauth\n1 credential", "github-copilot/gpt-5", "ok"),

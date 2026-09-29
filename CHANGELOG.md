@@ -41,9 +41,10 @@ change, and add a section here.
   `--no-approve`.
 
 ### Fixed
-- OpenCode's auth probe is provider-aware: it requires a listed credential for the model's own
-  provider instead of any nonzero credential count, so an Anthropic login no longer makes a
-  `github-copilot/…` lane look live.
+- OpenCode's auth probe is provider-aware: it requires a listed credential — stored or
+  environment-backed (`OpenAI OPENAI_API_KEY`) — for the model's own provider instead of any
+  nonzero credential count, so an Anthropic login no longer makes a `github-copilot/…` lane
+  look live.
 - `<provider>/<model>` refs for OpenCode/Pi lanes must have both parts non-empty (`/model` and
   `provider/` are rejected at config-load, not at invocation).
 - Pi's auth JSON is parsed from stdout only, so a warning on stderr no longer turns a valid

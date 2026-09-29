@@ -265,7 +265,8 @@ no system-prompt flag, so the standards are prepended to the prompt body under a
 `--system-prompt` argument. Linux caps a single argument at 128 KiB, so a standards layer
 that large — or an OpenCode/Pi prompt that large, since those lanes pass the prompt as an
 argument — is refused by cork before the CLI runs and the lane is skipped with an explicit
-size message (codex and claude take the prompt on stdin and are unaffected). **Trust boundary:** the
+size message. Codex and claude take the prompt itself on stdin, so for them only the
+`--system-prompt` standards argument (claude's) is subject to the limit. **Trust boundary:** the
 reviewer follows instructions from the branch under review (`code-review/AGENTS.md`, file
 contents) with your local login, so a hostile branch could steer it into reading and quoting
 files it can reach (`--restricted` limits claude to the repo; codex has no file access,
@@ -279,8 +280,9 @@ a model request. Logged-out lanes print the exact recovery action: `claude auth 
 `codex login`, `opencode auth login`, or launch `pi` and run `/login`. Pi's probe always uses
 `--no-refresh`; alternatively, set the selected Pi provider's API-key environment variable.
 The other probes are status/list commands and do not write credentials. OpenCode's probe
-checks that `opencode auth list` shows a credential for the model's *own* provider (the
-`github-copilot` in `github-copilot/gpt-5`), not merely that some provider is logged in. If
+checks that `opencode auth list` shows a credential — stored, or environment-backed such as
+`OpenAI OPENAI_API_KEY` — for the model's *own* provider (the `github-copilot` in
+`github-copilot/gpt-5`), not merely that some provider is logged in. If
 `ANTHROPIC_API_KEY` is set, the Claude probe reports that fact without validating the key,
 because an invalid value can make `claude -p` hang silently until cork's timeout. Some Pi
 installations are wrapped in a provider-policy shim; cork passes the model through unchanged,

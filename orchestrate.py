@@ -108,16 +108,19 @@ def _auth_json(result: subprocess.CompletedProcess) -> dict:
 
 
 def _opencode_credential_providers(result: subprocess.CompletedProcess) -> set[str]:
-    # `opencode auth list` prints one "●  <Display Name> <method>" line per stored
-    # credential ("●  GitHub Copilot oauth"); the aggregate "N credentials" footer says
-    # nothing about WHICH provider is authenticated. Normalize display names to
-    # opencode's provider ids ("GitHub Copilot" -> "github-copilot").
+    # `opencode auth list` (1.17.3) prints one "●  <Display Name> <method>" line per stored
+    # credential ("●  GitHub Copilot oauth") and, under a separate "Environment" section,
+    # one "●  <Display Name> <ENV_VAR>" line per env-backed provider ("●  OpenAI
+    # OPENAI_API_KEY"). The "N credentials" / "N environment variable" footers say nothing
+    # about WHICH provider is usable. Normalize display names to opencode's provider ids
+    # ("GitHub Copilot" -> "github-copilot").
     providers: set[str] = set()
     for line in _plain_auth_output(result).splitlines():
-        # "<Display Name> <method>", with or without the leading bullet; the method token
-        # anchors the match so the "N credentials" footer can never parse as a provider.
-        m = re.match(r"^\s*(?:●\s+)?(.+?)\s+(?:oauth|api|apikey|api-key|env|token)\s*$",
-                     line, re.IGNORECASE)
+        # "<Display Name> <method-or-ENV_VAR>", with or without the leading bullet. The
+        # trailing token anchors the match — a method word (any case) or an UPPER_CASE env
+        # var name — so neither footer can parse as a provider.
+        m = re.match(r"^\s*(?:●\s+)?(.+?)\s+(?:(?i:oauth|api|apikey|api-key|env|token)"
+                     r"|[A-Z][A-Z0-9_]{2,})\s*$", line)
         if m:
             providers.add(re.sub(r"\s+", "-", m.group(1).strip().lower()))
     return providers
