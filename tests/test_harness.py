@@ -163,6 +163,22 @@ class ArgvTest(HarnessBase):
             orchestrate._harness_call("codex", "m", "S", "U", "")
         self.assertEqual(fake.calls, [])
 
+    def test_oversized_argv_element_is_refused_before_exec(self):
+        big = "x" * (orchestrate._MAX_ARG_BYTES + 1)
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        # arg-transported prompt (opencode) -> refused up front, binary never runs
+        status, text = orchestrate._harness_call("opencode", "p/m", "S", big, "/repo")
+        self.assertEqual(status, 413); self.assertIn("platform limit", text); self.assertEqual(fake.calls, [])
+        # --system-prompt standards too large (claude) -> same
+        status, _ = orchestrate._harness_call("claude", "m", big, "U", "/repo")
+        self.assertEqual(status, 413); self.assertEqual(fake.calls, [])
+        # stdin-transported prompt (codex) is not an argv element -> runs normally
+        status, _ = orchestrate._harness_call("codex", "m", "S", big, "/repo")
+        self.assertEqual(status, 200); self.assertEqual(len(fake.calls), 1)
+        # and review() turns the refusal into the usual skip sentinel
+        self.assertEqual(orchestrate.review("opencode", "p/m", "S", "story", big, {}, repo="/repo"),
+                         "[opencode/p/m returned no usable content — skipped]")
+
     def test_prompt_via_arg_path(self):
         orchestrate.HARNESSES["argtool"] = {**orchestrate.HARNESSES["codex"], "prompt_via": "arg"}
         try:
@@ -452,16 +468,21 @@ class AuthProbeTest(HarnessBase):
         orchestrate.shutil.which = lambda b: None
         self.assertEqual(orchestrate._probe("codex", "m"), "missing_binary")
 
-    def test_opencode_credential_count(self):
-        for output, expected in (
-            ("GitHub Copilot oauth\n1 credential", "ok"),
-            ("0 credentials", "not_logged_in"),
-            ("2 credentials", "ok"),
+    def test_opencode_auth_is_provider_aware(self):
+        # Real `opencode auth list` 1.17.3 shape (ANSI stripped): one bullet per credential.
+        listing = "┌  Credentials ~/.local/share/opencode/auth.json\n│\n●  GitHub Copilot oauth\n│\n●  Anthropic oauth\n│\n└  2 credentials\n"
+        for output, model, expected in (
+            (listing, "github-copilot/gpt-5", "ok"),
+            (listing, "anthropic/claude-opus-4.7", "ok"),
+            (listing, "openai/gpt-5", "not_logged_in"),          # others' credentials don't count
+            ("└  2 credentials\n", "github-copilot/gpt-5", "not_logged_in"),  # aggregate count alone is not auth
+            ("└  0 credentials\n", "github-copilot/gpt-5", "not_logged_in"),
+            ("●  GitHub Copilot oauth\n1 credential", "github-copilot/gpt-5", "ok"),
         ):
-            with self.subTest(output=output):
+            with self.subTest(output=output, model=model):
                 orchestrate.subprocess.run = _FakeRun(out=output)
-                self.assertEqual(orchestrate._probe("opencode", "provider/model"), expected)
-        orchestrate.subprocess.run = _FakeRun(rc=1, out="0 credentials")
+                self.assertEqual(orchestrate._probe("opencode", model), expected)
+        orchestrate.subprocess.run = _FakeRun(rc=1, out=listing)
         self.assertEqual(orchestrate._probe("opencode", "anthropic/claude"), "error")
 
     def test_ansi_auth_output_is_stripped(self):

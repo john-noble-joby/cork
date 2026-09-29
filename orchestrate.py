@@ -92,18 +92,35 @@ def _plain_auth_output(result: subprocess.CompletedProcess) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", f"{result.stdout}\n{result.stderr}")
 
 
-def _opencode_auth_ready(result: subprocess.CompletedProcess, _model: str) -> bool:
-    text = _plain_auth_output(result)
-    if result.returncode != 0:
-        return False
-    count = re.search(r"\b(\d+) credentials?\b", text, re.IGNORECASE)
-    return bool(count and int(count.group(1)) > 0)
+def _opencode_credential_providers(result: subprocess.CompletedProcess) -> set[str]:
+    # `opencode auth list` prints one "●  <Display Name> <method>" line per stored
+    # credential ("●  GitHub Copilot oauth"); the aggregate "N credentials" footer says
+    # nothing about WHICH provider is authenticated. Normalize display names to
+    # opencode's provider ids ("GitHub Copilot" -> "github-copilot").
+    providers: set[str] = set()
+    for line in _plain_auth_output(result).splitlines():
+        # "<Display Name> <method>", with or without the leading bullet; the method token
+        # anchors the match so the "N credentials" footer can never parse as a provider.
+        m = re.match(r"^\s*(?:●\s+)?(.+?)\s+(?:oauth|api|apikey|api-key|env|token)\s*$",
+                     line, re.IGNORECASE)
+        if m:
+            providers.add(re.sub(r"\s+", "-", m.group(1).strip().lower()))
+    return providers
 
 
-def _opencode_auth_logged_out(result: subprocess.CompletedProcess, _model: str) -> bool:
-    text = _plain_auth_output(result)
-    count = re.search(r"\b(\d+) credentials?\b", text, re.IGNORECASE)
-    return result.returncode == 0 and bool(count and int(count.group(1)) == 0)
+def _opencode_has_provider(result: subprocess.CompletedProcess, model: str) -> bool:
+    provider = model.split("/", 1)[0].lower()
+    return provider in _opencode_credential_providers(result)
+
+
+def _opencode_auth_ready(result: subprocess.CompletedProcess, model: str) -> bool:
+    return result.returncode == 0 and _opencode_has_provider(result, model)
+
+
+def _opencode_auth_logged_out(result: subprocess.CompletedProcess, model: str) -> bool:
+    # Exit 0 without a credential for THIS model's provider: another provider's login
+    # (or none at all) must not make this lane look live.
+    return result.returncode == 0 and not _opencode_has_provider(result, model)
 
 
 def _pi_auth_payload(result: subprocess.CompletedProcess) -> dict:
@@ -216,6 +233,7 @@ HARNESSES: dict[str, dict] = {
 # The only per-harness keys config.json may set — `argv`/`read_only` are not
 # user-overridable, so the read-only contract does not depend on configuration.
 _HARNESS_CONFIG_KEYS = ("bin", "extra_args", "timeout")
+_MAX_ARG_BYTES = 131_072  # Linux MAX_ARG_STRLEN: the largest single argv element execve accepts
 
 DEFAULT_CONFIG = {
     "version": 1,
@@ -1159,6 +1177,13 @@ def _harness_call(provider: str, model: str, system: str, user_msg: str,
         run_kw: dict = {"input": prompt}
     else:
         argv.append(prompt); run_kw = {"stdin": subprocess.DEVNULL}
+    # review() budgets ~192k chars, but a single argv element (an arg-transported prompt,
+    # or the --system-prompt standards) is capped at 128 KiB by the kernel. Refuse up
+    # front with a legible reason instead of surfacing "[Errno 7] Argument list too long".
+    largest = max((len(a.encode("utf-8", "replace")) for a in argv), default=0)
+    if largest > _MAX_ARG_BYTES:
+        return 413, (f"{provider}: a single argument is {largest} bytes but the platform limit "
+                     f"is {_MAX_ARG_BYTES}; reduce the diff or standards, or use a stdin-prompt lane")
     try:
         # utf-8 + replace: a stray byte from a wrapper must not raise UnicodeDecodeError
         # past the sentinel handling below. Table-owned `env` is immutable hardening.
