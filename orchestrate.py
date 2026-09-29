@@ -181,6 +181,12 @@ def _read_cork_auth() -> dict:
     if not isinstance(data, dict):  # malformed OR valid-but-not-an-object → fail loudly
         fail(f"Refusing to use malformed auth file {_CORK_AUTH} — it may hold other "
              f"provider tokens. Fix or delete it, then run `{_LOGIN_COMMAND}`")
+    exp = data.get("expires_at")
+    if exp is not None and (isinstance(exp, bool) or not isinstance(exp, (int, float))):
+        # Checked here, at the boundary, so every expiry comparison downstream can
+        # trust the type instead of surfacing a TypeError traceback.
+        fail(f"Malformed auth file {_CORK_AUTH}: expires_at must be a number, got {exp!r}. "
+             f"Fix it or re-login with `{_LOGIN_COMMAND}` (replaces only the Copilot fields)")
     return data
 
 
@@ -225,8 +231,10 @@ def _refresh_copilot_token(refresh_token: str) -> dict:
         "refresh_token": refresh_token,
     })
     if not resp.get("access_token"):
-        fail(f"Copilot token refresh failed ({resp.get('error') or resp}). "
-             f"Re-login with `{_LOGIN_COMMAND}`")
+        # Raised, not fail()ed: `auth status` reports it as a structured probe
+        # failure; every other caller converts it to a loud fail() at its boundary.
+        raise RuntimeError(f"Copilot token refresh failed ({resp.get('error') or resp}). "
+                           f"Re-login with `{_LOGIN_COMMAND}`")
     return resp
 
 
@@ -337,12 +345,16 @@ def _resolve_copilot_token() -> tuple[str | None, str, float | None]:
 def _unusable_copilot_token_message(source: str) -> str:
     if source == "cork":
         return (f"Copilot token in {_CORK_AUTH} has expired and has no refresh token. "
-                f"Delete that token-only file and re-login with `{_LOGIN_COMMAND}`")
+                f"Re-login with `{_LOGIN_COMMAND}` — it replaces only the Copilot fields "
+                f"and keeps any other provider keys in that file")
     return _missing_copilot_token_message()
 
 
 def _copilot_token() -> str:
-    token, source, _ = _resolve_copilot_token()
+    try:
+        token, source, _ = _resolve_copilot_token()
+    except RuntimeError as e:  # refresh exchange rejected
+        fail(str(e))
     if token is None:
         fail(_unusable_copilot_token_message(source))
     return token
@@ -393,16 +405,16 @@ def _copilot_auth_summary(source: str, expires_at: float | None, refreshable: bo
         label = "legacy-shape cork file" if source == "cork-legacy-shape" else "cork"
         return (f"WARNING: Copilot token: {label} ({path}), "
                 f"{expiry_detail}, refreshable no — "
-                f"delete/re-login with `{_LOGIN_COMMAND}`")
+                f"re-login with `{_LOGIN_COMMAND}`")
     return f"Copilot token: cork ({path}), {expiry_detail}, refreshable yes"
 
 
 def _copilot_auth_failure(source: str, refreshable: bool) -> str:
     path = _display_path(_auth_path(source))
     if source == "cork" and not refreshable:
-        detail = f"token-only cork file {path}; delete it and re-login"
+        detail = f"token-only cork file {path}; re-login to replace its Copilot fields"
     elif source == "cork-legacy-shape":
-        detail = f"legacy-shape cork file {path}; delete it and re-login"
+        detail = f"legacy-shape cork file {path}; re-login to replace its Copilot fields"
     elif source == "opencode":
         detail = f"opencode fallback {path}; give cork its own token"
     elif source == "env":
@@ -444,7 +456,10 @@ def _provider_token(provider: str) -> str:
 def _provider_token_available(provider: str) -> bool:
     match provider:
         case "copilot":
-            token, _, _ = _resolve_copilot_token()
+            try:
+                token, _, _ = _resolve_copilot_token()
+            except RuntimeError as e:  # refresh exchange rejected
+                fail(str(e))
             return token is not None
         case "openai":
             if os.environ.get("OPENAI_API_KEY", "").strip():
@@ -942,8 +957,10 @@ def _probe(provider: str, model: str) -> str:
         status, text = _call_and_extract(provider, model, "", "ok", max_out=16)
     except (TimeoutError, socket.timeout):
         return "timeout"
-    except urllib.error.URLError:
-        return "connection"
+    except urllib.error.URLError as e:
+        # A connect-phase timeout arrives wrapped as URLError(reason=TimeoutError);
+        # only a non-timeout reason is a genuine connection failure.
+        return "timeout" if isinstance(e.reason, (TimeoutError, socket.timeout)) else "connection"
     return _classify_preflight(status, text)
 
 
@@ -1407,31 +1424,38 @@ def _auth_probe_model() -> str:
                 if entry["provider"] == "copilot")
 
 
-def cmd_auth_status(as_json: bool = False) -> None:
-    token, source, expires_at, refreshable = _resolve_copilot_auth()
-    if token is None:
-        result = {
-            "source": source,
-            "path": str(_auth_path(source)) if _auth_path(source) else None,
-            "expiry": _format_expiry(expires_at) if expires_at is not None else None,
-            "refreshable": False,
-            "probe": {"status": "fail", "reason": "missing" if source == "none" else "expired"},
-        }
-        _print_auth_status(result, as_json)
-        fail(_unusable_copilot_token_message(source))
-
-    model = _auth_probe_model()
-    verdict = _probe("copilot", model)
-    result = {
+def _auth_status_result(source: str, expires_at: float | None, refreshable: bool,
+                        probe_status: str, probe_reason: str) -> dict:
+    return {
         "source": source,
         "path": str(_auth_path(source)) if _auth_path(source) else None,
         "expiry": _format_expiry(expires_at) if expires_at is not None else None,
         "refreshable": refreshable,
-        "probe": {"status": "ok" if verdict == "ok" else "fail", "reason": verdict},
+        "probe": {"status": probe_status, "reason": probe_reason},
     }
-    _print_auth_status(result, as_json)
+
+
+def cmd_auth_status(as_json: bool = False) -> None:
+    try:
+        token, source, expires_at, refreshable = _resolve_copilot_auth()
+    except RuntimeError as e:
+        # Refresh exchange rejected. Only the cork file refreshes, and a failed
+        # exchange never rewrites it, so re-read it for the expiry we report.
+        exp = _read_cork_auth().get("expires_at")
+        _print_auth_status(_auth_status_result(
+            "cork", float(exp) if exp is not None else None, True, "fail", "refresh_failed"), as_json)
+        fail(str(e))
+    if token is None:
+        _print_auth_status(_auth_status_result(
+            source, expires_at, False, "fail", "missing" if source == "none" else "expired"), as_json)
+        fail(_unusable_copilot_token_message(source))
+
+    model = _auth_probe_model()
+    verdict = _probe("copilot", model)
+    _print_auth_status(_auth_status_result(
+        source, expires_at, refreshable, "ok" if verdict == "ok" else "fail", verdict), as_json)
     if verdict == "auth":
-        fail(f"Copilot auth probe failed using {source}. Re-login with `{_LOGIN_COMMAND}`")
+        fail(_copilot_auth_failure(source, refreshable))
     if verdict == "model_not_supported":
         fail(f"Copilot auth probe failed: copilot/{model} is not supported on this seat.")
     if verdict == "integrator_mismatch":

@@ -36,6 +36,15 @@ change, and add a section here.
 - `cork-setup` now gates setup on structured auth status and prompts for cork-owned,
   refreshable credentials instead of inferring token ownership from successful model probes.
 
+### Fixed
+- `auth status` reports a rejected token refresh as `probe.reason == "refresh_failed"` (the
+  JSON is still emitted before the exit-1) instead of exiting before printing anything, and
+  its 401/403 guidance names the winning source (env override, token-only file) like preflight.
+- A connect-phase timeout, which `urlopen` wraps as `URLError`, is classified `timeout`, not
+  `connection`. A non-numeric `expires_at` in `auth.json` fails as a malformed file instead of
+  a `TypeError` traceback. Expired-token guidance says to re-login (which replaces only the
+  Copilot fields) rather than delete the shared auth file.
+
 ## [0.9.0] — 2026-09-17
 
 ### Added

@@ -17,9 +17,10 @@ CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 ## 1. Copilot token
 Run `python3 "$CORK_HOME/orchestrate.py" auth status --json` and parse its JSON stdout
 (it intentionally exits 1 when no token resolves or the probe fails).
-- If `source == "none"` or `probe.reason in ("missing", "expired", "auth")`, the user
-  must run `login`. For `expired`, relay stderr's instruction to delete the token-only file
-  first. When `source == "env"`, tell the user to unset `CORK_COPILOT_TOKEN` before login,
+- If `source == "none"` or `probe.reason in ("missing", "expired", "refresh_failed", "auth")`,
+  the user must run `login`. Never tell them to delete `auth.json` — it may also hold
+  `openai`/`anthropic` keys; `login` replaces only the Copilot fields and keeps the rest.
+  When `source == "env"`, tell the user to unset `CORK_COPILOT_TOKEN` before login,
   otherwise the invalid override will continue to win.
 - If `probe.status == "fail"` for any other reason, relay the command's stderr recovery
   guidance and stop; a model, integrator, timeout, or connection failure is not fixed by

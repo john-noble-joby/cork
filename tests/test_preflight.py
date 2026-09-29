@@ -47,6 +47,17 @@ class ClassifyTest(unittest.TestCase):
         finally:
             orchestrate._call_and_extract = original
 
+    def test_probe_reports_wrapped_connect_timeout_as_timeout(self):
+        # urlopen wraps a connect-phase timeout as URLError(reason=TimeoutError)
+        original = orchestrate._call_and_extract
+        def wrapped_timeout(*args, **kwargs):
+            raise orchestrate.urllib.error.URLError(TimeoutError("timed out"))
+        orchestrate._call_and_extract = wrapped_timeout
+        try:
+            self.assertEqual(orchestrate._probe("copilot", "model"), "timeout")
+        finally:
+            orchestrate._call_and_extract = original
+
 
 class SelectTest(unittest.TestCase):
     def setUp(self):
@@ -136,6 +147,7 @@ class AuthVisibilityTest(unittest.TestCase):
         orchestrate._CORK_AUTH, orchestrate._OPENCODE_AUTH = self._cork, self._opencode
         orchestrate._probe, orchestrate._now = self._probe, self._now
         orchestrate.load_config = self._load_config
+        os.environ.pop("CORK_COPILOT_TOKEN", None)  # tests set it; never leak it to later modules
         if self._env is not None:
             os.environ["CORK_COPILOT_TOKEN"] = self._env
         self.tmp.cleanup()
@@ -175,7 +187,7 @@ class AuthVisibilityTest(unittest.TestCase):
         self.assertIn("no expiry, refreshable no", out.getvalue())
         self.assertIn("token-only cork file", err.getvalue())
         self.assertIn(str(self.cork), err.getvalue())
-        self.assertIn("delete it and re-login", err.getvalue())
+        self.assertIn("re-login to replace its Copilot fields", err.getvalue())
         self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
 
     def test_preflight_reports_expired_token_without_probing(self):
@@ -209,6 +221,9 @@ class AuthVisibilityTest(unittest.TestCase):
 
     def test_main_full_run_preserves_no_token_guidance(self):
         original_argv, original_state_dir = orchestrate.sys.argv, orchestrate.STATE_DIR
+        original_base_check = orchestrate.require_base_ref
+        # The temp dir is not a git repo; auth guidance, not base validation, is under test.
+        orchestrate.require_base_ref = lambda repo, base: None
         orchestrate.sys.argv = ["orchestrate.py", "TEST-1", self.tmp.name]
         orchestrate.STATE_DIR = Path(self.tmp.name) / "state"
         orchestrate.load_config = lambda quiet=False: {
@@ -223,6 +238,7 @@ class AuthVisibilityTest(unittest.TestCase):
                 orchestrate.main()
         finally:
             orchestrate.sys.argv, orchestrate.STATE_DIR = original_argv, original_state_dir
+            orchestrate.require_base_ref = original_base_check
         self.assertIn(f"Copilot token: none — run `{orchestrate._LOGIN_COMMAND}`", out.getvalue())
         self.assertIn("✗ copilot/full-run-model skipped (no copilot token)", out.getvalue())
 

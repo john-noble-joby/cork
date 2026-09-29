@@ -19,6 +19,7 @@ class AuthRefreshTest(unittest.TestCase):
         orchestrate._CORK_AUTH, orchestrate._OPENCODE_AUTH = self._cork, self._oc
         orchestrate._post_form, orchestrate._now, orchestrate._probe = self._post, self._now, self._probe
         orchestrate.load_config = self._load_config
+        os.environ.pop("CORK_COPILOT_TOKEN", None)  # tests set it; never leak it to later modules
         if self._env is not None:
             os.environ["CORK_COPILOT_TOKEN"] = self._env
         self.tmp.cleanup()
@@ -274,7 +275,8 @@ class AuthRefreshTest(unittest.TestCase):
             orchestrate._copilot_token()
         self.assertEqual(raised.exception.code, 1)
         self.assertIn(str(self.cork), err.getvalue())
-        self.assertIn("Delete that token-only file", err.getvalue())
+        self.assertIn("replaces only the Copilot fields", err.getvalue())
+        self.assertNotIn("Delete", err.getvalue())  # the file may hold openai/anthropic keys
         self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
 
     @unittest.skipIf(os.geteuid() == 0, "root bypasses directory write permissions")
@@ -371,6 +373,76 @@ class AuthRefreshTest(unittest.TestCase):
         self.assertEqual(json.loads(out.getvalue())["probe"],
                          {"status": "fail", "reason": "auth"})
         self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
+        self.assertIn("CORK_COPILOT_TOKEN", err.getvalue())  # names the winning source
+
+    def test_auth_status_401_names_the_winning_source(self):
+        orchestrate._probe = lambda provider, model: "auth"
+        cases = (
+            ("env", lambda: os.environ.__setitem__("CORK_COPILOT_TOKEN", "ENV"),
+             "CORK_COPILOT_TOKEN env override"),
+            ("cork", lambda: self.cork.write_text(json.dumps({"token": "STALE"})),
+             "token-only cork file"),
+        )
+        for source, arrange, expected in cases:
+            with self.subTest(source=source):
+                os.environ.pop("CORK_COPILOT_TOKEN", None)
+                arrange()
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                        self.assertRaises(SystemExit):
+                    orchestrate.cmd_auth_status(as_json=True)
+                self.assertIn(expected, err.getvalue())
+                self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
+
+    def test_auth_status_json_reports_rejected_refresh_structurally(self):
+        orchestrate._now = lambda: 10000.0
+        self.cork.write_text(json.dumps(
+            {"token": "OLD", "refresh_token": "DEAD", "expires_at": 5000, "openai": "OA"}))
+        orchestrate._post_form = lambda *a, **k: {"error": "invalid_grant"}
+        orchestrate._probe = lambda provider, model: self.fail("must not probe after a rejected refresh")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit) as raised:
+            orchestrate.cmd_auth_status(as_json=True)
+        self.assertEqual(raised.exception.code, 1)
+        self.assertEqual(json.loads(out.getvalue()), {
+            "source": "cork", "path": str(self.cork),
+            "expiry": "1970-01-01T01:23:20Z", "refreshable": True,
+            "probe": {"status": "fail", "reason": "refresh_failed"},
+        })
+        self.assertIn("invalid_grant", err.getvalue())
+        self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
+        self.assertEqual(json.loads(self.cork.read_text())["openai"], "OA")  # file untouched
+
+    def test_rejected_refresh_fails_loudly_for_token_and_availability(self):
+        orchestrate._now = lambda: 10000.0
+        self.cork.write_text(json.dumps(
+            {"token": "OLD", "refresh_token": "DEAD", "expires_at": 5000}))
+        orchestrate._post_form = lambda *a, **k: {"error": "invalid_grant"}
+        for name, call in (("token", orchestrate._copilot_token),
+                           ("available", lambda: orchestrate._provider_token_available("copilot"))):
+            with self.subTest(path=name):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as raised:
+                    call()
+                self.assertEqual(raised.exception.code, 1)  # a clean fail(), never a RuntimeError traceback
+                self.assertIn("invalid_grant", err.getvalue())
+
+    def test_non_numeric_expires_at_fails_as_malformed_not_traceback(self):
+        for bad in ("soon", True, [5000]):
+            with self.subTest(expires_at=bad):
+                self.cork.write_text(json.dumps({"token": "A", "expires_at": bad}))
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as raised:
+                    orchestrate._copilot_token()
+                self.assertEqual(raised.exception.code, 1)
+                self.assertIn("expires_at must be a number", err.getvalue())
+                self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                        self.assertRaises(SystemExit):
+                    orchestrate.cmd_auth_status(as_json=True)
+                self.assertIn("expires_at must be a number", err.getvalue())
 
     def test_non_auth_probe_failures_do_not_recommend_login(self):
         os.environ["CORK_COPILOT_TOKEN"] = "ENV"
