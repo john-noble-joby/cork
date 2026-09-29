@@ -103,7 +103,7 @@ class SelectTest(unittest.TestCase):
 
     def test_connection_failure_has_distinct_preflight_tick(self):
         orig = orchestrate._probe
-        orchestrate._probe = lambda provider, model: "connection"
+        orchestrate._probe = lambda provider, model, details=None: "connection"
         out = io.StringIO()
         try:
             with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
@@ -127,7 +127,7 @@ class SelectTest(unittest.TestCase):
     def test_native_only_rotation_does_not_resolve_copilot_auth(self):
         orchestrate._resolve_copilot_auth = lambda: self.fail("must not resolve Copilot")
         orig = orchestrate._probe
-        orchestrate._probe = lambda provider, model: "ok"
+        orchestrate._probe = lambda provider, model, details=None: "ok"
         try:
             selected = orchestrate.preflight(
                 [{"provider": "openai", "model": "gpt-4o"}], count=1)
@@ -165,7 +165,7 @@ class AuthVisibilityTest(unittest.TestCase):
                 "expires": 0,
             }
         }))
-        orchestrate._probe = lambda provider, model: "ok"
+        orchestrate._probe = lambda provider, model, details=None: "ok"
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             selected = orchestrate.preflight(
@@ -180,7 +180,7 @@ class AuthVisibilityTest(unittest.TestCase):
 
     def test_preflight_401_names_token_only_cork_file_and_relogin(self):
         self.cork.write_text(json.dumps({"token": "STALE"}))
-        orchestrate._probe = lambda provider, model: "auth"
+        orchestrate._probe = lambda provider, model, details=None: "auth"
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
                 self.assertRaises(SystemExit) as raised:
@@ -200,7 +200,7 @@ class AuthVisibilityTest(unittest.TestCase):
             {"token": "OLD", "refresh_token": "DEAD", "expires_at": 5000}))
         original_post = orchestrate._post_form
         orchestrate._post_form = lambda *a, **k: {"error": "invalid_grant"}
-        orchestrate._probe = lambda provider, model: self.fail("must not probe after a rejected refresh")
+        orchestrate._probe = lambda provider, model, details=None: self.fail("must not probe after a rejected refresh")
         out, err = io.StringIO(), io.StringIO()
         try:
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
@@ -215,7 +215,7 @@ class AuthVisibilityTest(unittest.TestCase):
     def test_preflight_reports_expired_token_without_probing(self):
         orchestrate._now = lambda: 10000.0
         self.cork.write_text(json.dumps({"token": "OLD", "expires_at": 5000}))
-        orchestrate._probe = lambda provider, model: self.fail("must not probe expired auth")
+        orchestrate._probe = lambda provider, model, details=None: self.fail("must not probe expired auth")
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
                 self.assertRaises(SystemExit):
@@ -232,7 +232,7 @@ class AuthVisibilityTest(unittest.TestCase):
             "providers": {"copilot": {"enabled": True}},
             "rotation": [{"provider": "copilot", "model": "model"}],
         }
-        orchestrate._probe = lambda provider, model: self.fail("must not probe without auth")
+        orchestrate._probe = lambda provider, model, details=None: self.fail("must not probe without auth")
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
                 self.assertRaises(SystemExit):
@@ -274,7 +274,7 @@ class AuthVisibilityTest(unittest.TestCase):
         }
         original = orchestrate._provider_token_available
         orchestrate._provider_token_available = lambda provider: provider == "openai"
-        orchestrate._probe = lambda provider, model: "ok"
+        orchestrate._probe = lambda provider, model, details=None: "ok"
         try:
             selected = orchestrate.preflight(
                 orchestrate._eligible_rotation(cfg, keep_unavailable_copilot=True), count=1)
