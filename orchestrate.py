@@ -1070,22 +1070,27 @@ def _harness_call(provider: str, model: str, system: str, user_msg: str,
 
 def _call_and_extract(provider: str, model: str, system: str,
                       user_msg: str, max_out: int | None = None,
-                      repo: str = "") -> tuple[int, str]:
-    # Returns (status, extracted_text) on 200, or (status, raw_body) on non-200.
+                      repo: str = "") -> tuple[int, str, str | None]:
+    # HTTP status, extracted text (raw body on error), Responses incompleteness reason.
+    # Preserve HTTP status so token-capped availability probes still accept HTTP 200.
     if provider in HARNESSES:
-        return _harness_call(provider, model, system, user_msg, repo)
+        status, text = _harness_call(provider, model, system, user_msg, repo)
+        return status, text, None
     if provider == "anthropic":
         status, body = _anthropic_call(model, system, user_msg, max_tokens=max_out or 8000)
         if status == 200:
             text = _extract_anthropic_text(body)
-            return status, text
-        return status, str(body)
+            return status, text, None
+        return status, str(body), None
     status, body = _openai_compatible_call(provider, model, system, user_msg, max_out=max_out)
     if status != 200:
-        return status, str(body)
+        return status, str(body), None
     text = (_extract_responses_text(body) if _uses_responses_api(model)
             else _extract_chat_text(body))
-    return status, text
+    incomplete_reason = None
+    if _uses_responses_api(model) and body.get("status") == "incomplete":
+        incomplete_reason = (body.get("incomplete_details") or {}).get("reason") or "unknown reason"
+    return status, text, incomplete_reason
 
 
 # ── Preflight ────────────────────────────────────────────────────────────────
@@ -1109,7 +1114,7 @@ def _probe(provider: str, model: str) -> str:
     # A cheap availability probe — cap output hard so it can't burn review-sized
     # quota (the classification only needs the HTTP status, not the content).
     try:
-        status, text = _call_and_extract(provider, model, "", "ok", max_out=16)
+        status, text, _ = _call_and_extract(provider, model, "", "ok", max_out=16)
     except (TimeoutError, socket.timeout):
         return "timeout"
     except urllib.error.URLError as e:
@@ -1238,7 +1243,7 @@ def review(provider: str, model: str, instructions: str, story: str,
                 f"## Branch Diff\n```diff\n{diff}\n```")
 
     if provider in HARNESSES:  # one shot; a dead harness is a skipped reviewer, never a traceback
-        status, text = _call_and_extract(provider, model, system, user_msg, repo=repo)
+        status, text, _ = _call_and_extract(provider, model, system, user_msg, repo=repo)
         if status == 200 and text:
             return text
         print(f"  → {provider}/{model}: {text or 'empty output'}"[:600], flush=True)
@@ -1246,12 +1251,16 @@ def review(provider: str, model: str, instructions: str, story: str,
 
     for attempt in range(max_attempts):
         try:
-            status, text = _call_and_extract(provider, model, system, user_msg)
+            status, text, incomplete_reason = _call_and_extract(provider, model, system, user_msg)
         except TimeoutError:
             _retry_wait(attempt, max_attempts, "timeout"); continue
         except urllib.error.URLError as e:
             _retry_wait(attempt, max_attempts, f"connection error: {e.reason}"); continue
 
+        # Partial findings are not a complete review; repeating an exhausted/filtered
+        # request with the same limits wastes quota. Keep the reason visible instead.
+        if incomplete_reason is not None:
+            return f"[{provider}/{model} review incomplete ({incomplete_reason}) — skipped]"
         if status == 200 and text:
             return text
         if status == 200:  # empty content — retry then skip

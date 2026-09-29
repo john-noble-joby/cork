@@ -72,7 +72,7 @@ class CopilotRoutingTest(unittest.TestCase):
                                   return_value=(200, body)) as post:
                     result = orchestrate._call_and_extract(
                         "copilot", model, "standards", "diff", max_out=16)
-                self.assertEqual(result, (200, "review findings"))
+                self.assertEqual(result, (200, "review findings", None))
                 url, _, payload, _ = post.call_args.args
                 endpoint = "/responses" if responses else "/chat/completions"
                 self.assertEqual(url, orchestrate.COPILOT_BASE + endpoint)

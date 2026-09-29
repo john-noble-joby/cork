@@ -28,6 +28,9 @@ change, and add a section here.
   API reviews and probes. Document a hybrid high-effort Copilot + Claude Enterprise setup.
 
 ### Fixed
+- Preserve Responses API incomplete-result reasons: skip incomplete reviews without
+  repeating the same request or accepting partial findings as complete. Token-capped
+  HTTP-200 availability probes remain successful.
 - Quote skill descriptions so YAML frontmatter parsers accept embedded colons.
 - Route GPT-6 models, including Sol and Astra, through `/responses` rather than unsupported
   chat completions; share the same response extraction as GPT-5 and Codex.

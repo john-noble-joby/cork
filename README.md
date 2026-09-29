@@ -203,6 +203,12 @@ Copilot's `/responses` endpoint automatically; other OpenAI-compatible models us
 `config.json`; chat-completions, native Anthropic, and harness lanes are unaffected.
 For Claude Code, set `providers.claude.extra_args` to `["--effort", "high"]` instead.
 
+Reasoning and findings share a 32,000-token output budget. A Responses API review marked
+`incomplete` is skipped without retrying, even if partial text exists; the skip message
+includes its reason (`max_output_tokens`, `content_filter`, or an unknown-reason fallback).
+For token exhaustion, reduce the diff size or effort before rerunning. Availability probes
+still accept HTTP 200 when their deliberately small output budget truncates the response.
+
 **Providers:** Copilot is the default and recommended path (one flat-rate seat). `openai`
 and `anthropic` are supported but disabled by default; enable a provider in `config.json`
 and supply its token via `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` (or keys `"openai"` /

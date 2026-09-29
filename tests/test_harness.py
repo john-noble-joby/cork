@@ -196,14 +196,14 @@ class ApiRoutingUnaffectedTest(HarnessBase):
         orchestrate._anthropic_call = lambda *a, **k: (
             200, {"content": [{"type": "text", "text": "anth-ok"}]})
         self.assertEqual(orchestrate._call_and_extract("copilot", "gpt-4.1", "S", "U"),
-                         (200, "chat-ok"))
+                         (200, "chat-ok", None))
         self.assertEqual(orchestrate._call_and_extract("anthropic", "claude-x", "S", "U"),
-                         (200, "anth-ok"))
+                         (200, "anth-ok", None))
 
     def test_probe_api_provider_uses_http_probe(self):
         seen = []
         orchestrate._call_and_extract = lambda p, m, s, u, max_out=None, repo="": (
-            seen.append((p, m, max_out)) or (200, "ok"))
+            seen.append((p, m, max_out)) or (200, "ok", None))
         self.assertEqual(orchestrate._probe("copilot", "gpt-4.1"), "ok")
         self.assertEqual(seen, [("copilot", "gpt-4.1", 16)])
 
