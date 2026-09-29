@@ -610,6 +610,20 @@ class AuthRefreshTest(unittest.TestCase):
                  if entry["provider"] == "copilot"),
         )
 
+    def test_print_token_rejected_refresh_fails_cleanly_with_empty_stdout(self):
+        orchestrate._now = lambda: 10000.0
+        self.cork.write_text(json.dumps(
+            {"token": "OLD", "refresh_token": "DEAD", "expires_at": 5000}))
+        orchestrate._post_form = lambda *a, **k: {"error": "invalid_grant"}
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit) as raised:
+            orchestrate.cmd_auth_print_token()
+        self.assertEqual(raised.exception.code, 1)  # fail(), not a RuntimeError traceback
+        self.assertEqual(out.getvalue(), "")  # pipe-safe: no partial token, no noise
+        self.assertIn("invalid_grant", err.getvalue())
+        self.assertIn(orchestrate._LOGIN_COMMAND, err.getvalue())
+
     def test_login_command_is_directly_runnable(self):
         self.assertEqual(
             orchestrate._LOGIN_COMMAND,

@@ -1634,7 +1634,9 @@ def cmd_auth_status(as_json: bool = False) -> None:
 
 
 def cmd_auth_print_token(as_json: bool = False) -> None:
-    token, source, expires_at, _ = _resolve_copilot_auth()
+    # _or_fail: a rejected refresh must be a clean stderr fail() with nothing on stdout
+    # (this output is piped into Codex's auth helper), never a RuntimeError traceback.
+    token, source, expires_at, _ = _resolve_copilot_auth_or_fail()
     if token is None:
         fail(_unusable_copilot_token_message(source))
     if as_json:
