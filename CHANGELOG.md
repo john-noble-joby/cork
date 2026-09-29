@@ -39,6 +39,14 @@ change, and add a section here.
   from the prompt alone.
   `opencode` and `pi` lanes follow in a separate PR.
 
+### Fixed
+- Harness config validation: a `timeout` integer too large for a C double now fails with the
+  documented one-line config error instead of an `OverflowError`; a relative `bin` path is
+  rejected at config-load (preflight resolved it from cork's cwd, the review from the target
+  repo, so `./tools/codex` passed preflight and failed at review time); `~` in `bin` is expanded.
+- A harness argument containing a NUL byte (e.g. from a branch-controlled standards file passed
+  via `--system-prompt`) is now a skipped reviewer, not a `ValueError` that aborts the review.
+
 ## [0.10.0] — 2026-09-17
 
 ### Added

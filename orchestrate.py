@@ -672,12 +672,18 @@ def _validate_harness_cfg(name: str, hc: dict) -> None:
         fail(f"config.providers.{name} must be an object")
     if "bin" in hc and (not isinstance(hc["bin"], str) or not hc["bin"].strip()):
         fail(f"config.providers.{name}.bin must be a non-empty string")
+    if "bin" in hc:
+        _harness_bin_path(hc["bin"], f"config.providers.{name}.bin")
     ea = hc.get("extra_args", [])
     if not isinstance(ea, list) or not all(isinstance(a, str) for a in ea):
         fail(f"config.providers.{name}.extra_args must be a list of strings")
     t = hc.get("timeout", 1)
-    if (isinstance(t, bool) or not isinstance(t, (int, float))
-            or not math.isfinite(t) or t <= 0):
+    try:
+        valid = (not isinstance(t, bool) and isinstance(t, (int, float))
+                 and math.isfinite(t) and t > 0)
+    except OverflowError:  # json.loads accepts ints too large for a C double
+        valid = False
+    if not valid:
         fail(f"config.providers.{name}.timeout must be a positive finite number of seconds")
 
 
@@ -990,13 +996,26 @@ def _openai_compatible_call(provider: str, model: str, system: str,
     return _http_post_json(f"{base}/chat/completions", headers, payload, timeout)
 
 
+def _harness_bin_path(raw: str, origin: str) -> str:
+    # A bare name resolves on PATH, where shutil.which (preflight) and subprocess
+    # (review) agree. A path must be absolute: preflight resolves a relative path from
+    # cork's cwd but the harness runs with cwd=repo, so `./tools/codex` would pass
+    # preflight and then fail at review time.
+    expanded = Path(raw).expanduser()
+    if "/" in raw and not expanded.is_absolute():
+        fail(f"{origin} must be a bare command name or an absolute path, got {raw!r}")
+    return str(expanded) if "/" in raw else raw
+
+
 def _harness_settings(provider: str) -> dict:
     # Table defaults, then config.json `providers.<harness>` (bin/extra_args/timeout),
     # then the CORK_*_BIN env var for the binary.
     spec = {**HARNESSES[provider], "extra_args": []}
     user = load_config(quiet=True).get("providers", {}).get(provider, {})
     spec.update({k: v for k, v in user.items() if k in _HARNESS_CONFIG_KEYS})
-    spec["bin"] = os.environ.get(spec["bin_env"]) or spec["bin"]
+    env_bin = os.environ.get(spec["bin_env"])
+    spec["bin"] = (_harness_bin_path(env_bin, spec["bin_env"]) if env_bin
+                   else _harness_bin_path(spec["bin"], f"config.providers.{provider}.bin"))
     return spec
 
 
@@ -1034,7 +1053,10 @@ def _harness_call(provider: str, model: str, system: str, user_msg: str,
                            encoding="utf-8", errors="replace", timeout=timeout, **run_kw)
     except subprocess.TimeoutExpired:
         return 504, f"{provider} timed out after {timeout}s"
-    except OSError as e:  # binary gone since preflight, or argv too long (E2BIG)
+    except (OSError, ValueError) as e:
+        # OSError: binary gone since preflight, or argv too long (E2BIG).
+        # ValueError: a NUL byte in an argument (e.g. from a branch-controlled
+        # standards file passed via --system-prompt) — must not abort the review.
         return 404, f"cannot run {spec['bin']}: {e}"
     if r.returncode != 0:
         return 500, f"{provider} exited {r.returncode}: {r.stderr.strip()[-2000:]}"

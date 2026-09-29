@@ -147,6 +147,16 @@ class FailurePathTest(HarnessBase):
         self.assertEqual(self._review(), "[codex/m returned no usable content — skipped]")
         self.assertEqual(len(fake.calls), 1)  # harnesses get exactly one attempt
 
+    def test_nul_byte_in_argument_is_skip_sentinel(self):
+        # A branch-controlled standards file containing \0 reaches argv via --system-prompt;
+        # subprocess raises ValueError, which must follow the same skip path as OSError.
+        orchestrate.subprocess.run = _FakeRun(raise_=ValueError("embedded null byte"))
+        self.assertEqual(self._review("claude"), "[claude/m returned no usable content — skipped]")
+        orchestrate.subprocess.run = self._run  # real subprocess: rejects the NUL before any exec
+        status, text = orchestrate._harness_call("claude", "m", "SYS\0", "U", self.tmp.name)
+        self.assertEqual(status, 404)
+        self.assertIn("null", text.lower())
+
     def test_success_returns_stdout_once(self):
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         self.assertEqual(self._review(), fake.out)
@@ -204,6 +214,27 @@ class ConfigAndProbeTest(HarnessBase):
                                                    {"provider": "codex", "model": "y"}]})
         with self.assertRaises(SystemExit):
             orchestrate._validate_config({"rotation": [{"provider": "opencode", "model": "x"}]})
+
+    def test_validate_timeout_huge_int_fails_cleanly_not_overflow(self):
+        # json.loads happily yields 10**400; math.isfinite() raises OverflowError on it.
+        with self.assertRaises(SystemExit):
+            orchestrate._validate_harness_cfg("codex", {"timeout": 10 ** 400})
+
+    def test_validate_bin_rejects_relative_paths_accepts_bare_and_absolute(self):
+        for ok in ("codex", "/opt/codex", "~/bin/codex"):
+            with self.subTest(bin=ok):
+                orchestrate._validate_harness_cfg("codex", {"bin": ok})
+        for bad in ("./tools/codex", "tools/codex", "../codex"):
+            with self.subTest(bin=bad), self.assertRaises(SystemExit):
+                orchestrate._validate_harness_cfg("codex", {"bin": bad})
+
+    def test_settings_expand_tilde_and_reject_relative_env_bin(self):
+        orchestrate.CONFIG_PATH.write_text('{"rotation":[{"provider":"codex","model":"m"}],'
+                                           '"providers":{"codex":{"enabled":true,"bin":"~/bin/codex"}}}')
+        self.assertEqual(orchestrate._harness_settings("codex")["bin"], str(Path.home() / "bin/codex"))
+        os.environ["CORK_CODEX_BIN"] = "./tools/codex"
+        with self.assertRaises(SystemExit):
+            orchestrate._harness_settings("codex")
 
     def test_validate_harness_keys_types(self):
         base = {"rotation": [{"provider": "codex", "model": "m"}]}
