@@ -263,15 +263,19 @@ Run harness lanes only on branches you would run the repo's own hooks or tests f
 same trust you already extend to the implementer step. A timeout kills the CLI process
 itself; tool subprocesses it spawned are not tracked.
 
-Per-harness config keys — the only ones read: `bin` (or env `CORK_CLAUDE_BIN` /
-`CORK_CODEX_BIN` / `CORK_PI_BIN`, which wins) — a bare command name resolved on `PATH` or an absolute path
-(`~` is expanded); a relative path is rejected, because preflight would resolve it from
-cork's cwd while the review runs from the target repo — `extra_args` (appended verbatim, *before* the read-only
-flags; treated as trusted — it is your own config), `timeout` (seconds, default 900). The
-argv template and read-only flags are not configurable. `preflight` selects a
-harness iff its binary is found — on PATH, or at the configured absolute `bin` path — no spend. A harness that exits non-zero, times out,
-or prints nothing is reported and skipped (`[codex/<m> returned no usable content — skipped]`);
-there is no retry.
+Per-harness config keys — the only ones read:
+
+- `bin` (or env `CORK_CLAUDE_BIN` / `CORK_CODEX_BIN` / `CORK_PI_BIN`, which wins): a bare command name
+  resolved on `PATH`, or an absolute path (`~` is expanded). A relative path is rejected:
+  preflight would resolve it from cork's cwd while the review runs from the target repo.
+- `extra_args`: appended verbatim, *before* the read-only flags; treated as trusted — it is
+  your own config.
+- `timeout`: seconds, default 900.
+
+The argv template and read-only flags are not configurable. `preflight` selects a harness
+iff its binary is found (on `PATH`, or at the configured absolute `bin` path) — no spend. A
+harness that exits non-zero, times out, or prints nothing is reported and skipped
+(`[codex/<m> returned no usable content — skipped]`); there is no retry.
 
 ### High-effort Copilot + Claude Enterprise rotation
 
