@@ -43,7 +43,10 @@ change, and add a section here.
   afterwards), so your interactive MCP servers and plugins are not loaded into the reviewer;
   login and the models cache are unaffected. The reviewer's session goes to a throwaway
   `OPENCODE_DB` in that scratch dir and repo snapshots are off (`snapshot: false`), so a review
-  leaves no session or snapshot in `~/.local/share/opencode`. The legacy global directory
+  leaves no session or snapshot in `~/.local/share/opencode`. Session sharing is refused at
+  both levels (`share: disabled` in the enforced config, inherited `OPENCODE_AUTO_SHARE`
+  cleared, `OPENCODE_DISABLE_SHARE=1`), every inherited `OPENCODE_EXPERIMENTAL*` /
+  `OPENCODE_ENABLE_*` feature switch is cleared, and auto-update is off. The legacy global directory
   `~/.opencode/` is loaded in full (config, agents, custom tools, plugins) regardless of
   `XDG_CONFIG_HOME`, so the lane (and its auth probe) refuses to run while it holds anything
   beyond OpenCode's own install artifacts (`bin/`, `node_modules/`, `package.json`, lockfiles,

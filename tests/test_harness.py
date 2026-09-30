@@ -182,6 +182,20 @@ class ArgvTest(HarnessBase):
             self.assertFalse(home.exists())                          # removed after the run
         self.assertEqual([p for p in state.iterdir()], [])           # nothing accumulates
 
+    def test_opencode_never_shares_or_self_updates(self):
+        # OPENCODE_AUTO_SHARE is a runtime flag read independently of config (1.17.3); an
+        # inherited one would upload the review prompt. Cleared, plus belt-and-braces:
+        # share disabled in the enforced config and via OPENCODE_DISABLE_SHARE.
+        os.environ["OPENCODE_AUTO_SHARE"] = "1"; self.addCleanup(os.environ.pop, "OPENCODE_AUTO_SHARE", None)
+        os.environ["OPENCODE_DISABLE_SHARE"] = "0"; self.addCleanup(os.environ.pop, "OPENCODE_DISABLE_SHARE", None)
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        orchestrate._harness_call("opencode", "p/m", "S", "U", "/repo")
+        env = fake.calls[0][1]["env"]
+        self.assertNotIn("OPENCODE_AUTO_SHARE", env)
+        self.assertEqual(env["OPENCODE_DISABLE_SHARE"], "1")
+        self.assertEqual(json.loads(env["OPENCODE_CONFIG_CONTENT"])["share"], "disabled")
+        self.assertEqual(env["OPENCODE_DISABLE_AUTOUPDATE"], "1")
+
     def test_opencode_session_state_stays_out_of_the_user_store(self):
         # Verified live on 1.17.3: OPENCODE_DB redirects the session database, and
         # `snapshot: false` (via OPENCODE_CONFIG_CONTENT) stops repo snapshots being written
@@ -192,7 +206,7 @@ class ArgvTest(HarnessBase):
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         orchestrate._harness_call("opencode", "p/m", "S", "U", "/repo")
         env = fake.calls[0][1]["env"]
-        self.assertEqual(json.loads(env["OPENCODE_CONFIG_CONTENT"]), {"snapshot": False})
+        self.assertIs(json.loads(env["OPENCODE_CONFIG_CONTENT"])["snapshot"], False)
         self.assertEqual(Path(env["OPENCODE_DB"]).parent, Path(env["XDG_CONFIG_HOME"]))
         self.assertNotIn("{scratch}", env["OPENCODE_DB"])
 
@@ -306,8 +320,10 @@ class ArgvTest(HarnessBase):
     def test_opencode_clears_inherited_explicit_config_variables(self):
         # OPENCODE_CONFIG / _CONFIG_DIR / _CONFIG_CONTENT are honoured regardless of
         # XDG_CONFIG_HOME and would re-introduce MCP/plugin config from the parent shell.
-        cleared = ("OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR",
-                   "OPENCODE_EXPERIMENTAL", "OPENCODE_EXPERIMENTAL_LSP_TOOL")
+        cleared = ("OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_AUTO_SHARE",
+                   "OPENCODE_EXPERIMENTAL", "OPENCODE_EXPERIMENTAL_LSP_TOOL",
+                   "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS", "OPENCODE_ENABLE_EXA",
+                   "OPENCODE_ENABLE_QUESTION_TOOL")
         for k in cleared:
             os.environ[k] = "inherited"; self.addCleanup(os.environ.pop, k, None)
         os.environ["UNRELATED_VAR"] = "kept"; self.addCleanup(os.environ.pop, "UNRELATED_VAR", None)

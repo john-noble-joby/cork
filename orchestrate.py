@@ -279,14 +279,24 @@ HARNESSES: dict[str, dict] = {
             # trace in ~/.local/share/opencode. {scratch} is substituted per invocation.
             "XDG_CONFIG_HOME": "{scratch}",
             "OPENCODE_DB": "{scratch}/opencode.db",
-            "OPENCODE_CONFIG_CONTENT": json.dumps({"snapshot": False}, separators=(",", ":")),
+            # share: disabled makes the share call throw even when something (an inherited
+            # OPENCODE_AUTO_SHARE runtime flag, which bypasses config) asks for it — a
+            # review must never upload the prompt or repo contents to opencode.ai.
+            "OPENCODE_CONFIG_CONTENT": json.dumps({"snapshot": False, "share": "disabled"},
+                                                  separators=(",", ":")),
+            "OPENCODE_DISABLE_SHARE": "1",
+            # An unattended reviewer must not replace the user's binary mid-run.
+            "OPENCODE_DISABLE_AUTOUPDATE": "1",
         },
         # These are honoured independently of XDG_CONFIG_HOME and would re-introduce a
         # config (MCP servers, plugins) from the inherited environment. (An inherited
         # OPENCODE_CONFIG_CONTENT is replaced by the overlay above.)
-        "unset_env": ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR",
-                      # experimental switches can enable tools (e.g. lsp) the deny list predates
-                      "OPENCODE_EXPERIMENTAL", "OPENCODE_EXPERIMENTAL_LSP_TOOL"],
+        "unset_env": ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_AUTO_SHARE"],
+        # Feature switches read from the environment independently of config: every
+        # OPENCODE_EXPERIMENTAL* / OPENCODE_ENABLE_* (lsp tool, background subagents,
+        # question tool, exa web search, ...) can enable behaviour the deny list predates,
+        # so none of the user's interactive ones reach the reviewer.
+        "unset_env_prefixes": ["OPENCODE_EXPERIMENTAL", "OPENCODE_ENABLE_"],
         # opencode still imports and runs a project's .opencode/{plugin,plugins}/*.{ts,js}
         # (its loader scans both spellings) despite --pure and OPENCODE_DISABLE_PROJECT_CONFIG
         # (anomalyco/opencode#49836, open). That is branch-controlled code executing outside
@@ -1305,7 +1315,9 @@ def _harness_env(spec: dict, scratch: str) -> dict[str, str]:
     # table-owned overlay (immutable hardening). The only substitution is the per-run
     # scratch dir placeholder (str.replace, not .format: OPENCODE_PERMISSION holds JSON
     # braces).
-    env = {k: v for k, v in os.environ.items() if k not in spec.get("unset_env", ())}
+    prefixes = tuple(spec.get("unset_env_prefixes", ()))
+    env = {k: v for k, v in os.environ.items()
+           if k not in spec.get("unset_env", ()) and not k.startswith(prefixes)}
     for k, v in spec.get("env", {}).items():
         env[k] = v.replace("{scratch}", scratch)
     return env

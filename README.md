@@ -266,7 +266,12 @@ empty): no global config, while your login (`~/.local/share/opencode/auth.json`)
 cache (`~/.cache/opencode/`) live elsewhere and stay available (verified on 1.17.3: `mcp list`
 shows none, `auth list` unchanged); any inherited `OPENCODE_CONFIG` or `OPENCODE_CONFIG_DIR` is
 cleared from the lane's environment for the same reason, and `OPENCODE_CONFIG_CONTENT` is
-replaced with cork's own `{"snapshot":false}`. `opencode run` always records a session, so cork
+replaced with cork's own `{"snapshot":false,"share":"disabled"}`. Sharing is also refused at the
+runtime-flag level: an inherited `OPENCODE_AUTO_SHARE` (which OpenCode reads independently of
+config and would upload the review prompt to opencode.ai) is cleared and `OPENCODE_DISABLE_SHARE=1`
+set; every inherited `OPENCODE_EXPERIMENTAL*` / `OPENCODE_ENABLE_*` feature switch is cleared
+too, since those can enable tools the deny list predates; and `OPENCODE_DISABLE_AUTOUPDATE=1`
+keeps an unattended reviewer from replacing your binary. `opencode run` always records a session, so cork
 also sets `OPENCODE_DB` to a throwaway database in that scratch directory: the review's session
 and messages never land in your `~/.local/share/opencode/opencode.db`, and with snapshots off no
 copy of the repo is written under `~/.local/share/opencode/snapshot/` either (verified on 1.17.3:
