@@ -21,6 +21,9 @@ class HarnessBase(unittest.TestCase):
         self._cfg = orchestrate.CONFIG_PATH
         orchestrate.CONFIG_PATH = Path(self.tmp.name) / "config.json"  # -> DEFAULT_CONFIG
         self._run, self._which = orchestrate.subprocess.run, orchestrate.shutil.which
+        # never let a test create scratch dirs in the real ~/.local/share/code-orchestrator
+        self.addCleanup(setattr, orchestrate, "STATE_DIR", orchestrate.STATE_DIR)
+        orchestrate.STATE_DIR = Path(self.tmp.name) / "state"
         self._env = {k: os.environ.pop(k, None)
                      for k in ("ANTHROPIC_API_KEY", "CORK_CLAUDE_BIN", "CORK_CODEX_BIN",
                                "CORK_OPENCODE_BIN", "CORK_PI_BIN", "OPENCODE_PERMISSION",
@@ -94,10 +97,7 @@ class ArgvTest(HarnessBase):
         self.assertIs(kw["stdin"], subprocess.DEVNULL)
 
     def _isolated_state_dir(self):
-        orig = orchestrate.STATE_DIR
-        orchestrate.STATE_DIR = Path(self.tmp.name) / "state"
-        self.addCleanup(setattr, orchestrate, "STATE_DIR", orig)
-        return orchestrate.STATE_DIR
+        return orchestrate.STATE_DIR  # patched per test in HarnessBase.setUp
 
     def test_opencode_auth_probe_is_hardened_like_the_review_call(self):
         # Preflight runs before _harness_call's refusal check, so the probe must not run from
@@ -108,18 +108,46 @@ class ArgvTest(HarnessBase):
         orchestrate._probe("opencode", "github-copilot/gpt-5")
         kw = fake.calls[0][1]
         self.assertEqual(kw["cwd"], str(state))
-        self.assertEqual(kw["env"]["XDG_CONFIG_HOME"], str(state / "empty-config-home"))
+        scratch = Path(kw["env"]["XDG_CONFIG_HOME"])
+        self.assertEqual(scratch.parent, state)                      # cork-owned, never the repo
+        self.assertEqual(kw["env"]["OPENCODE_DB"], str(scratch / "opencode.db"))
         self.assertNotIn("OPENCODE_CONFIG", kw["env"])
         self.assertEqual((kw["encoding"], kw["errors"]), ("utf-8", "replace"))
 
-    def test_empty_config_home_refuses_stray_contents(self):
+    def test_opencode_scratch_is_fresh_per_run_and_removed(self):
+        # opencode 1.17.3 scaffolds $XDG_CONFIG_HOME/opencode/opencode.jsonc on every start
+        # (verified live), so a persistent "must stay empty" dir failed the second run.
+        # Each run gets a fresh dir; what the CLI leaves there is deleted with it.
         state = self._isolated_state_dir()
-        home = state / "empty-config-home"; home.mkdir(parents=True)
-        (home / "opencode").mkdir()  # e.g. a planted opencode/opencode.json
-        with self.assertRaises(SystemExit):
-            orchestrate._empty_config_home()
-        (home / "opencode").rmdir()
-        self.assertEqual(orchestrate._empty_config_home(), str(home))
+        seen = []
+        def scaffolding_run(argv, **kw):
+            home = Path(kw["env"]["XDG_CONFIG_HOME"])
+            self.assertEqual(list(home.iterdir()), [])              # fresh and empty at launch
+            (home / "opencode").mkdir(); (home / "opencode" / "opencode.jsonc").write_text("{}")
+            Path(kw["env"]["OPENCODE_DB"]).write_text("session rows")
+            seen.append(home)
+            return subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
+        orchestrate.subprocess.run = scaffolding_run
+        for _ in range(2):
+            self.assertEqual(orchestrate._harness_call("opencode", "p/m", "S", "U", "/repo"), (200, "ok"))
+        self.assertEqual(len(set(seen)), 2)                          # never reused
+        for home in seen:
+            self.assertFalse(home.exists())                          # removed after the run
+        self.assertEqual([p for p in state.iterdir()], [])           # nothing accumulates
+
+    def test_opencode_session_state_stays_out_of_the_user_store(self):
+        # Verified live on 1.17.3: OPENCODE_DB redirects the session database, and
+        # `snapshot: false` (via OPENCODE_CONFIG_CONTENT) stops repo snapshots being written
+        # under ~/.local/share/opencode; both are table-owned and replace inherited values.
+        self._isolated_state_dir()
+        os.environ["OPENCODE_CONFIG_CONTENT"] = '{"mcp":{"evil":{}}}'
+        self.addCleanup(os.environ.pop, "OPENCODE_CONFIG_CONTENT", None)
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        orchestrate._harness_call("opencode", "p/m", "S", "U", "/repo")
+        env = fake.calls[0][1]["env"]
+        self.assertEqual(json.loads(env["OPENCODE_CONFIG_CONTENT"]), {"snapshot": False})
+        self.assertEqual(Path(env["OPENCODE_DB"]).parent, Path(env["XDG_CONFIG_HOME"]))
+        self.assertNotIn("{scratch}", env["OPENCODE_DB"])
 
     def test_opencode_runs_with_isolated_global_config(self):
         self._isolated_state_dir()
@@ -127,13 +155,17 @@ class ArgvTest(HarnessBase):
         # login (XDG_DATA_HOME) and the models cache (XDG_CACHE_HOME) are untouched.
         os.environ["XDG_CONFIG_HOME"] = "/home/someone/.config"  # inherited value must be overridden
         self.addCleanup(os.environ.pop, "XDG_CONFIG_HOME", None)
-        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        at_launch = {}
+        def recording_run(argv, **kw):
+            home = Path(kw["env"]["XDG_CONFIG_HOME"])
+            at_launch.update(env=kw["env"], is_dir=home.is_dir(), contents=list(home.iterdir()))
+            return subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
+        orchestrate.subprocess.run = recording_run
         orchestrate._harness_call("opencode", "p/m", "S", "U", "/repo")
-        env = fake.calls[0][1]["env"]
-        home = Path(env["XDG_CONFIG_HOME"])
-        self.assertNotEqual(str(home), "/home/someone/.config")
-        self.assertTrue(home.is_dir()); self.assertEqual(list(home.iterdir()), [])  # exists and is empty
-        self.assertNotIn("{empty_config_home}", env["XDG_CONFIG_HOME"])
+        env = at_launch["env"]
+        self.assertNotEqual(env["XDG_CONFIG_HOME"], "/home/someone/.config")
+        self.assertTrue(at_launch["is_dir"]); self.assertEqual(at_launch["contents"], [])  # exists and is empty
+        self.assertNotIn("{scratch}", env["XDG_CONFIG_HOME"])
         self.assertIn('"bash":"deny"', env["OPENCODE_PERMISSION"])  # JSON braces survived substitution
         # only CONFIG is redirected: data (login) and cache (models) dirs are inherited untouched
         for k in ("XDG_DATA_HOME", "XDG_CACHE_HOME"):
@@ -216,7 +248,7 @@ class ArgvTest(HarnessBase):
     def test_opencode_clears_inherited_explicit_config_variables(self):
         # OPENCODE_CONFIG / _CONFIG_DIR / _CONFIG_CONTENT are honoured regardless of
         # XDG_CONFIG_HOME and would re-introduce MCP/plugin config from the parent shell.
-        cleared = ("OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT",
+        cleared = ("OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR",
                    "OPENCODE_EXPERIMENTAL", "OPENCODE_EXPERIMENTAL_LSP_TOOL")
         for k in cleared:
             os.environ[k] = "inherited"; self.addCleanup(os.environ.pop, k, None)
@@ -230,14 +262,16 @@ class ArgvTest(HarnessBase):
         self.assertEqual(env["UNRELATED_VAR"], "kept")          # everything else still inherited
         self.assertIn("OPENCODE_PERMISSION", env)               # overlay still applied
 
-    def test_empty_config_home_is_only_created_for_lanes_that_use_it(self):
-        orig = orchestrate._empty_config_home
-        orchestrate._empty_config_home = lambda: self.fail("must not touch the state dir for this lane")
-        self.addCleanup(setattr, orchestrate, "_empty_config_home", orig)
+    def test_scratch_dir_is_only_created_for_lanes_that_use_it(self):
+        state = self._isolated_state_dir()
+        orig = orchestrate.tempfile.TemporaryDirectory
+        orchestrate.tempfile.TemporaryDirectory = lambda **kw: self.fail("must not touch the state dir for this lane")
+        self.addCleanup(setattr, orchestrate.tempfile, "TemporaryDirectory", orig)
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         for lane in ("codex", "claude", "pi"):
             with self.subTest(lane=lane):
                 orchestrate._harness_call(lane, "p/m", "S", "U", "/repo")  # no placeholder in these lanes' env
+        self.assertFalse(state.exists())
 
     def test_config_cannot_override_read_only_or_argv(self):
         orchestrate.CONFIG_PATH.write_text('{"rotation":[{"provider":"codex","model":"m"}],'
@@ -772,6 +806,20 @@ class AuthProbeTest(HarnessBase):
                 details = {}
                 self.assertEqual(orchestrate._probe("pi", "openai-codex/gpt-6-sol", details), expected)
         self.assertEqual(details["detail"], "missing_credentials")  # detail still parsed from stdout JSON
+
+    def test_failed_probe_without_structured_reason_has_empty_detail(self):
+        # "unavailable (error: glm-internal)" misreported the provider as the failure reason.
+        for lane, model in (("pi", "glm-internal/model"), ("opencode", "github-copilot/gpt")):
+            with self.subTest(lane=lane):
+                orchestrate.subprocess.run = _FakeRun(rc=1, out="garbage", err="boom")
+                details = {}
+                self.assertEqual(orchestrate._probe(lane, model, details), "error")
+                self.assertEqual(details["detail"], "")
+        # a structured reason is still preserved on failure
+        orchestrate.subprocess.run = _FakeRun(rc=1, out='{"status":"not_ready","reason":"provider_not_found"}')
+        details = {}
+        orchestrate._probe("pi", "bad/model", details)
+        self.assertEqual(details["detail"], "provider_not_found")
 
     def test_pi_provider_not_found_is_error_with_reason(self):
         orchestrate.subprocess.run = _FakeRun(

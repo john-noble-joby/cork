@@ -39,8 +39,11 @@ change, and add a section here.
   cleared). External skill discovery and Claude Code compatibility are disabled so a branch
   cannot inject instructions through `.claude/skills`, `.agents/skills` or `CLAUDE.md`. It also
   disables branch-controlled OpenCode project configuration and
-  isolates the global one (`XDG_CONFIG_HOME` → an empty cork-owned dir), so your interactive MCP
-  servers and plugins are not loaded into the reviewer; login and the models cache are unaffected.
+  isolates the global one (`XDG_CONFIG_HOME` → a fresh cork-owned scratch dir per run, deleted
+  afterwards), so your interactive MCP servers and plugins are not loaded into the reviewer;
+  login and the models cache are unaffected. The reviewer's session goes to a throwaway
+  `OPENCODE_DB` in that scratch dir and repo snapshots are off (`snapshot: false`), so a review
+  leaves no session or snapshot in `~/.local/share/opencode`.
   Because OpenCode still executes a project's `.opencode/{plugin,plugins}/*.{ts,js}` despite
   those switches (anomalyco/opencode#49836), the lane — and its auth probe — refuse to run when
   either directory exists in the tree under review or any directory above it, and it is reported
@@ -51,6 +54,13 @@ change, and add a section here.
   `--no-approve`.
 
 ### Fixed
+- The OpenCode lane's config-home isolation no longer breaks on the second run: OpenCode
+  scaffolds a stub `opencode.jsonc` into `$XDG_CONFIG_HOME/opencode/` on every start, which
+  tripped cork's "must be empty" check on the next review (or auth probe). Each run now gets a
+  fresh scratch directory that is removed when the CLI exits.
+- A failed harness auth probe with no structured reason (malformed Pi JSON, a nonzero OpenCode
+  `auth list`) reports an empty detail instead of presenting the model's provider as the cause
+  (`unavailable (error: glm-internal)`); structured JSON reasons are still preserved.
 - OpenCode's auth probe is provider-aware: it requires a listed credential — stored or
   environment-backed (`OpenAI OPENAI_API_KEY`) — for the model's own provider instead of any
   nonzero credential count, so an Anthropic login no longer makes a `github-copilot/…` lane

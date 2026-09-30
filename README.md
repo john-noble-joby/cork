@@ -259,11 +259,20 @@ a branch could otherwise inject instructions through them.
 `.opencode/` configuration or project instructions from weakening that policy; `--pure` also
 disables external plugins. Neither stops OpenCode loading your **global**
 `~/.config/opencode/opencode.json`, whose MCP servers have dynamic tool names the `plan` agent's
-wildcard allow admits, so cork also points `XDG_CONFIG_HOME` at an empty directory it owns for
-the run: no global config, while your login (`~/.local/share/opencode/auth.json`) and the models
+wildcard allow admits, so cork also points `XDG_CONFIG_HOME` at a fresh scratch directory it
+owns for the run and deletes afterwards (OpenCode scaffolds a stub `opencode.jsonc` and a
+`node_modules` tree there on every start, so a persistent "empty" directory would not stay
+empty): no global config, while your login (`~/.local/share/opencode/auth.json`) and the models
 cache (`~/.cache/opencode/`) live elsewhere and stay available (verified on 1.17.3: `mcp list`
-shows none, `auth list` unchanged); any inherited `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR` or
-`OPENCODE_CONFIG_CONTENT` is cleared from the lane's environment for the same reason. One gap those flags do not close: OpenCode still imports
+shows none, `auth list` unchanged); any inherited `OPENCODE_CONFIG` or `OPENCODE_CONFIG_DIR` is
+cleared from the lane's environment for the same reason, and `OPENCODE_CONFIG_CONTENT` is
+replaced with cork's own `{"snapshot":false}`. `opencode run` always records a session, so cork
+also sets `OPENCODE_DB` to a throwaway database in that scratch directory: the review's session
+and messages never land in your `~/.local/share/opencode/opencode.db`, and with snapshots off no
+copy of the repo is written under `~/.local/share/opencode/snapshot/` either (verified on 1.17.3:
+session count and snapshot tree unchanged across reviews; only `account.json` is touched). Note
+that OpenCode also reads `.opencode/opencode.json` from every directory *above* the repo — those
+are yours, not the branch's, so cork leaves them alone. One gap those flags do not close: OpenCode still imports
 and runs a project's `.opencode/plugins/*.{ts,js}` — and the singular `.opencode/plugin/`,
 which its loader scans too (upstream anomalyco/opencode#49836, open). That would be
 branch-controlled code executing outside the permission layer, so cork refuses to run the

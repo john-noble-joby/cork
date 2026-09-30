@@ -201,8 +201,11 @@ def _auth_detail(result: subprocess.CompletedProcess, model: str) -> str:
         if match:
             return match.group(1).strip()
     payload = _auth_json(result)
-    return str(payload.get("reason") or payload.get("provider")
-               or (model.split("/", 1)[0] if "/" in model else ""))
+    if payload.get("reason"):
+        return str(payload["reason"])
+    if result.returncode != 0:
+        return ""  # a failed probe with no structured reason: don't present the provider as the reason
+    return str(payload.get("provider") or (model.split("/", 1)[0] if "/" in model else ""))
 
 
 # Locally installed coding-agent CLIs used as independent, READ-ONLY reviewers.
@@ -267,14 +270,21 @@ HARNESSES: dict[str, dict] = {
             "OPENCODE_DISABLE_CLAUDE_CODE": "1",
             # Global ~/.config/opencode/opencode.json is still loaded by --pure and the
             # project-config switch; its MCP servers have dynamic tool names the plan
-            # agent's wildcard allow admits. Point XDG_CONFIG_HOME at a cork-owned empty
-            # dir instead: no global config, while login (XDG_DATA_HOME) and the models
-            # cache (XDG_CACHE_HOME) stay available. Substituted in _harness_call.
-            "XDG_CONFIG_HOME": "{empty_config_home}",
+            # agent's wildcard allow admits. Point XDG_CONFIG_HOME at a fresh cork-owned
+            # scratch dir instead (per run — opencode scaffolds a stub opencode.jsonc and
+            # a node_modules tree there on every start, so a persistent dir would not stay
+            # empty): no global config, while login (XDG_DATA_HOME) and the models cache
+            # (XDG_CACHE_HOME) stay available. The reviewer's session goes to a throwaway
+            # database in the same dir, and repo snapshots are off, so a review leaves no
+            # trace in ~/.local/share/opencode. {scratch} is substituted per invocation.
+            "XDG_CONFIG_HOME": "{scratch}",
+            "OPENCODE_DB": "{scratch}/opencode.db",
+            "OPENCODE_CONFIG_CONTENT": json.dumps({"snapshot": False}, separators=(",", ":")),
         },
         # These are honoured independently of XDG_CONFIG_HOME and would re-introduce a
-        # config (MCP servers, plugins) from the inherited environment.
-        "unset_env": ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT",
+        # config (MCP servers, plugins) from the inherited environment. (An inherited
+        # OPENCODE_CONFIG_CONTENT is replaced by the overlay above.)
+        "unset_env": ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR",
                       # experimental switches can enable tools (e.g. lsp) the deny list predates
                       "OPENCODE_EXPERIMENTAL", "OPENCODE_EXPERIMENTAL_LSP_TOOL"],
         # opencode still imports and runs a project's .opencode/{plugin,plugins}/*.{ts,js}
@@ -1254,17 +1264,16 @@ def _harness_argv(spec: dict, model: str, repo: str, system: str) -> list[str]:
     return argv + list(spec["extra_args"]) + [a.format(**sub) for a in spec["read_only"]]
 
 
-def _empty_config_home() -> str:
-    # A directory cork owns and never writes into, so a CLI told to read its global
-    # configuration from here finds none. Created on demand (owner-only) and verified
-    # empty on every use: anything inside would be loaded as global config.
-    path = STATE_DIR / "empty-config-home"
-    path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    stray = next(path.iterdir(), None)
-    if stray is not None:
-        fail(f"{path} must be empty — cork points reviewer CLIs at it as an empty config home, "
-             f"but it contains {stray.name!r}; remove its contents")
-    return str(path)
+def _harness_scratch(spec: dict) -> contextlib.AbstractContextManager[str]:
+    # A fresh owner-only directory per invocation for a lane whose env references
+    # {scratch} (config home, session database), deleted when the CLI exits: nothing a
+    # previous run — or anyone else — left there can be loaded as global config, and the
+    # reviewer's session state does not accumulate. Lanes without the placeholder never
+    # touch the state dir.
+    if not any("{scratch}" in v for v in spec.get("env", {}).values()):
+        return contextlib.nullcontext("")
+    STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return tempfile.TemporaryDirectory(dir=STATE_DIR, prefix="harness-")
 
 
 def _probe_cwd() -> str:
@@ -1274,16 +1283,14 @@ def _probe_cwd() -> str:
     return str(STATE_DIR)
 
 
-def _harness_env(spec: dict) -> dict[str, str]:
+def _harness_env(spec: dict, scratch: str) -> dict[str, str]:
     # The subprocess environment: inherited env minus the lane's `unset_env`, plus the
-    # table-owned overlay (immutable hardening). The only substitution is the placeholder
-    # for the empty config dir (str.replace, not .format: OPENCODE_PERMISSION holds JSON
-    # braces), resolved — and the directory created — only for a lane that uses it.
+    # table-owned overlay (immutable hardening). The only substitution is the per-run
+    # scratch dir placeholder (str.replace, not .format: OPENCODE_PERMISSION holds JSON
+    # braces).
     env = {k: v for k, v in os.environ.items() if k not in spec.get("unset_env", ())}
     for k, v in spec.get("env", {}).items():
-        if "{empty_config_home}" in v:
-            v = v.replace("{empty_config_home}", _empty_config_home())
-        env[k] = v
+        env[k] = v.replace("{scratch}", scratch)
     return env
 
 
@@ -1355,9 +1362,10 @@ def _harness_call(provider: str, model: str, system: str, user_msg: str,
     try:
         # utf-8 + replace: a stray byte from a wrapper must not raise UnicodeDecodeError
         # past the sentinel handling below. Table-owned `env` is immutable hardening.
-        r = subprocess.run(argv, cwd=repo, env=_harness_env(spec),
-                           capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=timeout, **run_kw)
+        with _harness_scratch(spec) as scratch:
+            r = subprocess.run(argv, cwd=repo, env=_harness_env(spec, scratch),
+                               capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=timeout, **run_kw)
     except subprocess.TimeoutExpired:
         return 504, f"{provider} timed out after {timeout}s"
     except (OSError, ValueError) as e:
@@ -1426,9 +1434,10 @@ def _harness_auth_probe(provider: str, model: str) -> dict:
     try:
         # Same environment hardening as the review call, from a cork-owned cwd (never the
         # repo), decoded leniently: a stray byte must yield `error`, not a traceback.
-        completed = subprocess.run(argv, timeout=10, stdin=subprocess.DEVNULL, cwd=cwd,
-                                   env=_harness_env(spec), capture_output=True, text=True,
-                                   encoding="utf-8", errors="replace")
+        with _harness_scratch(spec) as scratch:
+            completed = subprocess.run(argv, timeout=10, stdin=subprocess.DEVNULL, cwd=cwd,
+                                       env=_harness_env(spec, scratch), capture_output=True,
+                                       text=True, encoding="utf-8", errors="replace")
     except subprocess.TimeoutExpired:
         result["status"] = "timeout"
         return result
