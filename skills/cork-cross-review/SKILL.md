@@ -89,7 +89,10 @@ Once confirmed, record the kept refs for the fan-out exactly as preflight printe
 ```bash
 N=<pr-number>
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner | tr / -)   # PR numbers are per-repo
-OUT=~/.cache/cork/$REPO/pr$N/$(date -u +%Y%m%dT%H%M%SZ); mkdir -p "$OUT"  # one dir per run/round
+RUN=$(date -u +%Y%m%dT%H%M%SZ)                                        # one run = one review round
+OUT=~/.cache/cork/$REPO/pr$N/$RUN; mkdir -p "$OUT"                    # this run's reports only
+WT=/tmp/cork-$REPO-pr$N-$RUN/wt                                       # scratch worktree, unique per run
+TID="XR-$REPO-$N-$RUN"                                                # checkpoint id, unique per run
 gh pr view "$N" --json title,body,author,baseRefName,headRefName,headRefOid,additions,deletions,changedFiles > "$OUT/pr.json"
 gh pr diff "$N" > "$OUT/diff.patch"
 ```
@@ -104,22 +107,39 @@ sentence per required behaviour — do not let reviewers invent the spec.
 ```bash
 HEAD=$(jq -r .headRefOid "$OUT/pr.json"); BASE=$(jq -r .baseRefName "$OUT/pr.json")
 git fetch origin "$BASE" "pull/$N/head"        # fetch the base too, so origin/$BASE is current for slice diffs
-git worktree add --detach "/tmp/cork-pr$N/wt" "$HEAD"
+git worktree add --detach "$WT" "$HEAD"
 ```
 
 Run these in **your own clone** of the PR's repo (`origin` = the GitHub remote). For someone
 else's PR that is never the author's checkout; for your own PR it is, and that is fine — fetch and
 `worktree add` do not touch the working tree.
 
-Run the repo's own tests / lint / typecheck **inside that worktree first** (use the commands the
-repo's `CLAUDE.md` documents). If a gate is red, stop: report the failing gate to the author and
-do not spend reviewer time on a red branch. Record the green result — it goes in the report.
-Then snapshot the tree state the gates left behind, ignored files included, so Step 5 can tell a
-reviewer's write from a gate's build artifact:
+Run the repo's own tests / lint / typecheck **inside that worktree first** — but running gates
+**is executing the branch's code** on your host, with your credentials and network. So:
+
+- Take the gate commands from the **base branch's** `CLAUDE.md`
+  (`git show "origin/$BASE:CLAUDE.md"`), never from the PR head's — a hostile PR can edit that
+  file to make "the test command" anything.
+- For **someone else's PR**, show the user the exact commands and get explicit confirmation that
+  the branch is trusted before running them; even then, run them with secrets and network
+  removed where the platform allows (`env -i PATH="$PATH" HOME="$(mktemp -d)" <gate>` at
+  minimum). If the branch is not trusted, do not run the gates: record `gates: not run —
+  untrusted branch` in the report and let the reviewers judge the diff.
+- For your **own** PR the gates are the same commands you run every day; run them.
+
+If a gate is red, stop: report the failing gate to the author and do not spend reviewer time on a
+red branch. Record the result — it goes in the report. Then snapshot the **content** of every
+file the gates left behind (tracked, untracked and ignored alike), so Step 5 can tell a
+reviewer's write — including an in-place edit of an existing file — from a gate's build artifact:
 
 ```bash
-git -C "/tmp/cork-pr$N/wt" status --porcelain --ignored=matching -z | tr '\0' '\n' | sort > "$OUT/post-gate-status"
+snapshot() { find "$WT" -path "$WT/.git" -prune -o -type f -print0 | sort -z | xargs -0 sha256sum; }
+snapshot > "$OUT/post-gate-hashes"
 ```
+
+**Cleanup runs on every exit path**, not only after a clean verdict: a red gate, a plan-gate stop
+and a `BLOCK` verdict all end with the Step 8 cleanup block, so the next run never trips over a
+registered worktree or a stale checkpoint.
 
 Never use the author's checkout, and never let a reviewer share a worktree with anything that
 writes. The scratch tree is yours and is discarded at the end.
@@ -134,7 +154,7 @@ lines, tell the user the PR should be split before review; offer to review the s
 slice.
 
 ```bash
-git -C "/tmp/cork-pr$N/wt" diff "origin/$(jq -r .baseRefName "$OUT/pr.json")...HEAD" -- <pathspec…> > "$OUT/slice-<name>.patch"
+git -C "$WT" diff "origin/$(jq -r .baseRefName "$OUT/pr.json")...HEAD" -- <pathspec…> > "$OUT/slice-<name>.patch"
 ```
 
 ## Step 4 — Fan out (all lanes in parallel, one attempt each)
@@ -150,7 +170,7 @@ is for. Prefer API and prompt-only lanes for breadth.
 BASE=$(jq -r .baseRefName "$OUT/pr.json")
 for LANE in $LANES; do
   safe="${LANE//\//-}"
-  python3 "$CORK_HOME/orchestrate.py" "PR$N" "/tmp/cork-pr$N/wt" \
+  python3 "$CORK_HOME/orchestrate.py" "$TID" "$WT" \
       --review-model "$LANE" --base-branch "origin/$BASE" --skip-validation \
       > "$OUT/review-$safe.txt" 2> "$OUT/review-$safe.err" &
 done
@@ -162,15 +182,16 @@ review-only path reads its story from cork's checkpoint file
 `~/.local/share/code-orchestrator/<ticket>.json` (`done.summary`), and with no checkpoint every
 lane receives only "Review the branch changes for <ticket>." — the contract never arrives. So
 **before the fan-out**, write the story and seed the checkpoint for the ticket id you pass as the
-first positional (`PR$N` below; pick another id if a real `PR$N` checkpoint already exists):
+first positional — `$TID`, which is unique per run so it can neither collide with a concurrent
+review of the same PR number nor overwrite a real cork checkpoint (Step 8 deletes it):
 
 ```bash
 { echo "## Acceptance contract"; cat "$OUT/contract.md"; echo; echo "## In-scope paths"; echo "<pathspec or 'whole diff'>";
   echo; echo "## Rule"; echo "<the verbatim rule below>"; } > "$OUT/story.md"
 mkdir -p ~/.local/share/code-orchestrator
-jq -n --rawfile s "$OUT/story.md" --arg tid "PR$N" \
+jq -n --rawfile s "$OUT/story.md" --arg tid "$TID" \
   '{version:2, ticket_id:$tid, done:{implement:true, summary:$s}}' \
-  > ~/.local/share/code-orchestrator/"PR$N".json
+  > ~/.local/share/code-orchestrator/"$TID".json
 ```
 
 A `--story-file` flag that removes this pre-seed is a registered follow-on; until it lands, the
@@ -181,12 +202,12 @@ scratch worktree as their working directory — `orchestrate.py` passes it as `c
 read-only flags; you do not need to add prompt text for that. The story text for every lane
 carries this rule, verbatim:
 
-> The DIFF is the object of review; the checkout is read-only CONTEXT. If you have read tools,
-> verify your claims against it — callers, merge-base behaviour via `git show <merge_base>:<path>`,
-> pinned dependencies — and never edit, stage, commit or create files inside it. If you have no
-> tools, mark anything you cannot verify from the prompt as "cannot verify" — do not guess. Review
-> ONLY against the contract. Report blocking / non-blocking / suggestions, each with file:line and
-> a concrete fix.
+> The DIFF is the object of review; the checkout is read-only CONTEXT at the PR head. If you have
+> read tools, verify your claims against it — callers, definitions, pinned dependencies, tests —
+> by reading files; you have no shell, so the pre-change code is only what the diff's `-` lines
+> show. Never edit, stage, commit or create files inside it. If you have no tools, mark anything
+> you cannot verify from the prompt as "cannot verify" — do not guess. Review ONLY against the
+> contract. Report blocking / non-blocking / suggestions, each with file:line and a concrete fix.
 
 Lane-specific rules learned the hard way:
 
@@ -224,15 +245,16 @@ Lane-specific rules learned the hard way:
 ## Step 5 — Tamper check
 
 ```bash
-git -C "/tmp/cork-pr$N/wt" status --porcelain --ignored=matching -z | tr '\0' '\n' | sort > "$OUT/post-review-status"
-diff "$OUT/post-gate-status" "$OUT/post-review-status"
+snapshot > "$OUT/post-review-hashes"
+diff "$OUT/post-gate-hashes" "$OUT/post-review-hashes"
 ```
 
-Any difference means a reviewer wrote into the tree (the gates' own artifacts are already in the
-baseline, and `--ignored=matching` catches writes under ignored paths that plain `status` and
-`clean -fd` would miss). Record it in the report, disregard those edits (they never reach the
-deliverable), and reset the tree completely before the next round:
-`git -C … checkout -- . && git -C … clean -fdx` — or remove and re-add the worktree.
+Any difference — a new, deleted or **modified** file, tracked, untracked or ignored — means a
+reviewer wrote into the tree (the gates' own artifacts are already in the baseline, and hashing
+content catches an in-place edit that a `git status` comparison would not). Record it in the
+report, disregard those edits (they never reach the deliverable), and reset the tree completely
+before the next round:
+`git -C "$WT" checkout -- . && git -C "$WT" clean -fdx` — or remove and re-add the worktree.
 
 ## Step 6 — Consolidate into one verdict
 
@@ -283,8 +305,11 @@ Zero blockers **and** green gates → the PR is ready for the human to merge. Sa
 consolidated report, and clean up:
 
 ```bash
-git worktree remove --force "/tmp/cork-pr$N/wt" && git worktree prune
+git worktree remove --force "$WT" && git worktree prune
+rm -f ~/.local/share/code-orchestrator/"$TID".json      # the seeded story checkpoint
 ```
+
+Run this block on **every** exit — red gate, plan-gate stop, `BLOCK`, or done.
 
 You do **not** merge. Non-blocking findings are the author's follow-ups; list them, don't block
 on them.
@@ -292,12 +317,13 @@ on them.
 ## Running the lanes from herdr (teammates without Claude Code)
 
 The lanes are plain CLI invocations, so a teammate who drives agents from
-[herdr](https://herdr.dev) can run the same review: open a pane per lane in the scratch worktree
-and either run `orchestrate.py --review-model <lane>` directly, or use herdr's own agent driver
-(`herdr agent start reviewer --kind codex -- -m gpt-5.6-sol`, `herdr agent prompt reviewer "<story
-+ contract + rule above>" --wait`, then read the report file the agent wrote). The consolidation
-step is the same. A native `herdr` transport inside `orchestrate.py` is planned; until then this
-manual mapping is the supported path.
+[herdr](https://herdr.dev) can run the same review: open a pane per lane and run **the Step 4
+`orchestrate.py … --review-model <lane>` command** in it, exactly as written. Do **not** start
+the agent through herdr's native driver (`herdr agent start … --kind codex -- …`): arguments after
+`--` go straight to the vendor CLI, so that path skips everything cork enforces — the read-only
+sandbox and disabled tools, the config isolation, the prompt/standards construction and the
+report capture — and is not a cork review. The consolidation step is the same. A native `herdr`
+transport inside `orchestrate.py` is planned; until then this mapping is the supported path.
 
 ## Notes
 
