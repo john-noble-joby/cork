@@ -168,6 +168,16 @@ class ArgvTest(HarnessBase):
             orchestrate._harness_call("codex", "m", "S", "U", "")
         self.assertEqual(fake.calls, [])
 
+    def test_argv_limit_boundary_counts_the_nul_terminator(self):
+        # Linux MAX_ARG_STRLEN (131072) includes the NUL: 131071 usable bytes pass, 131072 do not.
+        # Pi carries the standards via --system-prompt, so its prompt argv element is exactly
+        # user_msg (opencode prepends the standards to the prompt, which would skew the boundary).
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        status, _ = orchestrate._harness_call("pi", "p/m", "S", "x" * (orchestrate._MAX_ARG_BYTES - 1), "/repo")
+        self.assertEqual((status, len(fake.calls)), (200, 1))
+        status, _ = orchestrate._harness_call("pi", "p/m", "S", "x" * orchestrate._MAX_ARG_BYTES, "/repo")
+        self.assertEqual((status, len(fake.calls)), (413, 1))  # refused, no second exec
+
     def test_oversized_argv_element_is_refused_before_exec(self):
         big = "x" * (orchestrate._MAX_ARG_BYTES + 1)
         fake = _FakeRun(); orchestrate.subprocess.run = fake

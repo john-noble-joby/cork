@@ -251,7 +251,7 @@ HARNESSES: dict[str, dict] = {
 # The only per-harness keys config.json may set — `argv`/`read_only` are not
 # user-overridable, so the read-only contract does not depend on configuration.
 _HARNESS_CONFIG_KEYS = ("bin", "extra_args", "timeout")
-_MAX_ARG_BYTES = 131_072  # Linux MAX_ARG_STRLEN: the largest single argv element execve accepts
+_MAX_ARG_BYTES = 131_072  # Linux MAX_ARG_STRLEN — counts the NUL terminator, so usable bytes are one fewer
 
 DEFAULT_CONFIG = {
     "version": 1,
@@ -1206,7 +1206,7 @@ def _harness_call(provider: str, model: str, system: str, user_msg: str,
     # or the --system-prompt standards) is capped at 128 KiB by the kernel. Refuse up
     # front with a legible reason instead of surfacing "[Errno 7] Argument list too long".
     largest = max((len(a.encode("utf-8", "replace")) for a in argv), default=0)
-    if largest > _MAX_ARG_BYTES:
+    if largest + 1 > _MAX_ARG_BYTES:  # +1: the kernel measures the string including its NUL
         return 413, (f"{provider}: a single argument is {largest} bytes but the platform limit "
                      f"is {_MAX_ARG_BYTES}; reduce the diff or standards, or use a stdin-prompt lane")
     try:
