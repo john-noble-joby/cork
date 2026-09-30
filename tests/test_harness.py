@@ -154,6 +154,22 @@ class ArgvTest(HarnessBase):
         status, _ = orchestrate._harness_call("opencode", "p/m", "S", "U", str(clean))
         self.assertEqual((status, len(fake.calls)), (200, 1))  # a repo without plugins runs
 
+    def test_opencode_refusal_scans_up_to_the_worktree_root(self):
+        # OpenCode discovers .opencode upward from its cwd, so a repo path naming a
+        # subdirectory must still see /repo/.opencode/plugins.
+        root = Path(self.tmp.name) / "wt"; (root / "sub" / "deeper").mkdir(parents=True)
+        (root / ".git").write_text("gitdir: /elsewhere\n")  # linked-worktree marker
+        (root / ".opencode" / "plugins").mkdir(parents=True)
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        status, text = orchestrate._harness_call("opencode", "p/m", "S", "U", str(root / "sub" / "deeper"))
+        self.assertEqual((status, fake.calls), (403, []))
+        self.assertIn(str(root / ".opencode" / "plugins"), text)
+        # the scan stops at the worktree root: a plugins dir ABOVE the repo is not the branch's
+        outer = Path(self.tmp.name) / "outer"; (outer / ".opencode" / "plugins").mkdir(parents=True)
+        inner = outer / "repo"; inner.mkdir(); (inner / ".git").mkdir()
+        status, _ = orchestrate._harness_call("opencode", "p/m", "S", "U", str(inner))
+        self.assertEqual((status, len(fake.calls)), (200, 1))
+
     def test_opencode_clears_inherited_explicit_config_variables(self):
         # OPENCODE_CONFIG / _CONFIG_DIR / _CONFIG_CONTENT are honoured regardless of
         # XDG_CONFIG_HOME and would re-introduce MCP/plugin config from the parent shell.

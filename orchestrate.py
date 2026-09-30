@@ -1268,6 +1268,20 @@ def _harness_env(spec: dict) -> dict[str, str]:
     return env
 
 
+def _find_upward(start: Path, rel: str) -> Path | None:
+    # CLIs discover project config upward from their cwd to the worktree root, so a repo
+    # path naming a subdirectory must not skip a match higher up. Walk from `start` to the
+    # first ancestor holding `.git` (a dir, or a file for linked worktrees), inclusive;
+    # without one, to the filesystem root.
+    here = start.resolve()
+    while True:
+        if (here / rel).exists():
+            return here / rel
+        if (here / ".git").exists() or here.parent == here:
+            return None
+        here = here.parent
+
+
 def _harness_call(provider: str, model: str, system: str, user_msg: str,
                   repo: str, timeout: int | None = None) -> tuple[int, str]:
     # Exit 0 -> (200, stdout). Anything else -> (non-200, diagnostic). One attempt.
@@ -1275,8 +1289,9 @@ def _harness_call(provider: str, model: str, system: str, user_msg: str,
         fail(f"{provider} harness review needs a repo path (cwd for the reviewer)")
     spec = _harness_settings(provider)
     for rel in spec.get("refuse_paths", []):
-        if (Path(repo) / rel).exists():
-            return 403, (f"{provider}: {rel} exists in the repo under review and {spec['bin']} "
+        hit = _find_upward(Path(repo), rel)
+        if hit is not None:
+            return 403, (f"{provider}: {hit} exists in the tree under review and {spec['bin']} "
                          f"would execute it (branch-controlled code, anomalyco/opencode#49836) — "
                          f"refusing to run this lane")
     timeout = timeout or spec["timeout"]
