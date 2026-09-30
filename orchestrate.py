@@ -147,20 +147,18 @@ def _opencode_credential_providers(result: subprocess.CompletedProcess) -> set[s
     by_name, by_env = _opencode_provider_index()
     providers: set[str] = set()
     for line in _plain_auth_output(result).splitlines():
-        # "<Display Name> <method-or-ENV_VAR>", with or without the leading bullet. The
-        # trailing token anchors the match — a method word (any case) or an UPPER_CASE env
-        # var name — so neither footer can parse as a provider.
-        m = re.match(r"^\s*(?:●\s+)?(.+?)\s+((?i:oauth|api|apikey|api-key|env|token)"
-                     r"|[A-Z][A-Z0-9_]{2,})\s*$", line)
-        if not m:
+        # Each credential line is "<Display Name> <method-or-ENV_VAR>" (optionally
+        # bulleted); footers/headers ("└  2 credentials", "┌  Environment") are not.
+        tokens = re.sub(r"^\s*●\s*", "", line).split()
+        if len(tokens) < 2:
             continue
-        name, token = m.group(1).strip(), m.group(2)
-        if token in by_env:
+        name, token = " ".join(tokens[:-1]), tokens[-1]
+        if token in by_env:                       # env-backed entry: the var is unambiguous
             providers.add(by_env[token])
-        elif name.lower() in by_name:
+        elif name.lower() in by_name:             # known display name, whatever the method word
             providers.add(by_name[name.lower()])
-        else:
-            providers.add(re.sub(r"\s+", "-", name.lower()))
+        elif re.fullmatch(r"(?i:oauth|api|apikey|api-key|env|token)|[A-Z][A-Z0-9_]{2,}", token):
+            providers.add(re.sub(r"\s+", "-", name.lower()))  # no cache: slug the name
     return providers
 
 
@@ -272,7 +270,7 @@ HARNESSES: dict[str, dict] = {
         # --pure and OPENCODE_DISABLE_PROJECT_CONFIG (anomalyco/opencode#49836, open). That
         # is branch-controlled code executing outside the permission layer, so the lane
         # refuses to run at all when the repo under review ships that directory.
-        "refuse_paths": [".opencode/plugins", ".opencode/plugin"],
+        "refuse_paths": [".opencode/plugins"],
         "auth_probe": {"argv": ["auth", "list"], "success": _opencode_auth_ready,
                        "logged_out": _opencode_auth_logged_out,
                        "detail": _auth_detail, "login": "opencode auth login"},
@@ -865,8 +863,9 @@ def _validate_harness_cfg(name: str, hc: dict) -> None:
         fail(f"config.providers.{name} must be an object")
     unknown = sorted(set(hc) - {"enabled", *_HARNESS_CONFIG_KEYS})
     if unknown:  # stderr: stdout of `auth status --json` / `config show` must stay parseable
-        print(f"  ⚠ config.providers.{name}: ignoring unknown keys: {', '.join(unknown)}",
-              file=sys.stderr)
+        print(f"  ⚠ config.providers.{name}: ignoring unknown keys: {', '.join(unknown)} "
+              f"(only {', '.join(_HARNESS_CONFIG_KEYS)} are configurable; env/unset_env/"
+              f"refuse_paths are cork-enforced)", file=sys.stderr)
     if "bin" in hc and (not isinstance(hc["bin"], str) or not hc["bin"].strip()):
         fail(f"config.providers.{name}.bin must be a non-empty string")
     if "bin" in hc:
@@ -1238,10 +1237,22 @@ def _harness_argv(spec: dict, model: str, repo: str, system: str) -> list[str]:
 
 def _empty_config_home() -> str:
     # A directory cork owns and never writes into, so a CLI told to read its global
-    # configuration from here finds none. Created on demand.
+    # configuration from here finds none. Created on demand (owner-only) and verified
+    # empty on every use: anything inside would be loaded as global config.
     path = STATE_DIR / "empty-config-home"
-    path.mkdir(parents=True, exist_ok=True)
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    stray = next(path.iterdir(), None)
+    if stray is not None:
+        fail(f"{path} must be empty — cork points reviewer CLIs at it as an empty config home, "
+             f"but it contains {stray.name!r}; remove its contents")
     return str(path)
+
+
+def _probe_cwd() -> str:
+    # Auth probes never run from the repo under review: a CLI may load project config or
+    # plugins from its cwd, and preflight runs before _harness_call's refusal check.
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    return str(STATE_DIR)
 
 
 def _harness_env(spec: dict) -> dict[str, str]:
@@ -1350,8 +1361,11 @@ def _harness_auth_probe(provider: str, model: str) -> dict:
     sub = {"model_provider": model.split("/", 1)[0]}
     argv = [spec["bin"], *(arg.format(**sub) for arg in spec["auth_probe"]["argv"])]
     try:
-        completed = subprocess.run(argv, timeout=10, stdin=subprocess.DEVNULL,
-                                   capture_output=True, text=True)
+        # Same environment hardening as the review call, from a cork-owned cwd (never the
+        # repo), decoded leniently: a stray byte must yield `error`, not a traceback.
+        completed = subprocess.run(argv, timeout=10, stdin=subprocess.DEVNULL, cwd=_probe_cwd(),
+                                   env=_harness_env(spec), capture_output=True, text=True,
+                                   encoding="utf-8", errors="replace")
     except subprocess.TimeoutExpired:
         result["status"] = "timeout"
         return result

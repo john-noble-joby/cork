@@ -93,7 +93,36 @@ class ArgvTest(HarnessBase):
         self.assertNotIn("input", kw)
         self.assertIs(kw["stdin"], subprocess.DEVNULL)
 
+    def _isolated_state_dir(self):
+        orig = orchestrate.STATE_DIR
+        orchestrate.STATE_DIR = Path(self.tmp.name) / "state"
+        self.addCleanup(setattr, orchestrate, "STATE_DIR", orig)
+        return orchestrate.STATE_DIR
+
+    def test_opencode_auth_probe_is_hardened_like_the_review_call(self):
+        # Preflight runs before _harness_call's refusal check, so the probe must not run from
+        # the repo (project plugins) nor with the parent's config variables.
+        state = self._isolated_state_dir()
+        os.environ["OPENCODE_CONFIG"] = "inherited"; self.addCleanup(os.environ.pop, "OPENCODE_CONFIG", None)
+        fake = _FakeRun(out="●  GitHub Copilot oauth\n└  1 credential\n"); orchestrate.subprocess.run = fake
+        orchestrate._probe("opencode", "github-copilot/gpt-5")
+        kw = fake.calls[0][1]
+        self.assertEqual(kw["cwd"], str(state))
+        self.assertEqual(kw["env"]["XDG_CONFIG_HOME"], str(state / "empty-config-home"))
+        self.assertNotIn("OPENCODE_CONFIG", kw["env"])
+        self.assertEqual((kw["encoding"], kw["errors"]), ("utf-8", "replace"))
+
+    def test_empty_config_home_refuses_stray_contents(self):
+        state = self._isolated_state_dir()
+        home = state / "empty-config-home"; home.mkdir(parents=True)
+        (home / "opencode").mkdir()  # e.g. a planted opencode/opencode.json
+        with self.assertRaises(SystemExit):
+            orchestrate._empty_config_home()
+        (home / "opencode").rmdir()
+        self.assertEqual(orchestrate._empty_config_home(), str(home))
+
     def test_opencode_runs_with_isolated_global_config(self):
+        self._isolated_state_dir()
         # ~/.config/opencode/opencode.json (MCP servers, plugins, agents) must not load;
         # login (XDG_DATA_HOME) and the models cache (XDG_CACHE_HOME) are untouched.
         os.environ["XDG_CONFIG_HOME"] = "/home/someone/.config"  # inherited value must be overridden
@@ -427,7 +456,8 @@ class ConfigAndProbeTest(HarnessBase):
         import contextlib
         base = {"rotation": [{"provider": "opencode", "model": "p/m"}]}
         for extra, expected in (({"env": {}},
-                                 "  ⚠ config.providers.opencode: ignoring unknown keys: env\n"),
+                                 "  ⚠ config.providers.opencode: ignoring unknown keys: env (only bin, extra_args, "
+                                 "timeout are configurable; env/unset_env/refuse_paths are cork-enforced)\n"),
                                 ({}, "")):
             with self.subTest(extra=extra):
                 out, err = io.StringIO(), io.StringIO()
@@ -539,8 +569,12 @@ class AuthProbeTest(HarnessBase):
                 self.assertEqual(orchestrate._probe(lane, model, details), "ok")
                 self.assertEqual(details["status"], "ok")
                 self.assertEqual(details["detail"], detail)
-                self.assertEqual(fake.calls, [(argv, {"timeout": 10, "stdin": subprocess.DEVNULL,
-                                                      "capture_output": True, "text": True})])
+                called_argv, kw = fake.calls[0]
+                self.assertEqual(called_argv, argv)
+                self.assertEqual((kw["timeout"], kw["stdin"], kw["capture_output"], kw["text"],
+                                  kw["encoding"], kw["errors"]),
+                                 (10, subprocess.DEVNULL, True, True, "utf-8", "replace"))
+                self.assertEqual(kw["cwd"], str(orchestrate.STATE_DIR))  # never the repo under review
 
     def test_outcome_mapping(self):
         for fake, expected in ((_FakeRun(rc=1), "not_logged_in"),
@@ -594,6 +628,7 @@ class AuthProbeTest(HarnessBase):
             ("└  2 credentials\n", "github-copilot/gpt-5", "not_logged_in"),  # aggregate count alone is not auth
             ("└  0 credentials\n", "github-copilot/gpt-5", "not_logged_in"),
             ("●  GitHub Copilot oauth\n1 credential", "github-copilot/gpt-5", "ok"),
+            ("●  GitHub Copilot pat\n1 credential", "github-copilot/gpt-5", "ok"),   # unknown method word: name resolves via cache
         ):
             with self.subTest(output=output[-60:], model=model):
                 orchestrate.subprocess.run = _FakeRun(out=output)
