@@ -136,30 +136,48 @@ file the gates left behind (tracked, untracked and ignored alike), so Step 5 can
 reviewer's write — including an in-place edit of an existing file — from a gate's build artifact:
 
 ```bash
-snapshot() {   # type/mode/link target of EVERY entry except .git (dirs and special files too),
-               # plus the content of every regular file: a chmod, a new empty dir, a new or
-               # retargeted symlink, or a file turned into a link all show up
-  find "$WT" -mindepth 1 -path "$WT/.git" -prune -o -print0 | sort -z | xargs -0 stat -c '%A %N'
-  find "$WT" -path "$WT/.git" -prune -o -type f -print0 | sort -z | xargs -0 sha256sum
+snapshot() {   # snapshot <tree>: mode + type + link target of EVERY entry except .git (dirs and
+               # special files too) and sha256 of every regular file — a chmod, a new empty dir, a
+               # new or retargeted symlink, or a file turned into a link all show up. Python stdlib
+               # (cork needs 3.10+ anyway), so it behaves the same on Linux and macOS.
+  python3 - "$1" <<'PY'
+import hashlib, os, sys
+root = sys.argv[1]
+for dirpath, dirs, files in os.walk(root):
+    dirs[:] = sorted(d for d in dirs if not (dirpath == root and d == ".git"))
+    for name in sorted(dirs + files):
+        path = os.path.join(dirpath, name); st = os.lstat(path)
+        line = f"{oct(st.st_mode)} {os.path.relpath(path, root)}"
+        if os.path.islink(path):
+            line += " -> " + os.readlink(path)
+        elif os.path.isfile(path):
+            line += " " + hashlib.sha256(open(path, "rb").read()).hexdigest()
+        print(line)
+PY
 }
-snapshot > "$OUT/post-gate-hashes"
+snapshot "$WT" > "$OUT/post-gate-hashes"
 ```
 
 **Cleanup runs on every exit path**, not only after a clean verdict: a red gate, a plan-gate stop
 and a `BLOCK` verdict all end with the Step 8 cleanup block, so the next run never trips over a
 registered worktree or a stale checkpoint.
 
-Never use the author's checkout, and never let a reviewer share a worktree with anything that
-writes. The scratch tree is yours and is discarded at the end.
+Never use the author's checkout. `$WT` is where the gates run and the cwd for prompt-only lanes
+(which cannot touch it); every **tree-capable** lane gets its **own** detached worktree at the same
+head in Step 4, so a write is attributable to one lane and is never seen by another reviewer. All
+scratch trees are yours and are discarded at the end.
 
 ## Step 3 — Slice large PRs
 
-Under ~1,500 diff lines: one slice, the whole diff. Above that, split by **concern** into
-disjoint pathspecs (e.g. `Server/**` vs `WebClient/**`, or migration vs handler vs tests), write a
-per-slice contract excerpt, and add one **seams** slice that gets the full *code* diff (no tests,
-no docs) with the instruction "review only the interactions between the parts". Above ~5,000
-lines, tell the user the PR should be split before review; offer to review the smallest complete
-slice.
+A "slice" here is a **focus area**, not a smaller prompt: review-only mode has no pathspec or
+diff-range input, so **every lane always receives the full `<base>...HEAD` diff** (see issue #22).
+Under ~1,500 diff lines: one slice, the whole diff. Above that, define slices by **concern** as
+disjoint pathspecs (e.g. `Server/**` vs `WebClient/**`, or migration vs handler vs tests), each
+with a contract excerpt and an "in-scope paths — ignore the rest" instruction in its story, plus
+one **seams** slice whose story says "review only the interactions between the parts; ignore tests
+and docs". The per-slice patch below is for *your* reading when you consolidate and attribute
+findings — no lane consumes it. Above ~5,000 lines the prompt budget will truncate file contents
+regardless of slicing, so tell the user the PR should be split before review.
 
 ```bash
 git -C "$WT" diff "origin/$(jq -r .baseRefName "$OUT/pr.json")...HEAD" -- <pathspec…> > "$OUT/slice-<name>.patch"
@@ -180,7 +198,13 @@ SLICE=whole                     # or the slice's name: every report file carries
                                 # reused on another slice never overwrites its earlier report
 for LANE in $LANES; do
   safe="${LANE//\//-}"
-  ( python3 "$CORK_HOME/orchestrate.py" "$TID" "$WT" \
+  LANE_WT="$WT"                                   # prompt-only lanes (codex, pi, API) cannot touch the tree
+  case "$LANE" in claude/*|opencode/*)            # tree-capable: private tree, so a write is attributable
+    LANE_WT="${WT%/wt}/wt-$safe"
+    [ -d "$LANE_WT" ] || git worktree add --detach "$LANE_WT" "$HEAD" >/dev/null
+    snapshot "$LANE_WT" > "$OUT/pre-$safe-hashes" ;;
+  esac
+  ( python3 "$CORK_HOME/orchestrate.py" "$TID" "$LANE_WT" \
         --review-model "$LANE" --base-branch "origin/$BASE" --skip-validation \
         > "$OUT/review-$SLICE-$safe.txt" 2> "$OUT/review-$SLICE-$safe.err"
     echo $? > "$OUT/review-$SLICE-$safe.status" ) &      # `wait` alone discards exit codes
@@ -263,16 +287,18 @@ Lane-specific rules learned the hard way:
 ## Step 5 — Tamper check
 
 ```bash
-snapshot > "$OUT/post-review-hashes"
-diff "$OUT/post-gate-hashes" "$OUT/post-review-hashes"
+snapshot "$WT" > "$OUT/post-review-hashes"; diff "$OUT/post-gate-hashes" "$OUT/post-review-hashes"
+for pre in "$OUT"/pre-*-hashes; do                          # one private tree per tree-capable lane
+  safe=${pre#"$OUT"/pre-}; safe=${safe%-hashes}
+  snapshot "${WT%/wt}/wt-$safe" > "$OUT/post-$safe-hashes"; diff "$pre" "$OUT/post-$safe-hashes" || echo "TAMPERED: $safe"
+done
 ```
 
-Any difference — a new, deleted or **modified** file, tracked, untracked or ignored — means a
-reviewer wrote into the tree (the gates' own artifacts are already in the baseline, and hashing
-content catches an in-place edit that a `git status` comparison would not). Record it in the
-report, disregard those edits (they never reach the deliverable), and reset the tree completely
-before the next round:
-`git -C "$WT" checkout -- . && git -C "$WT" clean -fdx` — or remove and re-add the worktree.
+Any difference — a new, deleted or **modified** entry, tracked, untracked or ignored — means that
+lane wrote into its tree (the gates' own artifacts are already in `$WT`'s baseline; each lane's
+tree is compared against its own fresh snapshot, so the write is attributed to exactly one lane,
+and no other reviewer ever read it). Record it in the roster as `tampered`, disregard that lane's
+edits (they never reach the deliverable), and remove the affected worktree before the next round.
 
 ## Step 6 — Consolidate into one verdict
 
@@ -325,7 +351,7 @@ consolidated report, and clean up:
 
 ```bash
 # Each step independent: one failure must not skip the others (it is reported, not hidden).
-git worktree remove --force "$WT" || echo "cleanup: worktree removal failed: $WT" >&2
+for t in "${WT%/wt}"/wt*; do git worktree remove --force "$t" || echo "cleanup: worktree removal failed: $t" >&2; done
 git worktree prune                || echo "cleanup: worktree prune failed" >&2
 rm -f ~/.local/share/code-orchestrator/"$TID".json || echo "cleanup: checkpoint removal failed: $TID" >&2   # the seeded story checkpoint
 ```
