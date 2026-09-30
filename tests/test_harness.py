@@ -975,19 +975,29 @@ class AuthProbeTest(HarnessBase):
         self.assertEqual(details["detail"], "provider_not_found")
 
     def test_pi_logged_out_requires_rc1_not_ready_json(self):
+        # (fake, label, expected detail): an error verdict never presents the model's provider
+        # as its cause — only a structured reason survives, else the detail is empty.
         cases = (
-            (_FakeRun(rc=1, out="", err="provider failed"), "non-JSON rc1"),
-            (_FakeRun(rc=0, out="", err="provider failed"), "non-JSON rc0"),
-            (_FakeRun(rc=1, out="[]"), "non-object JSON rc1"),
+            (_FakeRun(rc=1, out="", err="provider failed"), "non-JSON rc1", ""),
+            (_FakeRun(rc=0, out="", err="provider failed"), "non-JSON rc0", ""),
+            (_FakeRun(rc=0, out="garbage"), "malformed JSON rc0", ""),
+            (_FakeRun(rc=1, out="[]"), "non-object JSON rc1", ""),
+            (_FakeRun(rc=0, out="[]"), "non-object JSON rc0", ""),
             (_FakeRun(rc=0, out='{"status":"not_ready","reason":"missing_credentials"}'),
-             "not_ready rc0"),
+             "not_ready rc0", "missing_credentials"),
             (_FakeRun(rc=1, out='{"status":"ready","provider":"glm-internal"}'),
-             "ready rc1"),
+             "ready rc1", ""),
         )
-        for fake, label in cases:
+        for fake, label, detail in cases:
             with self.subTest(case=label):
                 orchestrate.subprocess.run = fake
-                self.assertEqual(orchestrate._probe("pi", "glm-internal/model"), "error")
+                details = {}
+                self.assertEqual(orchestrate._probe("pi", "glm-internal/model", details), "error")
+                self.assertEqual(details["detail"], detail)
+        orchestrate.subprocess.run = _FakeRun(rc=0, out='{"status":"ready","provider":"glm-internal"}')
+        details = {}
+        self.assertEqual(orchestrate._probe("pi", "glm-internal/model", details), "ok")
+        self.assertEqual(details["detail"], "glm-internal")      # a ready probe still names its provider
 
     def test_each_lane_logged_out_and_not_installed(self):
         for lane in orchestrate.HARNESSES:

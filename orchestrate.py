@@ -197,6 +197,18 @@ def _pi_auth_logged_out(result: subprocess.CompletedProcess, _model: str) -> boo
             and payload.get("reason") != "provider_not_found")
 
 
+def _pi_auth_detail(result: subprocess.CompletedProcess, model: str) -> str:
+    # Pi speaks JSON: a structured reason wins; a ready probe names its provider; anything
+    # else (malformed or non-object output, even at exit 0) has no cause to report, and the
+    # model's provider must not be presented as one.
+    payload = _pi_auth_payload(result)
+    if payload.get("reason"):
+        return str(payload["reason"])
+    if _pi_auth_ready(result, model):
+        return str(payload.get("provider") or model.split("/", 1)[0])
+    return ""
+
+
 def _auth_detail(result: subprocess.CompletedProcess, model: str) -> str:
     text = _plain_auth_output(result)
     for pattern in (r"^Logged in using (.+)$", r"^Login method: (.+)$"):
@@ -339,7 +351,7 @@ HARNESSES: dict[str, dict] = {
         "auth_probe": {"argv": ["auth", "check", "--provider", "{model_provider}",
                                 "--json", "--no-refresh"],
                        "success": _pi_auth_ready, "logged_out": _pi_auth_logged_out,
-                       "detail": _auth_detail,
+                       "detail": _pi_auth_detail,
                        "login": "pi, then /login"},
     },
 }
