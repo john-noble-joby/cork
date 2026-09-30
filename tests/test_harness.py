@@ -721,6 +721,13 @@ class AuthProbeTest(HarnessBase):
         orchestrate.subprocess.run = self._run  # real subprocess: rejects the NUL before any exec
         self.assertEqual(orchestrate._probe("pi", "bad\0provider/model"), "error")
 
+    def test_opencode_listing_is_parsed_from_stdout_only(self):
+        self._with_models_cache(self._MODELS_CACHE)
+        orchestrate.subprocess.run = _FakeRun(out="●  GitHub Copilot oauth\n└  1 credential\n",
+                                             err="warning: set OPENAI_API_KEY\n")  # last token IS a known env var
+        self.assertEqual(orchestrate._probe("opencode", "github-copilot/gpt-5"), "ok")
+        self.assertEqual(orchestrate._probe("opencode", "openai/gpt-5"), "not_logged_in")  # stderr hint is not a credential
+
     def test_opencode_provider_match_falls_back_to_slug_without_cache(self):
         self._with_models_cache(None)  # no models.json on this machine
         orchestrate.subprocess.run = _FakeRun(out="●  GitHub Copilot oauth\n└  1 credential\n")

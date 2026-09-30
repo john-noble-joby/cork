@@ -147,7 +147,9 @@ def _opencode_credential_providers(result: subprocess.CompletedProcess) -> set[s
     # and only slugged ("GitHub Copilot" -> "github-copilot") when no cache is available.
     by_name, by_env = _opencode_provider_index()
     providers: set[str] = set()
-    for line in _plain_auth_output(result).splitlines():
+    # stdout ONLY: a stderr diagnostic such as "warning: set OPENAI_API_KEY" must not read
+    # as an environment-backed credential (its last token is a known env var).
+    for line in _strip_ansi(result.stdout or "").splitlines():
         # Each credential line is "<Display Name> <method-or-ENV_VAR>" (optionally
         # bulleted); footers/headers ("└  2 credentials", "┌  Environment") are not.
         tokens = re.sub(r"^\s*●\s*", "", line).split()
