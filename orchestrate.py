@@ -257,8 +257,14 @@ HARNESSES: dict[str, dict] = {
                 "bash": "deny", "edit": "deny", "task": "deny",
                 "webfetch": "deny", "websearch": "deny",
                 "external_directory": "deny",
+                "lsp": "deny",  # experimental tool that starts language-server processes
             }, separators=(",", ":")),
             "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
+            # Branch-controlled instructions arrive through more than config: external skill
+            # discovery (.claude/skills, .agents/skills) and Claude Code compatibility
+            # (CLAUDE.md, .claude/*) are separate switches in 1.17.x.
+            "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
+            "OPENCODE_DISABLE_CLAUDE_CODE": "1",
             # Global ~/.config/opencode/opencode.json is still loaded by --pure and the
             # project-config switch; its MCP servers have dynamic tool names the plan
             # agent's wildcard allow admits. Point XDG_CONFIG_HOME at a cork-owned empty
@@ -268,7 +274,9 @@ HARNESSES: dict[str, dict] = {
         },
         # These are honoured independently of XDG_CONFIG_HOME and would re-introduce a
         # config (MCP servers, plugins) from the inherited environment.
-        "unset_env": ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT"],
+        "unset_env": ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT",
+                      # experimental switches can enable tools (e.g. lsp) the deny list predates
+                      "OPENCODE_EXPERIMENTAL", "OPENCODE_EXPERIMENTAL_LSP_TOOL"],
         # opencode still imports and runs a project's .opencode/{plugin,plugins}/*.{ts,js}
         # (its loader scans both spellings) despite --pure and OPENCODE_DISABLE_PROJECT_CONFIG
         # (anomalyco/opencode#49836, open). That is branch-controlled code executing outside

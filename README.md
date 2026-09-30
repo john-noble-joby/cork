@@ -249,7 +249,12 @@ reviewer then has **no command execution, no file access and none of your MCP se
 and reviews from the prompt alone, like an API model (verified with a tool-inventory probe
 on codex-cli 0.146.0; it still has web search, image tools and sub-agent tools). OpenCode's stock `plan` agent still allows shell and plan-file
 writes, so cork injects `OPENCODE_PERMISSION` denies for `bash`; `edit` (which governs both
-write and patch tools); `task`; `webfetch`; `websearch`; and `external_directory` access.
+write and patch tools); `task`; `webfetch`; `websearch`; `external_directory` access; and the
+experimental `lsp` tool (it starts language-server processes; the `OPENCODE_EXPERIMENTAL*`
+switches that enable it are cleared from the lane's environment). External skill discovery
+(`.claude/skills`, `.agents/skills`) and Claude Code compatibility (`CLAUDE.md`, `.claude/*`)
+are disabled with `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` / `OPENCODE_DISABLE_CLAUDE_CODE=1`, since
+a branch could otherwise inject instructions through them.
 `OPENCODE_DISABLE_PROJECT_CONFIG=1` prevents a branch's
 `.opencode/` configuration or project instructions from weakening that policy; `--pure` also
 disables external plugins. Neither stops OpenCode loading your **global**

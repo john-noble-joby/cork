@@ -34,8 +34,11 @@ change, and add a section here.
   lane-specific login command. Preflight continues past a full selection to report every enabled
   harness, marking live lanes that were not selected because the count was reached.
 - **Immutable OpenCode isolation** — through `OPENCODE_PERMISSION`, cork denies `bash`; `edit`
-  (which governs write and patch tools); `task`; `webfetch`; `websearch`; and
-  `external_directory`. It also disables branch-controlled OpenCode project configuration and
+  (which governs write and patch tools); `task`; `webfetch`; `websearch`; `external_directory`;
+  and the experimental `lsp` tool (with the `OPENCODE_EXPERIMENTAL*` switches that enable it
+  cleared). External skill discovery and Claude Code compatibility are disabled so a branch
+  cannot inject instructions through `.claude/skills`, `.agents/skills` or `CLAUDE.md`. It also
+  disables branch-controlled OpenCode project configuration and
   isolates the global one (`XDG_CONFIG_HOME` → an empty cork-owned dir), so your interactive MCP
   servers and plugins are not loaded into the reviewer; login and the models cache are unaffected.
   Because OpenCode still executes a project's `.opencode/{plugin,plugins}/*.{ts,js}` despite
