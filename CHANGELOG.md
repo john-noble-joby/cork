@@ -21,11 +21,12 @@ change, and add a section here.
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-09-30
+
 ### Added
-- Pi reviews use Pi's existing login and qualified model IDs (`pi/openai-codex/gpt-6-sol`),
-  with optional `--thinking high` through `extra_args` and the `CORK_PI_BIN` override.
 - `responses_effort` config field (`low`/`medium`/`high`, default `medium`) for Responses
-  API reviews and probes. Document a hybrid high-effort Copilot + Claude Enterprise setup.
+  API reviews and probes. Document a hybrid high-effort Copilot + Claude Enterprise setup,
+  including a Pi lane on `pi/openai-codex/gpt-6-sol` with `--thinking high` via `extra_args`.
 
 ### Changed
 - The Pi lane's prompt travels on stdin (`--print`) instead of as an argument after `--`, so

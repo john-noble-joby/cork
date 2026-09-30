@@ -198,8 +198,10 @@ Cork picks reviewers at runtime. The ranked candidate list and desired count liv
 `count` survivors (errors only if none survive). Before probing, preflight names the active
 Copilot credential source. Environment overrides are informational; warnings are reserved for
 a non-refreshable cork file or the opencode fallback. Auth failures (401/403) are fatal and name
-the rejected source plus the `login` recovery command. `gpt-5.x`/`gpt-6.x`/codex are reached via
-Copilot's `/responses` endpoint automatically; other OpenAI-compatible models use `/chat/completions`.
+the rejected source plus the `login` recovery command. `gpt-5.x`/`gpt-6.x`/codex models are
+routed to the `/responses` endpoint automatically on both the Copilot and the native OpenAI API
+lanes (the same model-family gate applies to each); other OpenAI-compatible models use
+`/chat/completions`.
 
 `responses_effort` controls reasoning for Responses API calls (both reviews and probes):
 `"low"`, `"medium"` (the backward-compatible default), or `"high"`. Edit this field in

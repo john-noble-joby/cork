@@ -5,7 +5,7 @@ description: "Use when the user says to run the Copilot review loop on a branch 
 
 # Copilot Review Loop
 
-**Version:** 0.15.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.16.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 ## Overview
 
