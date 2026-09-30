@@ -299,6 +299,24 @@ class ArgvTest(HarnessBase):
         self.assertEqual(orchestrate.review("opencode", "p/m", "S", "story", big, {}, repo="/repo"),
                          "[opencode/p/m returned no usable content — skipped]")
 
+    def test_arg_transported_lanes_budget_files_to_fit_one_argument(self):
+        # 192k-char default budget > 128 KiB argv cap: without a harness-aware budget the
+        # opencode/pi lanes would skip on ordinary diffs. Files are trimmed to fit instead.
+        files = {f"f{i}.py": "x" * 40_000 for i in range(8)}        # 320k chars of file content
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        import io, contextlib
+        with contextlib.redirect_stdout(io.StringIO()):
+            out = orchestrate.review("opencode", "p/m", "S" * 1000, "story", "small diff", files, repo="/repo")
+        self.assertEqual(out, fake.out)                              # ran, not skipped
+        prompt = fake.calls[0][0][-1]                                # the single argv element
+        self.assertLess(len(prompt.encode()), orchestrate._MAX_ARG_BYTES)
+        self.assertIn("small diff", prompt)                          # the diff always travels
+        # stdin lanes keep the full budget: codex gets far more of the files
+        fake2 = _FakeRun(); orchestrate.subprocess.run = fake2
+        with contextlib.redirect_stdout(io.StringIO()):
+            orchestrate.review("codex", "m", "S" * 1000, "story", "small diff", files, repo="/repo")
+        self.assertGreater(len(fake2.calls[0][1]["input"]), orchestrate._MAX_ARG_BYTES)
+
     def test_prompt_via_arg_path(self):
         orchestrate.HARNESSES["argtool"] = {**orchestrate.HARNESSES["codex"], "prompt_via": "arg"}
         try:

@@ -1543,6 +1543,11 @@ def review(provider: str, model: str, instructions: str, story: str,
         if instructions else REVIEW_SYSTEM
     )
     system = review_system + "\n\n" + SPEC_CONFORMANCE_SUFFIX
+    if provider in HARNESSES and HARNESSES[provider]["prompt_via"] == "arg":
+        # The whole prompt (for a lane without a system flag, the standards too) travels as
+        # ONE argv element, capped by the kernel at _MAX_ARG_BYTES. Budget the file block to
+        # fit instead of letting _harness_call's guard skip the lane on ordinary diffs.
+        char_budget = min(char_budget, _MAX_ARG_BYTES - 1)
     fixed_chars = len(system) + len(story) + len(diff) + 500
     file_block, n_included = _budget_files(files, max(0, char_budget - fixed_chars))
     if n_included < len(files):
