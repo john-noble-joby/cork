@@ -1216,16 +1216,17 @@ def _budget_files(files: dict[str, str], budget: int,
     # Pack as many file contents as fit within `budget`, measured by `size` (characters
     # for API lanes, encoded bytes for arg-transported lanes — ordering and stopping must
     # use the same unit as the limit, or a small-in-chars multibyte file that is big in
-    # bytes would block an ASCII file behind it that fits). Smallest first, so small files
-    # always get in. Returns (file_block, included_count).
-    sorted_files = sorted(files.items(), key=lambda x: size(x[1]))
+    # bytes would block an ASCII file behind it that fits). Whole entries (path + fence)
+    # are what get emitted, so they are what gets sorted and charged, joins included:
+    # smallest entry first, so small files always get in. Returns (file_block, included_count).
+    entries = sorted((f"### {name}\n```\n{content}\n```" for name, content in files.items()), key=size)
     included, used = [], 0
-    for name, content in sorted_files:
-        entry = f"### {name}\n```\n{content}\n```"
-        if used + size(entry) > budget:
+    for entry in entries:
+        cost = size(entry) + (size("\n\n") if included else 0)
+        if used + cost > budget:
             break
         included.append(entry)
-        used += size(entry)
+        used += cost
     if not included:
         return "(files omitted — diff too large; see diff section)", 0
     block = "\n\n".join(included)
