@@ -2320,8 +2320,10 @@ def main() -> None:
                              "char budget. Saves provider quota on repeated runs.")
     parser.add_argument("--review-model", metavar="MODEL",
                         help="Review-only mode: run ONE API or harness model's review of the "
-                             "branch diff, print findings to stdout, and exit. Stateless "
-                             "(reviewer sees only story + diff + changed files + AGENTS.md). Used by "
+                             "branch diff, print findings to stdout, and exit. Stateless: the "
+                             "prompt carries story + diff + changed files + AGENTS.md and never "
+                             "prior review text; tree-capable harnesses (claude, opencode) may also "
+                             "read the repo from their cwd. Used by "
                              "the session-driven cork skill, where the active Claude session "
                              "does the implementing and fixing instead of a headless subprocess.")
     story_group = parser.add_mutually_exclusive_group()

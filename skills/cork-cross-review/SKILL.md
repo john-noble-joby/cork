@@ -62,7 +62,7 @@ python3 "$CORK_HOME/orchestrate.py" preflight          # the lanes that will act
 
 | Kind | Example refs | What it is | Auth it needs |
 |---|---|---|---|
-| API (Copilot-hosted) | `copilot/gpt-5.6-sol`, `copilot/claude-opus-4.7`, `copilot/gemini-3.1-pro-preview` | Stateless call — sees only diff + changed files + standards | `cork login` (one Copilot seat covers all of these) |
+| API (Copilot-hosted) | `copilot/gpt-5.6-sol`, `copilot/claude-opus-4.7`, `copilot/gemini-3.1-pro-preview` | Stateless call — sees only the prompt: story (contract) + diff + changed files + standards | `cork login` (one Copilot seat covers all of these) |
 | Harness (agentic) | `codex/gpt-5.6-sol`, `claude/claude-opus-4.7` (0.11.0), `opencode/github-copilot/gpt-5.5`, `pi/glm-internal/glm-5.3-onprem` (0.13.0) | Locally installed coding-agent CLI run read-only with the scratch worktree as cwd. **Tree-capable:** `claude` (Read/Grep/Glob) and `opencode` (plan agent's read tools) can read callers and verify. **Prompt-only:** `codex` (shell and file tools disabled) and `pi` (`--no-tools`) see only the prompt, like an API lane | Each CLI's own vendor login (`codex login`, `claude auth login`, `opencode auth login`, pi then `/login` — or the provider's API-key env var, e.g. `GLM_API_KEY` for a LiteLLM/GLM provider; preflight prints the login command verbatim) |
 
 Harness lanes are **opt-in**: a default install's rotation holds only Copilot API lanes, so
