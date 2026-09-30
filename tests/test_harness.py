@@ -347,6 +347,19 @@ class ArgvTest(HarnessBase):
         self.assertLess(len(fake.calls[0][0][-1].encode()), orchestrate._MAX_ARG_BYTES)
         self.assertLess(len(calls), 25)  # binary search, not a proportional crawl (was >10k)
 
+    def test_budget_files_sorts_and_charges_whole_entries(self):
+        # A long-named empty file has a tiny *content* but a large *entry*; sorting by
+        # content put it first and its miss ended packing before a.py that fits.
+        long = "é" * 60
+        block, n = orchestrate._budget_files({long: "", "a.py": "xxxxx"}, 40)
+        self.assertEqual(n, 1); self.assertIn("### a.py", block)
+        # joins are charged: two 22-char entries need 46, not 44
+        two = {"a.py": "xxxxx", "b.py": "yyyyy"}
+        self.assertEqual(orchestrate._budget_files(two, 44)[1], 1)
+        self.assertEqual(orchestrate._budget_files(two, 46)[1], 2)
+        block, _ = orchestrate._budget_files(two, 46)
+        self.assertEqual(len(block), 46)                              # exactly the budget, joins included
+
     def test_arg_lane_packs_files_by_encoded_size_not_characters(self):
         # 70k chars of é are 140 KB — over the argv limit alone — while 80k ASCII chars fit.
         # Ordering/stopping by characters put the é file first and stopped there, so no
