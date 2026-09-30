@@ -73,8 +73,9 @@ binary is on PATH.
 
 Group the printed lanes by **vendor family** — Claude, GPT, GLM, Gemini — regardless of kind.
 Then determine the **author's vendor**: a human → all lanes valid; a `cork`/Claude Code session →
-exclude the Claude family from primary review; a codex worker → exclude GPT; and so on. If the
-PR body or branch name does not say, ask.
+drop the Claude family from the roster entirely; a codex worker → drop GPT; and so on. The
+author's family reviews nothing — not as primary, not as secondary, not as tie-breaker. If the PR
+body or branch name does not say, ask.
 
 Confirm before running:
 `Cork {VERSION} cross-review: PR #{N} ({BRANCH} → {BASE}) | author vendor: {V} | lanes: {LANES} | slices: {K}. Run?`
@@ -158,9 +159,10 @@ PY
 snapshot "$WT" > "$OUT/post-gate-hashes"
 ```
 
-**Cleanup runs on every exit path**, not only after a clean verdict: a red gate, a plan-gate stop
-and a `BLOCK` verdict all end with the Step 8 cleanup block, so the next run never trips over a
-registered worktree or a stale checkpoint.
+**Cleanup runs on every exit path after Step 1 has allocated the run**, not only after a clean
+verdict: a red gate and a `BLOCK` verdict both end with the Step 8 cleanup block, so the next run
+never trips over a registered worktree or a stale checkpoint. (A plan-gate stop in Step 0 happens
+before anything is allocated — there is nothing to clean, and the block refuses to run unset.)
 
 Never use the author's checkout. `$WT` is where the gates run and the cwd for prompt-only lanes
 (which cannot touch it); every **tree-capable** lane gets its **own** detached worktree at the same
@@ -187,7 +189,8 @@ git -C "$WT" diff "origin/$(jq -r .baseRefName "$OUT/pr.json")...HEAD" -- <paths
 
 Assign lanes: each slice gets a **primary** reviewer from a vendor ≠ author; the highest-risk
 slice (migrations, wire formats, auth, parsing untrusted input) also gets a **second** reviewer
-from a *different* vendor than the primary. Never let one vendor be the only voice on any slice.
+from a *different* vendor than the primary — and, like every lane on the roster, never from the
+author's family. Never let one vendor be the only voice on any slice.
 Prefer a tree-capable harness lane (`claude`, `opencode`) as primary when the slice's risk is
 "does this interact correctly with code outside the diff" — that is exactly what the scratch tree
 is for. Prefer API and prompt-only lanes for breadth.
@@ -199,10 +202,10 @@ SLICE=whole                     # or the slice's name: every report file carries
 for LANE in $LANES; do
   safe="${LANE//\//-}"
   LANE_WT="$WT"                                   # prompt-only lanes (codex, pi, API) cannot touch the tree
-  case "$LANE" in claude/*|opencode/*)            # tree-capable: private tree, so a write is attributable
-    LANE_WT="${WT%/wt}/wt-$safe"
-    [ -d "$LANE_WT" ] || git worktree add --detach "$LANE_WT" "$HEAD" >/dev/null
-    snapshot "$LANE_WT" > "$OUT/pre-$safe-hashes" ;;
+  case "$LANE" in claude/*|opencode/*)            # tree-capable: a private tree PER (slice, lane), so a
+    LANE_WT="${WT%/wt}/wt-$SLICE-$safe"           # write is attributable and never inherited by the next slice
+    git worktree add --detach "$LANE_WT" "$HEAD" >/dev/null
+    snapshot "$LANE_WT" > "$OUT/pre-$SLICE-$safe-hashes" ;;
   esac
   ( python3 "$CORK_HOME/orchestrate.py" "$TID" "$LANE_WT" \
         --review-model "$LANE" --base-branch "origin/$BASE" --skip-validation \
@@ -288,9 +291,10 @@ Lane-specific rules learned the hard way:
 
 ```bash
 snapshot "$WT" > "$OUT/post-review-hashes"; diff "$OUT/post-gate-hashes" "$OUT/post-review-hashes"
-for pre in "$OUT"/pre-*-hashes; do                          # one private tree per tree-capable lane
-  safe=${pre#"$OUT"/pre-}; safe=${safe%-hashes}
-  snapshot "${WT%/wt}/wt-$safe" > "$OUT/post-$safe-hashes"; diff "$pre" "$OUT/post-$safe-hashes" || echo "TAMPERED: $safe"
+for pre in "$OUT"/pre-*-hashes; do                          # one private tree per (slice, tree-capable lane)
+  [ -e "$pre" ] || continue                                 # unmatched glob (API-only roster): nothing to check
+  key=${pre#"$OUT"/pre-}; key=${key%-hashes}
+  snapshot "${WT%/wt}/wt-$key" > "$OUT/post-$key-hashes"; diff "$pre" "$OUT/post-$key-hashes" || echo "TAMPERED: $key"
 done
 ```
 
@@ -350,13 +354,16 @@ Zero blockers **and** green gates → the PR is ready for the human to merge. Sa
 consolidated report, and clean up:
 
 ```bash
+# Only for a run Step 1 allocated: unset WT/TID would make the loops target /wt* and .json.
+[ -n "${WT:-}" ] && [ -n "${TID:-}" ] || { echo "cleanup: no run allocated — nothing to clean" >&2; false; } &&
 # Each step independent: one failure must not skip the others (it is reported, not hidden).
 for t in "${WT%/wt}"/wt*; do git worktree remove --force "$t" || echo "cleanup: worktree removal failed: $t" >&2; done
 git worktree prune                || echo "cleanup: worktree prune failed" >&2
 rm -f ~/.local/share/code-orchestrator/"$TID".json || echo "cleanup: checkpoint removal failed: $TID" >&2   # the seeded story checkpoint
 ```
 
-Run this block on **every** exit — red gate, plan-gate stop, `BLOCK`, or done.
+Run this block on **every** exit after Step 1 — red gate, `BLOCK`, or done. (A plan-gate stop in
+Step 0 precedes allocation; the guard above makes the block a no-op there.)
 
 You do **not** merge. Non-blocking findings are the author's follow-ups; list them, don't block
 on them.
