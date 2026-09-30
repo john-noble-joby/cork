@@ -28,11 +28,13 @@ change, and add a section here.
   Code session acting as tech lead. Fetches the PR diff + acceptance contract, creates a detached
   scratch worktree at the PR head, runs the repo's deterministic gates there, fans the review out
   in parallel to independent lanes from vendors other than the author's (harness reviewers
-  `codex/…`, `claude/…`, `opencode/…`, `pi/…` running read-only inside the scratch tree, plus
-  Copilot API models), slices large PRs by concern, uses `pi`/GLM as the tie-breaker between
-  disagreeing vendors, consolidates into one verdict with a `Reviewer | Vendor | Model | Slice`
-  roster and a tamper check on the scratch tree, routes blocking findings back to the author and
-  re-reviews only the delta. The human merges. Builds on the `claude`/`codex` harness lanes
+  `codex/…`, `claude/…`, `opencode/…`, `pi/…` running read-only against the scratch tree —
+  `claude`/`opencode` can read it, `codex`/`pi` are prompt-only — plus Copilot API models),
+  slices large PRs by concern, uses `pi`/GLM as the tie-breaker between disagreeing vendors,
+  consolidates into one verdict with a `Reviewer | Vendor | Model | Slice` roster and a
+  baseline-compared tamper check on the scratch tree, routes blocking findings back to the author
+  and re-reviews after each fix round with the previous blockers and the delta called out in the
+  story (review-only mode always sends the full base…HEAD diff). The human merges. Builds on the `claude`/`codex` harness lanes
   (0.11.0), `auth status` (0.10.0) and the `opencode`/`pi` harness lanes with live auth probes
   (0.13.0); the herdr mapping is documented as a manual path until a native transport lands.
 - `install.sh` installs the new skill; `skills/README.md` documents the invocation phrase.
