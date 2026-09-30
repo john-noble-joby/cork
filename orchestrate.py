@@ -265,6 +265,9 @@ HARNESSES: dict[str, dict] = {
             # cache (XDG_CACHE_HOME) stay available. Substituted in _harness_call.
             "XDG_CONFIG_HOME": "{empty_config_home}",
         },
+        # These are honoured independently of XDG_CONFIG_HOME and would re-introduce a
+        # config (MCP servers, plugins) from the inherited environment.
+        "unset_env": ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT"],
         # opencode still imports and runs .opencode/plugins/*.js from the project despite
         # --pure and OPENCODE_DISABLE_PROJECT_CONFIG (anomalyco/opencode#49836, open). That
         # is branch-controlled code executing outside the permission layer, so the lane
@@ -1242,10 +1245,16 @@ def _empty_config_home() -> str:
 
 
 def _harness_env(spec: dict) -> dict[str, str]:
-    # Table-owned env is immutable hardening; the only substitution is the placeholder
-    # for the empty config dir (str.replace, not .format: OPENCODE_PERMISSION holds JSON braces).
-    empty = _empty_config_home()
-    return {k: v.replace("{empty_config_home}", empty) for k, v in spec.get("env", {}).items()}
+    # The subprocess environment: inherited env minus the lane's `unset_env`, plus the
+    # table-owned overlay (immutable hardening). The only substitution is the placeholder
+    # for the empty config dir (str.replace, not .format: OPENCODE_PERMISSION holds JSON
+    # braces), resolved — and the directory created — only for a lane that uses it.
+    env = {k: v for k, v in os.environ.items() if k not in spec.get("unset_env", ())}
+    for k, v in spec.get("env", {}).items():
+        if "{empty_config_home}" in v:
+            v = v.replace("{empty_config_home}", _empty_config_home())
+        env[k] = v
+    return env
 
 
 def _harness_call(provider: str, model: str, system: str, user_msg: str,
@@ -1277,7 +1286,7 @@ def _harness_call(provider: str, model: str, system: str, user_msg: str,
     try:
         # utf-8 + replace: a stray byte from a wrapper must not raise UnicodeDecodeError
         # past the sentinel handling below. Table-owned `env` is immutable hardening.
-        r = subprocess.run(argv, cwd=repo, env={**os.environ, **_harness_env(spec)},
+        r = subprocess.run(argv, cwd=repo, env=_harness_env(spec),
                            capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=timeout, **run_kw)
     except subprocess.TimeoutExpired:

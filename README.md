@@ -257,7 +257,8 @@ disables external plugins. Neither stops OpenCode loading your **global**
 wildcard allow admits, so cork also points `XDG_CONFIG_HOME` at an empty directory it owns for
 the run: no global config, while your login (`~/.local/share/opencode/auth.json`) and the models
 cache (`~/.cache/opencode/`) live elsewhere and stay available (verified on 1.17.3: `mcp list`
-shows none, `auth list` unchanged). One gap those flags do not close: OpenCode still imports
+shows none, `auth list` unchanged); any inherited `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR` or
+`OPENCODE_CONFIG_CONTENT` is cleared from the lane's environment for the same reason. One gap those flags do not close: OpenCode still imports
 and runs a project's `.opencode/plugins/*.js` (upstream anomalyco/opencode#49836, open), which
 would be branch-controlled code executing outside the permission layer — so cork refuses to
 run the OpenCode lane at all when the repo under review contains `.opencode/plugins`, and

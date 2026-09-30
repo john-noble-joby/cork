@@ -125,6 +125,29 @@ class ArgvTest(HarnessBase):
         status, _ = orchestrate._harness_call("opencode", "p/m", "S", "U", str(clean))
         self.assertEqual((status, len(fake.calls)), (200, 1))  # a repo without plugins runs
 
+    def test_opencode_clears_inherited_explicit_config_variables(self):
+        # OPENCODE_CONFIG / _CONFIG_DIR / _CONFIG_CONTENT are honoured regardless of
+        # XDG_CONFIG_HOME and would re-introduce MCP/plugin config from the parent shell.
+        for k in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT"):
+            os.environ[k] = "inherited"; self.addCleanup(os.environ.pop, k, None)
+        os.environ["UNRELATED_VAR"] = "kept"; self.addCleanup(os.environ.pop, "UNRELATED_VAR", None)
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        orchestrate._harness_call("opencode", "p/m", "S", "U", "/repo")
+        env = fake.calls[0][1]["env"]
+        for k in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT"):
+            self.assertNotIn(k, env)
+        self.assertEqual(env["UNRELATED_VAR"], "kept")          # everything else still inherited
+        self.assertIn("OPENCODE_PERMISSION", env)               # overlay still applied
+
+    def test_empty_config_home_is_only_created_for_lanes_that_use_it(self):
+        orig = orchestrate._empty_config_home
+        orchestrate._empty_config_home = lambda: self.fail("must not touch the state dir for this lane")
+        self.addCleanup(setattr, orchestrate, "_empty_config_home", orig)
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        for lane in ("codex", "claude", "pi"):
+            with self.subTest(lane=lane):
+                orchestrate._harness_call(lane, "p/m", "S", "U", "/repo")  # no placeholder in these lanes' env
+
     def test_config_cannot_override_read_only_or_argv(self):
         orchestrate.CONFIG_PATH.write_text('{"rotation":[{"provider":"codex","model":"m"}],'
                                            '"providers":{"codex":{"enabled":true,"read_only":[],'
