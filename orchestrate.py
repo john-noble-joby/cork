@@ -50,7 +50,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NoReturn
@@ -1193,20 +1193,25 @@ def load_agent_instructions(repo: str) -> tuple[str, str]:
     return "\n\n---\n\n".join(parts), " + ".join(labels)
 
 
-def _budget_files(files: dict[str, str], budget_chars: int) -> tuple[str, int]:
-    """
-    Pack as many file contents as fit within budget_chars.
-    Returns (file_block_str, included_count).
-    Sorts by size ascending so small files always get in.
-    """
-    sorted_files = sorted(files.items(), key=lambda x: len(x[1]))
+def _utf8_len(text: str) -> int:
+    return len(text.encode("utf-8", "replace"))
+
+
+def _budget_files(files: dict[str, str], budget: int,
+                  size: Callable[[str], int] = len) -> tuple[str, int]:
+    # Pack as many file contents as fit within `budget`, measured by `size` (characters
+    # for API lanes, encoded bytes for arg-transported lanes — ordering and stopping must
+    # use the same unit as the limit, or a small-in-chars multibyte file that is big in
+    # bytes would block an ASCII file behind it that fits). Smallest first, so small files
+    # always get in. Returns (file_block, included_count).
+    sorted_files = sorted(files.items(), key=lambda x: size(x[1]))
     included, used = [], 0
     for name, content in sorted_files:
         entry = f"### {name}\n```\n{content}\n```"
-        if used + len(entry) > budget_chars:
+        if used + size(entry) > budget:
             break
         included.append(entry)
-        used += len(entry)
+        used += size(entry)
     if not included:
         return "(files omitted — diff too large; see diff section)", 0
     block = "\n\n".join(included)
@@ -1628,10 +1633,10 @@ def review(provider: str, model: str, instructions: str, story: str,
         if instructions else REVIEW_SYSTEM
     )
     system = review_system + "\n\n" + SPEC_CONFORMANCE_SUFFIX
-    fixed_chars = len(system) + len(story) + len(diff) + 500
 
-    def build(budget: int) -> tuple[str, int]:
-        file_block, n = _budget_files(files, max(0, budget - fixed_chars))
+    def build(budget: int, size: Callable[[str], int] = len) -> tuple[str, int]:
+        fixed = size(system) + size(story) + size(diff) + 500
+        file_block, n = _budget_files(files, max(0, budget - fixed), size)
         return (f"## Story / Task\n{story}\n\n"
                 f"## Changed Files (current state)\n{file_block}\n\n"
                 f"## Branch Diff\n```diff\n{diff}\n```"), n
@@ -1640,22 +1645,24 @@ def review(provider: str, model: str, instructions: str, story: str,
     spec = HARNESSES.get(provider)
     if spec and spec["prompt_via"] == "arg":
         # The whole prompt (plus the standards, for a lane with no system flag) travels as
-        # ONE argv element the kernel caps at _MAX_ARG_BYTES — in BYTES, while the budget is
-        # in characters. Files are added whole, so the element size is a step function of
-        # the budget: binary-search the largest budget that fits (≈18 rebuilds) rather than
-        # shrinking proportionally, which can spin thousands of times near the boundary.
+        # ONE argv element the kernel caps at _MAX_ARG_BYTES — in BYTES, while the default
+        # budget is in characters. Repack by encoded size: files are added whole, so the
+        # element size is a step function of the budget, and the byte-sized pack can still
+        # miss by the joins/headings the 500 slack estimates — binary-search the largest
+        # byte budget that fits (≈17 rebuilds) rather than shrinking proportionally, which
+        # can spin thousands of times near the boundary.
         def fits(msg: str) -> bool:
             element = msg if spec["system_flag"] else system + _STANDARDS_SEPARATOR + msg
-            return len(element.encode("utf-8", "replace")) < _MAX_ARG_BYTES
+            return _utf8_len(element) < _MAX_ARG_BYTES
         if not fits(user_msg):
-            lo, hi = 0, char_budget  # build(lo) has no files; build(hi) is known too big
+            lo, hi = 0, _MAX_ARG_BYTES  # build(lo) has no files; build(hi) cannot fit with its headings
             while hi - lo > 1:
                 mid = (lo + hi) // 2
-                if fits(build(mid)[0]):
+                if fits(build(mid, _utf8_len)[0]):
                     lo = mid
                 else:
                     hi = mid
-            user_msg, n_included = build(lo)  # a diff that alone exceeds the limit still gets the 413 skip
+            user_msg, n_included = build(lo, _utf8_len)  # a diff alone over the limit still gets the 413 skip
     if n_included < len(files):
         print(f"  → token budget: included {n_included}/{len(files)} files "
               f"(diff-only for the rest)")

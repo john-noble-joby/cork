@@ -271,7 +271,7 @@ class ArgvTest(HarnessBase):
         # rebuild the identical prompt thousands of times (files are added whole).
         calls = []
         orig = orchestrate._budget_files
-        orchestrate._budget_files = lambda files, budget: calls.append(budget) or orig(files, budget)
+        orchestrate._budget_files = lambda files, budget, *a: calls.append(budget) or orig(files, budget, *a)
         self.addCleanup(setattr, orchestrate, "_budget_files", orig)
         files = {"big.py": "x" * (orchestrate._MAX_ARG_BYTES - 2_000), "tiny.py": "y" * 100}
         fake = _FakeRun(); orchestrate.subprocess.run = fake
@@ -281,6 +281,17 @@ class ArgvTest(HarnessBase):
         self.assertEqual(out, fake.out)
         self.assertLess(len(fake.calls[0][0][-1].encode()), orchestrate._MAX_ARG_BYTES)
         self.assertLess(len(calls), 25)  # binary search, not a proportional crawl (was >10k)
+
+    def test_arg_lane_packs_files_by_encoded_size_not_characters(self):
+        # 70k chars of é are 140 KB — over the argv limit alone — while 80k ASCII chars fit.
+        # Ordering/stopping by characters put the é file first and stopped there, so no
+        # budget included the ASCII file; packing by encoded size does.
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        files = {"multibyte.md": "é" * 70_000, "ascii.py": "x" * 80_000}
+        orchestrate.review("pi", "p/m", "", "story", "diff", files, repo="/repo")
+        prompt = fake.calls[0][0][-1]
+        self.assertIn("### ascii.py", prompt); self.assertNotIn("### multibyte.md", prompt)
+        self.assertLess(len(prompt.encode("utf-8")), orchestrate._MAX_ARG_BYTES)
 
     def test_arg_transported_prompt_is_budgeted_in_bytes_not_chars(self):
         # 100k `é` is 100k chars but 200 KB; a char budget alone would overshoot into a skip.
