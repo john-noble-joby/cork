@@ -209,7 +209,8 @@ For Claude Code, set `providers.claude.extra_args` to `["--effort", "high"]` ins
 Reasoning and findings share a 32,000-token output budget. A Responses API review with an
 explicit non-completed status (`incomplete`, `failed`, cancelled, pending, or an unknown state)
 is skipped without retrying, even if partial text exists. The skip includes the state and
-incomplete reason or error message/code, falling back to `unknown reason`. For token exhaustion,
+incomplete reason or error message/code, falling back to `unknown reason` for missing or malformed
+diagnostic containers. For token exhaustion,
 reduce the diff size or effort before rerunning. Responses without a status retain compatibility
 handling. Availability probes still classify by HTTP status only: HTTP 200 is available even
 when the body reports a failed or incomplete response; that does not prove a review completed.
@@ -411,7 +412,7 @@ The reviewer sees only the supplied prompt, not other reviewers' files.
 Pi retains its user-level provider configuration and login; explicit `extra_args` are
 trusted and must not re-enable resources/tools. Cork does not copy or export credentials.
 `openai-codex` uses Pi's ChatGPT OAuth login, distinct from OpenAI API-key billing; account
-limits still apply. Check `pi auth check --provider openai-codex --json` (no credentials
+limits still apply. Check `pi auth check --provider openai-codex --json --no-refresh` (no credentials
 flag), then smoke-test each model. Harness preflight runs that same login probe live
 (`pi: live (openai-codex)` / `logged-out — run …`), but it does not validate model access —
 a model the account cannot use still surfaces only at review time, so the smoke test stays.

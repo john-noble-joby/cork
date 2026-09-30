@@ -28,6 +28,8 @@ change, and add a section here.
   API reviews and probes. Document a hybrid high-effort Copilot + Claude Enterprise setup.
 
 ### Changed
+- Setup chooses review providers before requesting credentials, so subscription-backed
+  harness lanes do not require unused API credentials.
 - The Pi lane's prompt travels on stdin (`--print`) instead of as an argument after `--`, so
   only its `--system-prompt` standards argument is subject to the 128 KiB per-argument limit;
   the argv byte-budget repack now applies to OpenCode alone. The lane keeps 0.13.0's live
@@ -36,8 +38,11 @@ change, and add a section here.
 ### Fixed
 - Preserve Responses API non-completion diagnostics: skip explicitly incomplete, failed,
   cancelled, pending, or unknown-state reviews without repeating the same request or
-  accepting partial findings as complete. Status-less compatibility responses and
-  HTTP-status-based availability probes retain their existing handling.
+  accepting partial findings as complete. Missing or malformed diagnostic containers use
+  the unknown-reason fallback. Status-less compatibility responses and HTTP-status-based
+  availability probes retain their existing handling.
+- Correct remaining auth-probe diagnostics: preserve scratch-directory failures and avoid
+  presenting the Pi provider as the reason for malformed or contradictory auth output.
 - Quote skill descriptions so YAML frontmatter parsers accept embedded colons.
 - Route GPT-6 models, including Sol and Astra, through `/responses` rather than unsupported
   chat completions; share the same response extraction as GPT-5 and Codex.

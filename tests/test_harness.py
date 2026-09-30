@@ -137,6 +137,17 @@ class ArgvTest(HarnessBase):
         self.assertEqual((kw["cwd"], kw["input"]), ("/repo", "USER"))
         self.assertNotIn("stdin", kw)
 
+    def test_pi_task_exceeding_argument_limit_is_sent_intact_on_stdin(self) -> None:
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        prompt = "x" * (orchestrate._MAX_ARG_BYTES + 1)
+        result = orchestrate._harness_call("pi", "openai-codex/gpt-6-sol", "SYS", prompt, "/repo")
+        self.assertEqual(result, (200, fake.out))
+        self.assertEqual(len(fake.calls), 1)
+        argv, kw = fake.calls[0]
+        self.assertEqual(kw["input"], prompt)
+        self.assertNotIn(prompt, argv)
+        self.assertEqual(argv[argv.index("--system-prompt") + 1], "SYS")
+
     def _isolated_state_dir(self):
         return orchestrate.STATE_DIR  # patched per test in HarnessBase.setUp
 

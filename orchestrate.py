@@ -1459,10 +1459,11 @@ def _call_and_extract(provider: str, model: str, system: str,
         # Some compatibility proxies omit status; explicit non-completion is never findings.
         if response_status and response_status != "completed":
             if response_status == "incomplete":
-                reason = (body.get("incomplete_details") or {}).get("reason")
+                details = body.get("incomplete_details")
+                reason = details.get("reason") if isinstance(details, dict) else None
             else:
-                error = body.get("error") or {}
-                reason = error.get("message") or error.get("code")
+                error = body.get("error")
+                reason = (error.get("message") or error.get("code")) if isinstance(error, dict) else None
             return status, "", f"{response_status} ({reason or 'unknown reason'})"
         return status, _extract_responses_text(body), None
     return status, _extract_chat_text(body), None

@@ -35,7 +35,7 @@ preflight with fewer lanes is not proof that every requested provider is authent
   to an API lane or ask for Copilot credentials to fix Claude authentication.
 - **Pi harness:** use `providers.pi.enabled: true` and qualified model IDs such as
   `openai-codex/gpt-6-sol` (CLI: `--review-model pi/openai-codex/gpt-6-sol`). Check the
-  configured Pi binary's `auth check --provider openai-codex --json` without credential
+  configured Pi binary's `auth check --provider openai-codex --json --no-refresh` without credential
   printing; if needed, have the user `/login` in Pi. Preflight runs that probe live
   (`--no-refresh`, so it never rewrites credentials) and reports `live` / `logged-out` /
   `unavailable (<reason>)`, but it does not validate model access: smoke-test requested

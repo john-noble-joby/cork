@@ -66,6 +66,20 @@ class ResponsesCompletionTest(unittest.TestCase):
                                  f"[copilot/gpt-6-sol review failed ({expected}) — skipped]")
                 self.assertEqual(self.http.call_count, 1)
 
+    def test_malformed_diagnostic_containers_skip_without_breaking_probes(self):
+        for provider in ("copilot", "openai"):
+            for state, key in (("failed", "error"), ("incomplete", "incomplete_details")):
+                for details in ("rate limited", 42, True, [], ["reason"], None):
+                    with self.subTest(provider=provider, state=state, details=details):
+                        self.http.reset_mock()
+                        self.http.return_value = (200, {"status": state, key: details, "output_text": "Partial"})
+                        self.assertEqual(self.review(provider),
+                                         f"[{provider}/gpt-6-sol review {state} (unknown reason) — skipped]")
+                        self.assertEqual(self.http.call_count, 1)
+                        self.http.reset_mock()
+                        self.assertEqual(orchestrate._probe(provider, "gpt-6-sol"), "ok")
+                        self.assertEqual(self.http.call_count, 1)
+
     def test_other_explicit_noncompleted_states_fail_closed(self):
         for state in ("cancelled", "queued", "in_progress", "future_state"):
             with self.subTest(state=state):

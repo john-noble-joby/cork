@@ -3,6 +3,18 @@ from pathlib import Path
 
 
 class SkillMetadataTest(unittest.TestCase):
+    def test_all_skill_stamps_match_version(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        version = (root / "VERSION").read_text(encoding="utf-8").strip()
+        paths = sorted((root / "skills").glob("*/SKILL.md"))
+        self.assertTrue(version)
+        self.assertTrue(paths)
+        for path in paths:
+            with self.subTest(skill=path.parent.name):
+                stamp = next(line for line in path.read_text(encoding="utf-8").splitlines()
+                             if line.startswith("**Version:**"))
+                self.assertEqual(stamp.split()[1], version)
+
     def test_descriptions_are_quoted_yaml_scalars(self):
         root = Path(__file__).resolve().parents[1] / "skills"
         paths = sorted(root.glob("*/SKILL.md"))
