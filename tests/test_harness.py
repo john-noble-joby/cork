@@ -93,6 +93,23 @@ class ArgvTest(HarnessBase):
         self.assertNotIn("input", kw)
         self.assertIs(kw["stdin"], subprocess.DEVNULL)
 
+    def test_opencode_runs_with_isolated_global_config(self):
+        # ~/.config/opencode/opencode.json (MCP servers, plugins, agents) must not load;
+        # login (XDG_DATA_HOME) and the models cache (XDG_CACHE_HOME) are untouched.
+        os.environ["XDG_CONFIG_HOME"] = "/home/someone/.config"  # inherited value must be overridden
+        self.addCleanup(os.environ.pop, "XDG_CONFIG_HOME", None)
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        orchestrate._harness_call("opencode", "p/m", "S", "U", "/repo")
+        env = fake.calls[0][1]["env"]
+        home = Path(env["XDG_CONFIG_HOME"])
+        self.assertNotEqual(str(home), "/home/someone/.config")
+        self.assertTrue(home.is_dir()); self.assertEqual(list(home.iterdir()), [])  # exists and is empty
+        self.assertNotIn("{empty_config_home}", env["XDG_CONFIG_HOME"])
+        self.assertIn('"bash":"deny"', env["OPENCODE_PERMISSION"])  # JSON braces survived substitution
+        # only CONFIG is redirected: data (login) and cache (models) dirs are inherited untouched
+        for k in ("XDG_DATA_HOME", "XDG_CACHE_HOME"):
+            self.assertEqual(env.get(k), os.environ.get(k))
+
     def test_config_cannot_override_read_only_or_argv(self):
         orchestrate.CONFIG_PATH.write_text('{"rotation":[{"provider":"codex","model":"m"}],'
                                            '"providers":{"codex":{"enabled":true,"read_only":[],'
@@ -499,7 +516,27 @@ class AuthProbeTest(HarnessBase):
         orchestrate.shutil.which = lambda b: None
         self.assertEqual(orchestrate._probe("codex", "m"), "missing_binary")
 
+    # A slice of opencode's real models.dev cache (~/.cache/opencode/models.json, 1.17.3).
+    _MODELS_CACHE = {
+        "github-copilot": {"name": "GitHub Copilot", "env": ["GITHUB_TOKEN"]},
+        "anthropic": {"name": "Anthropic", "env": ["ANTHROPIC_API_KEY"]},
+        "openai": {"name": "OpenAI", "env": ["OPENAI_API_KEY"]},
+        "google": {"name": "Google", "env": ["GOOGLE_API_KEY", "GEMINI_API_KEY"]},
+        "google-vertex": {"name": "Vertex", "env": ["GOOGLE_VERTEX_PROJECT", "GOOGLE_APPLICATION_CREDENTIALS"]},
+        "amazon-bedrock": {"name": "Amazon Bedrock", "env": ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]},
+    }
+
+    def _with_models_cache(self, data):
+        import json
+        path = Path(self.tmp.name) / "models.json"
+        if data is not None:
+            path.write_text(json.dumps(data))
+        orig = orchestrate._OPENCODE_MODELS_CACHE
+        orchestrate._OPENCODE_MODELS_CACHE = path
+        self.addCleanup(setattr, orchestrate, "_OPENCODE_MODELS_CACHE", orig)
+
     def test_opencode_auth_is_provider_aware(self):
+        self._with_models_cache(self._MODELS_CACHE)
         # Real `opencode auth list` 1.17.3 shape (ANSI stripped): one bullet per credential.
         listing = "┌  Credentials ~/.local/share/opencode/auth.json\n│\n●  GitHub Copilot oauth\n│\n●  Anthropic oauth\n│\n└  2 credentials\n"
         # env-backed providers are listed separately as "<Display Name> <ENV_VAR>"
@@ -510,18 +547,27 @@ class AuthProbeTest(HarnessBase):
             (listing, "openai/gpt-5", "not_logged_in"),          # others' credentials don't count
             (with_env, "openai/gpt-5", "ok"),                    # environment-backed counts for its provider
             (with_env, "google/gemini", "not_logged_in"),        # footers never parse as providers
-            # display names are models.dev labels, not ids: "Vertex" must satisfy google-vertex/…
+            # display names are models.dev labels, not ids — resolved through the cache, exactly:
             (with_env + "●  Vertex GOOGLE_APPLICATION_CREDENTIALS\n", "google-vertex/gemini-2.5-pro", "ok"),
+            (with_env + "●  Vertex GOOGLE_APPLICATION_CREDENTIALS\n", "google/gemini", "not_logged_in"),  # Vertex is not Google
+            (with_env + "●  Google GEMINI_API_KEY\n", "google/gemini", "ok"),
+            (with_env + "●  Google GEMINI_API_KEY\n", "google-vertex/gemini", "not_logged_in"),          # Google is not Vertex
             (with_env + "●  Amazon Bedrock AWS_ACCESS_KEY_ID\n", "amazon-bedrock/claude", "ok"),
             ("└  2 credentials\n", "github-copilot/gpt-5", "not_logged_in"),  # aggregate count alone is not auth
             ("└  0 credentials\n", "github-copilot/gpt-5", "not_logged_in"),
             ("●  GitHub Copilot oauth\n1 credential", "github-copilot/gpt-5", "ok"),
         ):
-            with self.subTest(output=output, model=model):
+            with self.subTest(output=output[-60:], model=model):
                 orchestrate.subprocess.run = _FakeRun(out=output)
                 self.assertEqual(orchestrate._probe("opencode", model), expected)
         orchestrate.subprocess.run = _FakeRun(rc=1, out=listing)
         self.assertEqual(orchestrate._probe("opencode", "anthropic/claude"), "error")
+
+    def test_opencode_provider_match_falls_back_to_slug_without_cache(self):
+        self._with_models_cache(None)  # no models.json on this machine
+        orchestrate.subprocess.run = _FakeRun(out="●  GitHub Copilot oauth\n└  1 credential\n")
+        self.assertEqual(orchestrate._probe("opencode", "github-copilot/gpt-5"), "ok")
+        self.assertEqual(orchestrate._probe("opencode", "google-vertex/gemini"), "not_logged_in")  # "Vertex" unknowable without the cache
 
     def test_ansi_auth_output_is_stripped(self):
         completed = subprocess.CompletedProcess(

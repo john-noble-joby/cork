@@ -213,7 +213,7 @@ same rotation/preflight/consolidation. Harnesses are disabled by default; enable
 |---------|--------------------|------------|
 | `claude` | Safe/restricted plan mode; only `Read,Grep,Glob` | `claude auth status --text` |
 | `codex` | Read-only sandbox; ephemeral session | `codex login status` |
-| `opencode` | Env-denied write/shell/network/task tools; project config disabled | `opencode auth list` shows a credential for the model's provider |
+| `opencode` | Env-denied write/shell/network/task tools; project config disabled; global config (MCP servers, plugins) isolated | `opencode auth list` shows a credential for the model's provider |
 | `pi` | No tools at all (prompt-only); no session, extensions, skills, templates, themes, context files, or project approval | `pi auth check … --no-refresh` |
 
 ```json
@@ -252,7 +252,12 @@ writes, so cork injects `OPENCODE_PERMISSION` denies for `bash`; `edit` (which g
 write and patch tools); `task`; `webfetch`; `websearch`; and `external_directory` access.
 `OPENCODE_DISABLE_PROJECT_CONFIG=1` prevents a branch's
 `.opencode/` configuration or project instructions from weakening that policy; `--pure` also
-disables external plugins. Pi runs with **no tools at all**: its `read` and `find` accept
+disables external plugins. Neither stops OpenCode loading your **global**
+`~/.config/opencode/opencode.json`, whose MCP servers have dynamic tool names the `plan` agent's
+wildcard allow admits, so cork also points `XDG_CONFIG_HOME` at an empty directory it owns for
+the run: no global config, while your login (`~/.local/share/opencode/auth.json`) and the models
+cache (`~/.cache/opencode/`) live elsewhere and stay available (verified on 1.17.3: `mcp list`
+shows none, `auth list` unchanged). Pi runs with **no tools at all**: its `read` and `find` accept
 absolute paths, so a read allowlist would still let a prompt-injected review reach other
 reviewers' `/tmp/cork-review-*` files. Its extensions, skills, prompt templates, themes,
 context files and ambient `APPEND_SYSTEM.md` are disabled too; it keeps no session, ignores
@@ -282,7 +287,9 @@ a model request. Logged-out lanes print the exact recovery action: `claude auth 
 The other probes are status/list commands and do not write credentials. OpenCode's probe
 checks that `opencode auth list` shows a credential — stored, or environment-backed such as
 `OpenAI OPENAI_API_KEY` — for the model's *own* provider (the `github-copilot` in
-`github-copilot/gpt-5`), not merely that some provider is logged in. If
+`github-copilot/gpt-5`), not merely that some provider is logged in. Display names are resolved
+to provider ids through OpenCode's own models.dev cache (`~/.cache/opencode/models.json`), so
+`Vertex` means `google-vertex` and never `google`. If
 `ANTHROPIC_API_KEY` is set, the Claude probe reports that fact without validating the key,
 because an invalid value can make `claude -p` hang silently until cork's timeout. Some Pi
 installations are wrapped in a provider-policy shim; cork passes the model through unchanged,

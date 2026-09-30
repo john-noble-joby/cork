@@ -35,7 +35,9 @@ change, and add a section here.
   harness, marking live lanes that were not selected because the count was reached.
 - **Immutable OpenCode isolation** — through `OPENCODE_PERMISSION`, cork denies `bash`; `edit`
   (which governs write and patch tools); `task`; `webfetch`; `websearch`; and
-  `external_directory`. It also disables branch-controlled OpenCode project configuration.
+  `external_directory`. It also disables branch-controlled OpenCode project configuration and
+  isolates the global one (`XDG_CONFIG_HOME` → an empty cork-owned dir), so your interactive MCP
+  servers and plugins are not loaded into the reviewer; login and the models cache are unaffected.
   Pi runs prompt-only — `--no-tools` (its `read`/`find` accept absolute paths, so a read
   allowlist cannot confine it to the repo), no extensions/skills/templates/themes/context files,
   ambient `APPEND_SYSTEM.md` suppressed — and ignores project-local `.pi/` resources with
@@ -45,7 +47,8 @@ change, and add a section here.
 - OpenCode's auth probe is provider-aware: it requires a listed credential — stored or
   environment-backed (`OpenAI OPENAI_API_KEY`) — for the model's own provider instead of any
   nonzero credential count, so an Anthropic login no longer makes a `github-copilot/…` lane
-  look live.
+  look live. Display names resolve to exact provider ids via OpenCode's models.dev cache
+  (`Vertex` → `google-vertex`, distinct from `google`).
 - `<provider>/<model>` refs for OpenCode/Pi lanes must have both parts non-empty (`/model` and
   `provider/` are rejected at config-load, not at invocation).
 - Pi's auth JSON is parsed from stdout only, so a warning on stderr no longer turns a valid

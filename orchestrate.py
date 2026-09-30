@@ -107,32 +107,66 @@ def _auth_json(result: subprocess.CompletedProcess) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+# opencode caches models.dev here: {provider_id: {"name": <display name>, "env": [..], ...}}.
+# It is the authoritative map from what `auth list` prints back to provider ids.
+_OPENCODE_MODELS_CACHE = (Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+                          / "opencode" / "models.json")
+
+
+def _opencode_provider_index() -> tuple[dict[str, str], dict[str, str]]:
+    # (display name lower -> id, ENV_VAR -> id). Empty maps when the cache is absent or
+    # unreadable; callers then fall back to slugging the display name.
+    try:
+        data = json.loads(_OPENCODE_MODELS_CACHE.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}, {}
+    if not isinstance(data, dict):
+        return {}, {}
+    by_name: dict[str, str] = {}
+    by_env: dict[str, str] = {}
+    for pid, spec in data.items():
+        if not isinstance(spec, dict):
+            continue
+        if isinstance(spec.get("name"), str):
+            by_name[spec["name"].strip().lower()] = pid
+        for var in spec.get("env") or []:
+            if isinstance(var, str):
+                by_env[var] = pid
+    return by_name, by_env
+
+
 def _opencode_credential_providers(result: subprocess.CompletedProcess) -> set[str]:
     # `opencode auth list` (1.17.3) prints one "●  <Display Name> <method>" line per stored
     # credential ("●  GitHub Copilot oauth") and, under a separate "Environment" section,
     # one "●  <Display Name> <ENV_VAR>" line per env-backed provider ("●  OpenAI
     # OPENAI_API_KEY"). The "N credentials" / "N environment variable" footers say nothing
-    # about WHICH provider is usable. Normalize display names to opencode's provider ids
-    # ("GitHub Copilot" -> "github-copilot").
+    # about WHICH provider is usable. Display names are models.dev labels ("Vertex" is
+    # google-vertex; "Google" is a different provider), so they are resolved to ids through
+    # opencode's own models.dev cache — the env var first (unambiguous), then the name —
+    # and only slugged ("GitHub Copilot" -> "github-copilot") when no cache is available.
+    by_name, by_env = _opencode_provider_index()
     providers: set[str] = set()
     for line in _plain_auth_output(result).splitlines():
         # "<Display Name> <method-or-ENV_VAR>", with or without the leading bullet. The
         # trailing token anchors the match — a method word (any case) or an UPPER_CASE env
         # var name — so neither footer can parse as a provider.
-        m = re.match(r"^\s*(?:●\s+)?(.+?)\s+(?:(?i:oauth|api|apikey|api-key|env|token)"
+        m = re.match(r"^\s*(?:●\s+)?(.+?)\s+((?i:oauth|api|apikey|api-key|env|token)"
                      r"|[A-Z][A-Z0-9_]{2,})\s*$", line)
-        if m:
-            providers.add(re.sub(r"\s+", "-", m.group(1).strip().lower()))
+        if not m:
+            continue
+        name, token = m.group(1).strip(), m.group(2)
+        if token in by_env:
+            providers.add(by_env[token])
+        elif name.lower() in by_name:
+            providers.add(by_name[name.lower()])
+        else:
+            providers.add(re.sub(r"\s+", "-", name.lower()))
     return providers
 
 
 def _opencode_has_provider(result: subprocess.CompletedProcess, model: str) -> bool:
-    # The listing shows models.dev display names, not provider ids ("Vertex" for
-    # google-vertex, "GitHub Copilot" for github-copilot), so slug equality is not
-    # enough: accept containment in either direction between the slugged name and the id.
-    provider = model.split("/", 1)[0].lower()
-    return any(name == provider or name in provider or provider in name
-               for name in _opencode_credential_providers(result) if len(name) >= 3)
+    # Exact id match only: `google` and `google-vertex` are distinct providers.
+    return model.split("/", 1)[0].lower() in _opencode_credential_providers(result)
 
 
 def _opencode_auth_ready(result: subprocess.CompletedProcess, model: str) -> bool:
@@ -224,6 +258,12 @@ HARNESSES: dict[str, dict] = {
                 "external_directory": "deny",
             }, separators=(",", ":")),
             "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
+            # Global ~/.config/opencode/opencode.json is still loaded by --pure and the
+            # project-config switch; its MCP servers have dynamic tool names the plan
+            # agent's wildcard allow admits. Point XDG_CONFIG_HOME at a cork-owned empty
+            # dir instead: no global config, while login (XDG_DATA_HOME) and the models
+            # cache (XDG_CACHE_HOME) stay available. Substituted in _harness_call.
+            "XDG_CONFIG_HOME": "{empty_config_home}",
         },
         "auth_probe": {"argv": ["auth", "list"], "success": _opencode_auth_ready,
                        "logged_out": _opencode_auth_logged_out,
@@ -1188,6 +1228,21 @@ def _harness_argv(spec: dict, model: str, repo: str, system: str) -> list[str]:
     return argv + list(spec["extra_args"]) + [a.format(**sub) for a in spec["read_only"]]
 
 
+def _empty_config_home() -> str:
+    # A directory cork owns and never writes into, so a CLI told to read its global
+    # configuration from here finds none. Created on demand.
+    path = STATE_DIR / "empty-config-home"
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
+def _harness_env(spec: dict) -> dict[str, str]:
+    # Table-owned env is immutable hardening; the only substitution is the placeholder
+    # for the empty config dir (str.replace, not .format: OPENCODE_PERMISSION holds JSON braces).
+    empty = _empty_config_home()
+    return {k: v.replace("{empty_config_home}", empty) for k, v in spec.get("env", {}).items()}
+
+
 def _harness_call(provider: str, model: str, system: str, user_msg: str,
                   repo: str, timeout: int | None = None) -> tuple[int, str]:
     # Exit 0 -> (200, stdout). Anything else -> (non-200, diagnostic). One attempt.
@@ -1212,7 +1267,7 @@ def _harness_call(provider: str, model: str, system: str, user_msg: str,
     try:
         # utf-8 + replace: a stray byte from a wrapper must not raise UnicodeDecodeError
         # past the sentinel handling below. Table-owned `env` is immutable hardening.
-        r = subprocess.run(argv, cwd=repo, env={**os.environ, **spec.get("env", {})},
+        r = subprocess.run(argv, cwd=repo, env={**os.environ, **_harness_env(spec)},
                            capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=timeout, **run_kw)
     except subprocess.TimeoutExpired:
