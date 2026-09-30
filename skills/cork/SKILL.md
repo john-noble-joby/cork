@@ -7,7 +7,7 @@ description: Use when the user says "cork" / "run cork" on a branch (full mode �
 
 "Cork" = **C**ode **Or**chestrator **R**eview **K**ickoff.
 
-**Version:** 0.12.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
+**Version:** 0.13.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
 
 **The active Claude session is the coding agent.** Unlike the legacy headless mode (where `orchestrate.py` spawned `claude --print` subprocesses), here *you* — the session with full codebase + conversation context — do the implementing and fixing. The orchestrator script is used only as a stateless review tool: `--review-model MODEL` returns one outside model's findings on the current branch diff.
 
@@ -89,7 +89,7 @@ Review your own diff with subagents (dispatch parallel reviewers), apply fixes, 
 
 ### Steps 3+ — One blind pass per model
 
-**Division of labour (do not blur):** each Copilot model is a *read-only reviewer* — it only returns findings on the current diff. It never edits the worktree, never commits, never applies its own suggestions. **You — the active Claude Code session — are the only thing that writes code.** You read each model's findings, decide what's valid, apply the fixes yourself, run tests, and commit. The `--review-model` call is a one-shot, stateless "give me your review of this diff" — nothing more.
+**Division of labour (do not blur):** each reviewer model is a *read-only reviewer* — it only returns findings on the current diff. It never edits the worktree, never commits, never applies its own suggestions. **You — the active Claude Code session — are the only thing that writes code.** You read each model's findings, decide what's valid, apply the fixes yourself, run tests, and commit. The `--review-model` call is a one-shot, stateless "give me your review of this diff" — nothing more.
 
 Rotation — use the `provider/model` lines printed by `preflight` in Step 0, in order. One review→fix cycle per model: (1) the model reviews the diff, (2) you apply/reject its findings and commit. Save the strongest model for last so it reviews after the others' fixes have landed. (`gpt-5.5`/`gpt-5.x` models are reached via Copilot's `/responses` endpoint; `orchestrate.py` routes them there automatically — nothing to configure.)
 
@@ -120,7 +120,7 @@ This command **only prints the model's review to stdout** — it makes no change
 
 **Model availability** is seat-dependent — that's exactly what `preflight` checks. If a model errors mid-run with "not found in your Copilot account" or "not accessible", drop it and continue. `gpt-5.x`/codex are reachable via Copilot but only via the `/responses` endpoint — `orchestrate.py` routes them there automatically. Gemini is no longer served to this integrator. For openai/anthropic models, `preflight` needs the matching provider token (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` env vars, or keys `"openai"` / `"anthropic"` in `~/.config/cork/auth.json` — chmod 600; tokens never go in `config.json`).
 
-**Harness reviewers.** `preflight` may also print `claude/<model>` or `codex/<model>` lines: those are locally installed coding-agent CLIs run by `orchestrate.py` as read-only reviewers (`claude --safe-mode --restricted` with only `Read,Grep,Glob` in plan mode; `codex exec -s read-only --ephemeral` with its shell/exec tools and user MCP config disabled, so codex reviews from the prompt alone). Treat them exactly like API models — same `--review-model` ref, same output format, same consolidation. They are selected when `providers.<harness>.enabled` is true and the binary is found (on PATH, or at the configured absolute `bin` path); a harness that fails or times out prints the usual `… — skipped]` sentinel and the rotation continues.
+**Harness reviewers.** `preflight` reports enabled local CLIs with status lines such as `claude: live (…)`, then includes selected harnesses in the trailing `provider/model` list (`claude/<model>`, `codex/<model>`, `opencode/<provider/model>`, or `pi/<provider/model>`). Treat selected harnesses exactly like API models — same `--review-model` ref, output format, and consolidation. Selection requires an enabled provider, installed binary, and live auth probe; a harness that fails or times out prints the usual `… — skipped]` sentinel and the rotation continues.
 
 Read the findings from stdout. For each: apply the fix in the worktree (run tests before committing), or push back with reasoning if wrong. Commit after each model's fixes with message `fix: apply {MODEL} review [{TICKET}]`.
 

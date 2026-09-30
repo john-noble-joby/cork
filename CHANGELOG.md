@@ -21,6 +21,68 @@ change, and add a section here.
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-09-29
+
+### Added
+- **OpenCode and Pi harness reviewers** — opt-in `opencode/<provider/model>` and
+  `pi/<provider/model>` lanes run under cork-enforced isolation — OpenCode through immutable
+  `OPENCODE_PERMISSION` denies (its stock `plan` agent is not read-only on its own) and Pi
+  prompt-only with no tools — with ephemeral/no-session operation and argument-based prompts.
+  Pi auth checks include `--no-refresh`, so preflight never writes refreshed credentials.
+- **Live harness auth probes** — enabled harness lanes now check CLI login state during
+  preflight and report `ok`, `not_logged_in`, `missing_binary`, `timeout`, or `error`, with the
+  lane-specific login command. Preflight continues past a full selection to report every enabled
+  harness, marking live lanes that were not selected because the count was reached.
+- **Immutable OpenCode isolation** — through `OPENCODE_PERMISSION`, cork denies `bash`; `edit`
+  (which governs write and patch tools); `task`; `webfetch`; `websearch`; `external_directory`;
+  and the experimental `lsp` tool (with the `OPENCODE_EXPERIMENTAL*` switches that enable it
+  cleared). External skill discovery and Claude Code compatibility are disabled so a branch
+  cannot inject instructions through `.claude/skills`, `.agents/skills` or `CLAUDE.md`. It also
+  disables branch-controlled OpenCode project configuration and
+  isolates the global one (`XDG_CONFIG_HOME` → a fresh cork-owned scratch dir per run, deleted
+  afterwards), so your interactive MCP servers and plugins are not loaded into the reviewer;
+  login and the models cache are unaffected. The reviewer's session goes to a throwaway
+  `OPENCODE_DB` in that scratch dir and repo snapshots are off (`snapshot: false`), so a review
+  leaves no session or snapshot in `~/.local/share/opencode`. Session sharing is refused at
+  both levels (`share: disabled` in the enforced config, inherited `OPENCODE_AUTO_SHARE`
+  cleared, `OPENCODE_DISABLE_SHARE=1`), every inherited `OPENCODE_EXPERIMENTAL*` /
+  `OPENCODE_ENABLE_*` feature switch is cleared, and auto-update is off. The legacy global directory
+  `~/.opencode/` is loaded in full (config, agents, custom tools, plugins) regardless of
+  `XDG_CONFIG_HOME`, so the lane (and its auth probe) refuses to run while it holds anything
+  beyond OpenCode's own install artifacts (`bin/`, `node_modules/`, `package.json`, lockfiles,
+  `.gitignore`), naming the entries and pointing at `~/.config/opencode/`.
+  Because OpenCode still executes a project's `.opencode/{plugin,plugins}/*.{ts,js}` despite
+  those switches (anomalyco/opencode#49836), the lane — and its auth probe — refuse to run when
+  either directory exists in the tree under review or any directory above it, and it is reported
+  as a skipped reviewer.
+  Pi runs prompt-only — `--no-tools` (its `read`/`find` accept absolute paths, so a read
+  allowlist cannot confine it to the repo), no extensions/skills/templates/themes/context files,
+  ambient `APPEND_SYSTEM.md` suppressed — and ignores project-local `.pi/` resources with
+  `--no-approve`.
+
+### Fixed
+- The OpenCode lane's config-home isolation no longer breaks on the second run: OpenCode
+  scaffolds a stub `opencode.jsonc` into `$XDG_CONFIG_HOME/opencode/` on every start, which
+  tripped cork's "must be empty" check on the next review (or auth probe). Each run now gets a
+  fresh scratch directory that is removed when the CLI exits.
+- An unwritable or file-occupied cork state dir makes a harness auth probe report `error` with
+  the cause instead of aborting preflight with a `PermissionError`/`FileExistsError` traceback.
+- A failed harness auth probe with no structured reason (malformed Pi JSON, a nonzero OpenCode
+  `auth list`) reports an empty detail instead of presenting the model's provider as the cause
+  (`unavailable (error: glm-internal)`); structured JSON reasons are still preserved.
+- OpenCode's auth probe is provider-aware: it requires a listed credential — stored or
+  environment-backed (`OpenAI OPENAI_API_KEY`) — for the model's own provider instead of any
+  nonzero credential count, so an Anthropic login no longer makes a `github-copilot/…` lane
+  look live. Display names resolve to exact provider ids via OpenCode's models.dev cache
+  (`Vertex` → `google-vertex`, distinct from `google`).
+- `<provider>/<model>` refs for OpenCode/Pi lanes must have both parts non-empty (`/model` and
+  `provider/` are rejected at config-load, not at invocation).
+- Pi's auth JSON is parsed from stdout only, so a warning on stderr no longer turns a valid
+  `{"status":"ready"}` into an `error` verdict.
+- Harness lanes refuse an argv element over 128 KiB (Linux `MAX_ARG_STRLEN`) up front — an
+  OpenCode/Pi prompt or a `--system-prompt` standards layer that large is skipped with an
+  explicit size message instead of an `Argument list too long` error.
+
 ## [0.12.0] — 2026-09-29
 
 ### Added
