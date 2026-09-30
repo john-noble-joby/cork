@@ -919,7 +919,7 @@ def _validate_harness_cfg(name: str, hc: dict) -> None:
     unknown = sorted(set(hc) - {"enabled", *_HARNESS_CONFIG_KEYS})
     if unknown:  # stderr: stdout of `auth status --json` / `config show` must stay parseable
         print(f"  ⚠ config.providers.{name}: ignoring unknown keys: {', '.join(unknown)} "
-              f"(only {', '.join(_HARNESS_CONFIG_KEYS)} are configurable; env/unset_env/"
+              f"(only enabled, {', '.join(_HARNESS_CONFIG_KEYS)} are configurable; env/unset_env/"
               f"refuse_paths are cork-enforced)", file=sys.stderr)
     if "bin" in hc and (not isinstance(hc["bin"], str) or not hc["bin"].strip()):
         fail(f"config.providers.{name}.bin must be a non-empty string")
@@ -1499,7 +1499,8 @@ def _harness_auth_probe(provider: str, model: str) -> dict:
     except FileNotFoundError:
         result["status"] = "missing_binary"
         return result
-    except (OSError, ValueError):  # ValueError: a NUL byte in a config-supplied model string
+    except (OSError, ValueError) as e:  # ValueError: a NUL byte in a config-supplied model string
+        result["detail"] = str(e)  # e.g. an existing but unwritable state dir failing the scratch mkdtemp
         return result
     result["detail"] = spec["auth_probe"]["detail"](completed, model)
     if spec["auth_probe"]["success"](completed, model):

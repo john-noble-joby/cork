@@ -74,9 +74,11 @@ change, and add a section here.
   beyond OpenCode's own install artifacts (`bin/`, `node_modules/`, `package.json`, lockfiles,
   `.gitignore`), naming the entries and pointing at `~/.config/opencode/`.
   Because OpenCode still executes a project's `.opencode/{plugin,plugins}/*.{ts,js}` despite
-  those switches (anomalyco/opencode#49836), the lane — and its auth probe — refuse to run when
-  either directory exists in the tree under review or any directory above it, and it is reported
-  as a skipped reviewer.
+  those switches (anomalyco/opencode#49836), the lane refuses to run when either directory
+  exists in the tree under review or any directory above it, and it is reported as a skipped
+  reviewer. The auth probe never sees the target repo — it runs from cork's own state dir — so
+  it applies the same scan to that directory's ancestors (and the legacy `~/.opencode/` check)
+  before launching the CLI.
   Pi runs prompt-only — `--no-tools` (its `read`/`find` accept absolute paths, so a read
   allowlist cannot confine it to the repo), no extensions/skills/templates/themes/context files,
   ambient `APPEND_SYSTEM.md` suppressed — and ignores project-local `.pi/` resources with

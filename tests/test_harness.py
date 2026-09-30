@@ -176,6 +176,20 @@ class ArgvTest(HarnessBase):
         shutil.rmtree(legacy)
         self.assertEqual(orchestrate._harness_call("opencode", "p/m", "S", "U", str(repo))[0], 200)  # no legacy dir at all
 
+    def test_probe_keeps_the_cause_when_scratch_setup_fails_after_state_dir_exists(self):
+        # STATE_DIR exists (mkdir exist_ok passes) but mkdtemp inside it fails: the probe must
+        # still say why, not just `unavailable (error)`.
+        state = self._isolated_state_dir(); state.mkdir(parents=True)
+        orig = orchestrate.tempfile.TemporaryDirectory
+        def boom(**kw): raise PermissionError(13, "Permission denied", str(state))
+        orchestrate.tempfile.TemporaryDirectory = boom
+        self.addCleanup(setattr, orchestrate.tempfile, "TemporaryDirectory", orig)
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        details = {}
+        self.assertEqual(orchestrate._probe("opencode", "gh/m", details), "error")
+        self.assertIn("Permission denied", details["detail"]); self.assertIn(str(state), details["detail"])
+        self.assertEqual(fake.calls, [])
+
     def test_unwritable_state_dir_makes_the_probe_error_not_crash(self):
         blocker = Path(self.tmp.name) / "blocker"; blocker.write_text("not a dir")
         orchestrate.STATE_DIR = blocker / "state"
@@ -474,7 +488,8 @@ class ArgvTest(HarnessBase):
 
     def test_arg_transported_lanes_budget_files_to_fit_one_argument(self):
         # 192k-char default budget > 128 KiB argv cap: without a harness-aware budget the
-        # opencode/pi lanes would skip on ordinary diffs. Files are trimmed to fit instead.
+        # opencode lane (the only one whose prompt travels as an argument) would skip on
+        # ordinary diffs. Files are trimmed to fit instead.
         files = {f"f{i}.py": "x" * 40_000 for i in range(8)}        # 320k chars of file content
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         import io, contextlib
@@ -688,7 +703,7 @@ class ConfigAndProbeTest(HarnessBase):
         import contextlib
         base = {"rotation": [{"provider": "opencode", "model": "p/m"}]}
         for extra, expected in (({"env": {}},
-                                 "  ⚠ config.providers.opencode: ignoring unknown keys: env (only bin, extra_args, "
+                                 "  ⚠ config.providers.opencode: ignoring unknown keys: env (only enabled, bin, extra_args, "
                                  "timeout are configurable; env/unset_env/refuse_paths are cork-enforced)\n"),
                                 ({}, "")):
             with self.subTest(extra=extra):
