@@ -38,9 +38,9 @@ change, and add a section here.
   `external_directory`. It also disables branch-controlled OpenCode project configuration and
   isolates the global one (`XDG_CONFIG_HOME` → an empty cork-owned dir), so your interactive MCP
   servers and plugins are not loaded into the reviewer; login and the models cache are unaffected.
-  Because OpenCode still executes a project's `.opencode/plugins/*.js` despite those switches
-  (anomalyco/opencode#49836), the lane refuses to run when the repo under review ships that
-  directory and is reported as a skipped reviewer.
+  Because OpenCode still executes a project's `.opencode/{plugin,plugins}/*.{ts,js}` despite
+  those switches (anomalyco/opencode#49836), the lane refuses to run when the tree under review
+  (up to the worktree root) ships either directory and is reported as a skipped reviewer.
   Pi runs prompt-only — `--no-tools` (its `read`/`find` accept absolute paths, so a read
   allowlist cannot confine it to the repo), no extensions/skills/templates/themes/context files,
   ambient `APPEND_SYSTEM.md` suppressed — and ignores project-local `.pi/` resources with

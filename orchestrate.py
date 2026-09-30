@@ -266,11 +266,12 @@ HARNESSES: dict[str, dict] = {
         # These are honoured independently of XDG_CONFIG_HOME and would re-introduce a
         # config (MCP servers, plugins) from the inherited environment.
         "unset_env": ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT"],
-        # opencode still imports and runs .opencode/plugins/*.js from the project despite
-        # --pure and OPENCODE_DISABLE_PROJECT_CONFIG (anomalyco/opencode#49836, open). That
-        # is branch-controlled code executing outside the permission layer, so the lane
-        # refuses to run at all when the repo under review ships that directory.
-        "refuse_paths": [".opencode/plugins"],
+        # opencode still imports and runs a project's .opencode/{plugin,plugins}/*.{ts,js}
+        # (its loader scans both spellings) despite --pure and OPENCODE_DISABLE_PROJECT_CONFIG
+        # (anomalyco/opencode#49836, open). That is branch-controlled code executing outside
+        # the permission layer, so the lane refuses to run at all when the tree under review
+        # ships either directory.
+        "refuse_paths": [".opencode/plugins", ".opencode/plugin"],
         "auth_probe": {"argv": ["auth", "list"], "success": _opencode_auth_ready,
                        "logged_out": _opencode_auth_logged_out,
                        "detail": _auth_detail, "login": "opencode auth login"},

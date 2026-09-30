@@ -153,6 +153,11 @@ class ArgvTest(HarnessBase):
         clean = Path(self.tmp.name) / "clean"; clean.mkdir()
         status, _ = orchestrate._harness_call("opencode", "p/m", "S", "U", str(clean))
         self.assertEqual((status, len(fake.calls)), (200, 1))  # a repo without plugins runs
+        # the loader scans both spellings: the singular directory is refused too
+        single = Path(self.tmp.name) / "single"; (single / ".opencode" / "plugin").mkdir(parents=True)
+        (single / ".opencode" / "plugin" / "evil.ts").write_text("")
+        status, text = orchestrate._harness_call("opencode", "p/m", "S", "U", str(single))
+        self.assertEqual((status, len(fake.calls)), (403, 1)); self.assertIn(".opencode/plugin", text)
 
     def test_opencode_refusal_scans_up_to_the_worktree_root(self):
         # OpenCode discovers .opencode upward from its cwd, so a repo path naming a
