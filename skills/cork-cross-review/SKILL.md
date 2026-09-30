@@ -89,10 +89,11 @@ Once confirmed, record the kept refs for the fan-out exactly as preflight printe
 ```bash
 N=<pr-number>
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner | tr / -)   # PR numbers are per-repo
-RUN=$(date -u +%Y%m%dT%H%M%SZ)                                        # one run = one review round
-OUT=~/.cache/cork/$REPO/pr$N/$RUN; mkdir -p "$OUT"                    # this run's reports only
-WT=/tmp/cork-$REPO-pr$N-$RUN/wt                                       # scratch worktree, unique per run
-TID="XR-$REPO-$N-$RUN"                                                # checkpoint id, unique per run
+mkdir -p ~/.cache/cork/$REPO/pr$N
+OUT=$(mktemp -d ~/.cache/cork/$REPO/pr$N/"$(date -u +%Y%m%dT%H%M%SZ)"-XXXXXX)   # allocated atomically: unique even for two runs in the same second
+RUN=${OUT##*/}                                                        # run id = that unique directory name; one run = one review round
+WT=/tmp/cork-$REPO-pr$N-$RUN/wt                                       # scratch worktree, derived from the run id
+TID="XR-$REPO-$N-$RUN"                                                # checkpoint id, derived from the run id
 gh pr view "$N" --json title,body,author,baseRefName,headRefName,headRefOid,additions,deletions,changedFiles > "$OUT/pr.json"
 gh pr diff "$N" > "$OUT/diff.patch"
 ```
@@ -135,7 +136,11 @@ file the gates left behind (tracked, untracked and ignored alike), so Step 5 can
 reviewer's write — including an in-place edit of an existing file — from a gate's build artifact:
 
 ```bash
-snapshot() { find "$WT" -path "$WT/.git" -prune -o -type f -print0 | sort -z | xargs -0 sha256sum; }
+snapshot() {   # content of every regular file, plus type/mode/link target of every entry:
+               # a chmod +x, a new or retargeted symlink, or a file turned into a link all show up
+  find "$WT" -path "$WT/.git" -prune -o \( -type f -o -type l \) -print0 | sort -z | xargs -0 stat -c '%A %N'
+  find "$WT" -path "$WT/.git" -prune -o -type f -print0 | sort -z | xargs -0 sha256sum
+}
 snapshot > "$OUT/post-gate-hashes"
 ```
 
@@ -307,8 +312,10 @@ Zero blockers **and** green gates → the PR is ready for the human to merge. Sa
 consolidated report, and clean up:
 
 ```bash
-git worktree remove --force "$WT" && git worktree prune
-rm -f ~/.local/share/code-orchestrator/"$TID".json      # the seeded story checkpoint
+# Each step independent: one failure must not skip the others (it is reported, not hidden).
+git worktree remove --force "$WT" || echo "cleanup: worktree removal failed: $WT" >&2
+git worktree prune                || echo "cleanup: worktree prune failed" >&2
+rm -f ~/.local/share/code-orchestrator/"$TID".json || echo "cleanup: checkpoint removal failed: $TID" >&2   # the seeded story checkpoint
 ```
 
 Run this block on **every** exit — red gate, plan-gate stop, `BLOCK`, or done.
