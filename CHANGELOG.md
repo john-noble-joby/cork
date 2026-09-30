@@ -34,9 +34,10 @@ change, and add a section here.
   `pi auth check … --no-refresh` preflight probe and `<provider>/<model>` ref validation.
 
 ### Fixed
-- Preserve Responses API incomplete-result reasons: skip incomplete reviews without
-  repeating the same request or accepting partial findings as complete. Token-capped
-  HTTP-200 availability probes remain successful.
+- Preserve Responses API non-completion diagnostics: skip explicitly incomplete, failed,
+  cancelled, pending, or unknown-state reviews without repeating the same request or
+  accepting partial findings as complete. Status-less compatibility responses and
+  HTTP-status-based availability probes retain their existing handling.
 - Quote skill descriptions so YAML frontmatter parsers accept embedded colons.
 - Route GPT-6 models, including Sol and Astra, through `/responses` rather than unsupported
   chat completions; share the same response extraction as GPT-5 and Codex.
