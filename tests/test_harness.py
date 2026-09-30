@@ -187,6 +187,22 @@ class ArgvTest(HarnessBase):
         self.assertIn(".opencode/plugins", details["detail"]); self.assertIn("refusing", details["detail"])
         self.assertTrue(state.is_dir())
 
+    def test_arg_prompt_trimming_is_bounded_near_the_size_boundary(self):
+        # One file that puts the element just over the limit: proportional shrinking would
+        # rebuild the identical prompt thousands of times (files are added whole).
+        calls = []
+        orig = orchestrate._budget_files
+        orchestrate._budget_files = lambda files, budget: calls.append(budget) or orig(files, budget)
+        self.addCleanup(setattr, orchestrate, "_budget_files", orig)
+        files = {"big.py": "x" * (orchestrate._MAX_ARG_BYTES - 2_000), "tiny.py": "y" * 100}
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        import io, contextlib
+        with contextlib.redirect_stdout(io.StringIO()):
+            out = orchestrate.review("opencode", "p/m", "S" * 3_000, "story", "diff", files, repo="/repo")
+        self.assertEqual(out, fake.out)
+        self.assertLess(len(fake.calls[0][0][-1].encode()), orchestrate._MAX_ARG_BYTES)
+        self.assertLess(len(calls), 25)  # binary search, not a proportional crawl (was >10k)
+
     def test_arg_transported_prompt_is_budgeted_in_bytes_not_chars(self):
         # 100k `é` is 100k chars but 200 KB; a char budget alone would overshoot into a skip.
         files = {"f.py": "é" * 100_000, "g.py": "x" * 50_000}

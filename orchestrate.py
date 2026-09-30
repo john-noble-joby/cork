@@ -1603,13 +1603,21 @@ def review(provider: str, model: str, instructions: str, story: str,
     if spec and spec["prompt_via"] == "arg":
         # The whole prompt (plus the standards, for a lane with no system flag) travels as
         # ONE argv element the kernel caps at _MAX_ARG_BYTES — in BYTES, while the budget is
-        # in characters. Shrink the file budget against the encoded size of the exact element
-        # until it fits, so UTF-8-heavy files trim instead of skipping the lane.
-        element = user_msg if spec["system_flag"] else system + _STANDARDS_SEPARATOR + user_msg
-        while len(element.encode("utf-8", "replace")) >= _MAX_ARG_BYTES and n_included > 0:
-            char_budget = int(char_budget * (_MAX_ARG_BYTES - 1) / len(element.encode("utf-8", "replace")))
-            user_msg, n_included = build(char_budget)
-            element = user_msg if spec["system_flag"] else system + _STANDARDS_SEPARATOR + user_msg
+        # in characters. Files are added whole, so the element size is a step function of
+        # the budget: binary-search the largest budget that fits (≈18 rebuilds) rather than
+        # shrinking proportionally, which can spin thousands of times near the boundary.
+        def fits(msg: str) -> bool:
+            element = msg if spec["system_flag"] else system + _STANDARDS_SEPARATOR + msg
+            return len(element.encode("utf-8", "replace")) < _MAX_ARG_BYTES
+        if not fits(user_msg):
+            lo, hi = 0, char_budget  # build(lo) has no files; build(hi) is known too big
+            while hi - lo > 1:
+                mid = (lo + hi) // 2
+                if fits(build(mid)[0]):
+                    lo = mid
+                else:
+                    hi = mid
+            user_msg, n_included = build(lo)  # a diff that alone exceeds the limit still gets the 413 skip
     if n_included < len(files):
         print(f"  → token budget: included {n_included}/{len(files)} files "
               f"(diff-only for the rest)")
