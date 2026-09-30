@@ -175,14 +175,23 @@ is for. Prefer API and prompt-only lanes for breadth.
 
 ```bash
 BASE=$(jq -r .baseRefName "$OUT/pr.json")
+SLICE=whole                     # or the slice's name: every report file carries it, so a reviewer
+                                # reused on another slice never overwrites its earlier report
 for LANE in $LANES; do
   safe="${LANE//\//-}"
-  python3 "$CORK_HOME/orchestrate.py" "$TID" "$WT" \
-      --review-model "$LANE" --base-branch "origin/$BASE" --skip-validation \
-      > "$OUT/review-$safe.txt" 2> "$OUT/review-$safe.err" &
+  ( python3 "$CORK_HOME/orchestrate.py" "$TID" "$WT" \
+        --review-model "$LANE" --base-branch "origin/$BASE" --skip-validation \
+        > "$OUT/review-$SLICE-$safe.txt" 2> "$OUT/review-$SLICE-$safe.err"
+    echo $? > "$OUT/review-$SLICE-$safe.status" ) &      # `wait` alone discards exit codes
 done
 wait
 ```
+
+A lane counts as **reviewed** only when its `.status` is `0` *and* its `.txt` holds findings —
+not the `… — skipped]` sentinel, not empty, not a crashed lane's retry/progress chatter. Anything
+else is a failed lane (roster outcome `skipped`), even if stdout is non-empty. For a sliced review
+run this loop once per slice with `SLICE` set to that slice's name and the checkpoint re-seeded
+with that slice's contract excerpt and in-scope paths.
 
 **How the contract reaches a lane (as of 0.15.0).** `--review-model` has no `--story` flag: the
 review-only path reads its story from cork's checkpoint file
@@ -235,9 +244,10 @@ Lane-specific rules learned the hard way:
   lane on *just that finding* with the evidence (hunk, dependency source, test) before grading it.
   Two vendors agreeing from the same training data is not ground truth. If the pi lane is not enabled on this seat, break ties with a third family present on this seat (e.g. `copilot/gemini-3.1-pro-preview`) or
   your own spot-check against the scratch tree — and say which in the roster. GLM rules learned
-  the hard way, to carry into its story text: no skill-tool calls; a one-line progress note after
-  each read; read the diff in explicit `sed -n 'a,bp'` ranges; write reports only under `$HOME`; a
-  "completed" run whose output is only preamble is a failed lane.
+  the hard way, to carry into its story text: it has **no tools** in this lane, so tell it to review
+  the diff exactly as given in the prompt and never to attempt a read, a shell command or a file
+  write (it will hallucinate having done so); its whole report is its stdout; a "completed" run
+  whose output is only preamble is a failed lane.
 - **`claude`** — runs `--safe-mode --restricted --tools Read,Grep,Glob --permission-mode plan`
   (no CLAUDE.md, no hooks, no MCP, no shell tool — that absence is what keeps the lane blind; file
   tools confined to the scratch tree). If `ANTHROPIC_API_KEY` is set but invalid the lane hangs
@@ -245,7 +255,7 @@ Lane-specific rules learned the hard way:
   and `auth status` reports the Copilot credential source and expiry).
 - **`codex`** — `exec -s read-only --ephemeral`; it may take 30–45 s to fail on missing auth. Its
   sandbox can read outside the repo, so keep other lanes' report files out of its `cwd`.
-- **A lane that returns the `… — skipped]` sentinel or an empty file** is a failed lane, not a
+- **A lane that returns the `… — skipped]` sentinel, an empty file, or a nonzero `.status`** is a failed lane, not a
   clean review. Note it in the roster table and continue — one attempt only; do not re-run the
   same lane in the same round.
 
@@ -265,8 +275,9 @@ before the next round:
 
 ## Step 6 — Consolidate into one verdict
 
-Read every `$OUT/review-*.txt` — `$OUT` is this run's directory, so the set is exactly the lanes
-you launched in Step 4 (never glob an older run's or another repo's reports). Produce
+Read every `$OUT/review-<slice>-<lane>.txt` that has a `0` in its `.status` — `$OUT` is this
+run's directory, so the set is exactly the (slice, lane) pairs you launched in Step 4 (never glob
+an older run's or another repo's reports); the others go in the roster as failed. Produce
 `$OUT/consolidated.md`:
 
 1. **Verdict**: `PASS` / `PASS-WITH-NONBLOCKING` / `BLOCK`.
@@ -292,15 +303,15 @@ missed, run another lane on it.
 ## Step 7 — Route blocking findings; loop on the delta
 
 - **You are the author's session** (the PR is yours): apply the fixes yourself, run the gates,
-  commit, push (never force-push), then loop to Step 1 with a **new `$OUT` run directory** and
-  `gh pr diff` again. Review-only mode has no diff-range input: every `--review-model` call
-  receives the full `<base>...HEAD` diff, so each round is a full re-review. Focus it on the delta
-  through the story instead — before the fan-out, re-seed the checkpoint with the previous round's
-  blockers and the delta (`git diff --stat <old-head>..<new-head>`, plus the hunks if small),
-  asking each lane to confirm its own blockers are closed and to look for regressions there
-  first. Run the *same* lanes. Move the scratch tree to the new head
-  (`git -C … checkout --detach <new-head>`) and re-run the gates + baseline (Step 2). A
-  `--diff-range` input that makes rounds delta-only is a registered follow-on.
+  commit, push (never force-push), then **run the Step 8 cleanup block for this round** (its
+  worktree and checkpoint) and loop to Step 1, which allocates the next round's `$OUT`, `$WT` and
+  `$TID` and checks out the new head. Review-only mode has no diff-range input: every
+  `--review-model` call receives the full `<base>...HEAD` diff, so each round is a full re-review.
+  Focus it on the delta through the story instead — before the fan-out, re-seed the checkpoint
+  with the previous round's blockers and the delta (`git diff --stat <old-head>..<new-head>`, plus
+  the hunks if small), asking each lane to confirm its own blockers are closed and to look for
+  regressions there first. Run the *same* lanes. A `--diff-range` input that makes rounds
+  delta-only is a registered follow-on.
 - **Someone else's PR**: post `$OUT/consolidated.md` as a PR comment (`gh pr comment $N
   --body-file …`) or hand it to the author as they prefer. Never push to their branch.
 - After **three** loops without reaching zero blockers, stop and escalate to the human with the
