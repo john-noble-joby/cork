@@ -352,8 +352,8 @@ Zero blockers **and** green gates → the PR is ready for the human to merge. Sa
 consolidated report, and clean up:
 
 ```bash
-# Only for a run Step 1 allocated: unset WT/TID would make the loops target /wt* and .json.
-[ -n "${WT:-}" ] && [ -n "${TID:-}" ] || { echo "cleanup: no run allocated — nothing to clean" >&2; false; } &&
+# Only for a run Step 1 allocated: an unset WT would make the loop target /wt*.
+[ -n "${WT:-}" ] || { echo "cleanup: no run allocated — nothing to clean" >&2; false; } &&
 # Each step independent: one failure must not skip the others (it is reported, not hidden).
 for t in "${WT%/wt}"/wt*; do git worktree remove --force "$t" || echo "cleanup: worktree removal failed: $t" >&2; done
 git worktree prune                || echo "cleanup: worktree prune failed" >&2
