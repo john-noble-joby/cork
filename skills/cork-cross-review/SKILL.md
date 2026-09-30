@@ -205,6 +205,10 @@ is for. Prefer API and prompt-only lanes for breadth.
 BASE=$(jq -r .baseRefName "$OUT/pr.json")
 SLICE=whole                     # or the slice's name: every report file carries it, so a reviewer
                                 # reused on another slice never overwrites its earlier report
+# The story every lane receives (--story-file): contract + scope + the verbatim rule below.
+# Written BEFORE the loop; rewrite it (contract excerpt, in-scope paths) before each slice's loop.
+{ echo "## Acceptance contract"; cat "$OUT/contract.md"; echo; echo "## In-scope paths"; echo "<pathspec or 'whole diff'>";
+  echo; echo "## Rule"; echo "<the verbatim rule below>"; } > "$OUT/story.md"
 for LANE in $LANES; do
   safe="${LANE//\//-}"
   LANE_WT="$WT"                                   # prompt-only lanes (codex, pi, API) cannot touch the tree
@@ -228,15 +232,9 @@ else is a failed lane (roster outcome `skipped`), even if stdout is non-empty. F
 run this loop once per slice with `SLICE` set to that slice's name and the story file rewritten
 with that slice's contract excerpt and in-scope paths.
 
-**How the contract reaches a lane (0.16.0).** Write the story file **before the fan-out** and
-pass it with `--story-file`, so API and harness lanes receive the same acceptance contract without
-touching cork's checkpoints (the `$TID` positional is only a label for this run):
-
-```bash
-{ echo "## Acceptance contract"; cat "$OUT/contract.md"; echo; echo "## In-scope paths"; echo "<pathspec or 'whole diff'>";
-  echo; echo "## Rule"; echo "<the verbatim rule below>"; } > "$OUT/story.md"
-```
-
+**How the contract reaches a lane (0.16.0).** The story file written at the top of the block
+above travels with `--story-file`, so API and harness lanes receive the same acceptance contract
+without touching cork's checkpoints (the `$TID` positional is only a label for this run).
 `--review-model` has no pathspec/slice option, so every call receives the full branch diff: for a
 sliced review, write a story file per slice with that slice's contract excerpt and in-scope paths,
 then pass it with `--story-file` in that slice's lane loop. Harness lanes run with the
