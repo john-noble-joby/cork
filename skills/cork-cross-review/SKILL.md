@@ -106,7 +106,9 @@ sentence per required behaviour — do not let reviewers invent the spec.
 
 ```bash
 HEAD=$(jq -r .headRefOid "$OUT/pr.json"); BASE=$(jq -r .baseRefName "$OUT/pr.json")
-git fetch origin "$BASE" "pull/$N/head"        # fetch the base too, so origin/$BASE is current for slice diffs
+# Explicit refspecs: update origin/$BASE itself (a bare `git fetch origin $BASE` only guarantees
+# FETCH_HEAD), so the slice diffs and every lane's --base-branch origin/$BASE see the current base.
+git fetch origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" "+refs/pull/$N/head:refs/remotes/origin/pr/$N"
 git worktree add --detach "$WT" "$HEAD"
 ```
 
