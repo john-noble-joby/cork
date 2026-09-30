@@ -405,9 +405,11 @@ Pi retains its user-level provider configuration and login; explicit `extra_args
 trusted and must not re-enable resources/tools. Cork does not copy or export credentials.
 `openai-codex` uses Pi's ChatGPT OAuth login, distinct from OpenAI API-key billing; account
 limits still apply. Check `pi auth check --provider openai-codex --json` (no credentials
-flag), then smoke-test each model. Harness preflight checks only binary presence, not
-login or model access. No Codex CLI login is required, and `responses_effort` does not
-control Pi: use `--thinking` as above.
+flag), then smoke-test each model. Harness preflight runs that same login probe live
+(`pi: live (openai-codex)` / `logged-out — run …`), but it does not validate model access —
+a model the account cannot use still surfaces only at review time, so the smoke test stays.
+No Codex CLI login is required, and `responses_effort` does not control Pi: use `--thinking`
+as above.
 
 ### Interactive review (`interactive_review`, default on)
 
