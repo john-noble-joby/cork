@@ -460,6 +460,19 @@ class ConfigAndProbeTest(HarnessBase):
                 with self.subTest(lane=lane, model=bad), self.assertRaises(SystemExit):
                     orchestrate._validate_config({"rotation": [{"provider": lane, "model": bad}]})
 
+    def test_direct_review_model_ref_is_shape_checked_before_anything_else(self):
+        import contextlib, io
+        orig = orchestrate._probe
+        orchestrate._probe = lambda *a, **k: self.fail("must not probe a malformed ref")
+        self.addCleanup(setattr, orchestrate, "_probe", orig)
+        for ref in ("opencode/github-copilot", "pi//m", "pi/ /m", "opencode/p/"):
+            for validate in (True, False):  # the shape check is not `--skip-validation`'s probe
+                with self.subTest(ref=ref, validate=validate):
+                    err = io.StringIO()
+                    with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+                        orchestrate.cmd_review("T", "/nonexistent-repo", "main", ref, validate=validate)
+                    self.assertIn("must be <provider>/<model>", err.getvalue())  # not the base-ref failure
+
     def test_validate_harness_keys_types(self):
         base = {"rotation": [{"provider": "codex", "model": "m"}]}
         orchestrate._validate_config({**base, "providers": {"codex": {

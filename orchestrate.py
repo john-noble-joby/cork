@@ -829,12 +829,7 @@ def _validate_config(cfg: dict) -> None:
         if entry["provider"] not in PROVIDER_BASE and entry["provider"] not in HARNESSES:
             fail(f"unknown provider '{entry['provider']}' "
                  f"(known: {', '.join([*PROVIDER_BASE, *HARNESSES])})")
-        spec = HARNESSES.get(entry["provider"])
-        if spec and spec.get("model_ref_parts", 1) > 1:
-            parts = entry["model"].split("/", 1) if isinstance(entry["model"], str) else []
-            if len(parts) != 2 or not all(part.strip() for part in parts):
-                fail(f"{entry['provider']} model must be <provider>/<model> with both parts "
-                     f"non-empty: {entry['model']!r}")
+        _validate_model_ref(entry["provider"], entry["model"])
         key = f"{entry['provider']}/{entry['model']}"
         if key in seen:
             fail(f"duplicate rotation entry: {key}")
@@ -856,6 +851,17 @@ def _validate_config(cfg: dict) -> None:
         fail("config.interactive_review must be true or false (a JSON boolean)")
     if not isinstance(cfg.get("default_standards", True), bool):
         fail("config.default_standards must be true or false (a JSON boolean)")
+
+
+def _validate_model_ref(provider: str, model: object) -> None:
+    # Shape check shared by config loading and direct `--review-model` refs, so a
+    # malformed opencode/pi ref (`opencode/github-copilot`, `pi//m`) fails before any probe
+    # instead of probing the provider successfully and then handing the CLI a bad model.
+    spec = HARNESSES.get(provider)
+    if spec and spec.get("model_ref_parts", 1) > 1:
+        parts = model.split("/", 1) if isinstance(model, str) else []
+        if len(parts) != 2 or not all(part.strip() for part in parts):
+            fail(f"{provider} model must be <provider>/<model> with both parts non-empty: {model!r}")
 
 
 def _validate_harness_cfg(name: str, hc: dict) -> None:
@@ -1969,6 +1975,7 @@ def cmd_auth_print_token(as_json: bool = False) -> None:
 
 
 def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True) -> None:
+    _validate_model_ref(*_split_model_ref(model_ref))  # shape only; independent of --skip-validation
     require_base_ref(repo, base)
     diff = git_diff_branch(repo, base)
     if not diff.strip():
