@@ -144,6 +144,12 @@ snapshot() {   # snapshot <tree>: mode + type + link target of EVERY entry excep
   python3 - "$1" <<'PY'
 import hashlib, os, sys
 root = sys.argv[1]
+def digest(path):                      # streamed: gate artifacts can be huge (images, archives, DBs)
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 for dirpath, dirs, files in os.walk(root):
     dirs[:] = sorted(d for d in dirs if not (dirpath == root and d == ".git"))
     for name in sorted(dirs + files):
@@ -152,7 +158,7 @@ for dirpath, dirs, files in os.walk(root):
         if os.path.islink(path):
             line += " -> " + os.readlink(path)
         elif os.path.isfile(path):
-            line += " " + hashlib.sha256(open(path, "rb").read()).hexdigest()
+            line += " " + digest(path)
         print(line)
 PY
 }
