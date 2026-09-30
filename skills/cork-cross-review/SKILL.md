@@ -5,7 +5,7 @@ description: "Use when the user says \"cross review PR <n>\", \"cork cross-revie
 
 # cork-cross-review — independent, cross-vendor PR verification
 
-**Version:** 0.16.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.17.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 **You are the tech lead, not the reviewer.** The author never signs off on their own work, and
 neither do you — a *different vendor's* model does. Your job is to gather the diff and its
@@ -232,7 +232,7 @@ else is a failed lane (roster outcome `skipped`), even if stdout is non-empty. F
 run this loop once per slice with `SLICE` set to that slice's name and the story file rewritten
 with that slice's contract excerpt and in-scope paths.
 
-**How the contract reaches a lane (0.16.0).** The story file written at the top of the block
+**How the contract reaches a lane (0.17.0).** The story file written at the top of the block
 above travels with `--story-file`, so API and harness lanes receive the same acceptance contract
 without touching cork's checkpoints (the `$TID` positional is only a label for this run).
 `--review-model` has no pathspec/slice option, so every call receives the full branch diff: for a
