@@ -40,7 +40,8 @@ change, and add a section here.
 - Preserve Responses API non-completion diagnostics: skip explicitly incomplete, failed,
   cancelled, pending, or unknown-state reviews without repeating the same request or
   accepting partial findings as complete. Missing or malformed diagnostic containers use
-  the unknown-reason fallback. Status-less compatibility responses and HTTP-status-based
+  the unknown-reason fallback. Only missing/null/empty-string statuses retain compatibility
+  handling; other falsy values cannot bypass the completion guard. HTTP-status-based
   availability probes retain their existing handling.
 - Correct remaining auth-probe diagnostics: preserve scratch-directory failures and avoid
   presenting the Pi provider as the reason for malformed or contradictory auth output.

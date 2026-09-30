@@ -212,9 +212,10 @@ Reasoning and findings share a 32,000-token output budget. A Responses API revie
 explicit non-completed status (`incomplete`, `failed`, cancelled, pending, or an unknown state)
 is skipped without retrying, even if partial text exists. The skip includes the state and
 incomplete reason or error message/code, falling back to `unknown reason` for missing or malformed
-diagnostic containers. For token exhaustion,
-reduce the diff size or effort before rerunning. Responses without a status retain compatibility
-handling. Availability probes still classify by HTTP status only: HTTP 200 is available even
+diagnostic containers. For token exhaustion, reduce the diff size or effort before rerunning.
+Only missing, null, or empty-string statuses retain status-less compatibility handling; other
+non-completed values, including malformed falsy values, are skipped. Availability probes still
+classify by HTTP status only: HTTP 200 is available even
 when the body reports a failed or incomplete response; that does not prove a review completed.
 
 **Providers:** Copilot is the default and recommended path (one flat-rate seat). `openai`

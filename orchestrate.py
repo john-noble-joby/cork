@@ -1456,8 +1456,9 @@ def _call_and_extract(provider: str, model: str, system: str,
         return status, str(body), None
     if _uses_responses_api(model):
         response_status = body.get("status")
-        # Some compatibility proxies omit status; explicit non-completion is never findings.
-        if response_status and response_status != "completed":
+        # Only missing/null/empty-string statuses are compatibility responses. Other
+        # non-completed values, including falsy malformed statuses, are never findings.
+        if response_status not in (None, "", "completed"):
             if response_status == "incomplete":
                 details = body.get("incomplete_details")
                 reason = details.get("reason") if isinstance(details, dict) else None

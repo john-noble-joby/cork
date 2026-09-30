@@ -89,6 +89,20 @@ class ResponsesCompletionTest(unittest.TestCase):
                                  f"[copilot/gpt-6-sol review {state} (unknown reason) — skipped]")
                 self.assertEqual(self.http.call_count, 1)
 
+    def test_malformed_status_values_skip_once_but_probes_remain_available(self):
+        for provider in ("copilot", "openai"):
+            for state in (False, 0, 0.0, [], {}, True, 1, ["completed"], {"status": "completed"}):
+                for text in ("", "Partial findings"):
+                    with self.subTest(provider=provider, state=state, text=text):
+                        self.http.reset_mock()
+                        self.http.return_value = (200, {"status": state, "output_text": text})
+                        self.assertEqual(self.review(provider),
+                                         f"[{provider}/gpt-6-sol review {state} (unknown reason) — skipped]")
+                        self.assertEqual(self.http.call_count, 1)
+                        self.http.reset_mock()
+                        self.assertEqual(orchestrate._probe(provider, "gpt-6-sol"), "ok")
+                        self.assertEqual(self.http.call_count, 1)
+
     def test_high_effort_probe_accepts_http_200_with_no_output(self):
         for body in ({}, {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}},
                      {"status": "failed", "error": {"message": "fixture failure"}},
