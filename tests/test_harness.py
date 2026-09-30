@@ -168,12 +168,34 @@ class ArgvTest(HarnessBase):
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         status, text = orchestrate._harness_call("opencode", "p/m", "S", "U", str(root / "sub" / "deeper"))
         self.assertEqual((status, fake.calls), (403, []))
-        self.assertIn(str(root / ".opencode" / "plugins"), text)
-        # the scan stops at the worktree root: a plugins dir ABOVE the repo is not the branch's
+        self.assertIn(str(root / ".opencode" / "plugins"), text); self.assertIn("branch-controlled", text)
+        # OpenCode walks EVERY ancestor, so a plugins dir above the repo is refused too — and the
+        # message says it is the user's environment, not the branch
         outer = Path(self.tmp.name) / "outer"; (outer / ".opencode" / "plugins").mkdir(parents=True)
         inner = outer / "repo"; inner.mkdir(); (inner / ".git").mkdir()
-        status, _ = orchestrate._harness_call("opencode", "p/m", "S", "U", str(inner))
-        self.assertEqual((status, len(fake.calls)), (200, 1))
+        status, text = orchestrate._harness_call("opencode", "p/m", "S", "U", str(inner))
+        self.assertEqual((status, fake.calls), (403, [])); self.assertIn("your own environment", text)
+
+    def test_opencode_probe_applies_the_refusal_from_its_own_cwd(self):
+        # ~/.opencode/plugins above cork's state dir would execute during `opencode auth list`
+        state = self._isolated_state_dir()                 # <tmp>/state
+        (Path(self.tmp.name) / ".opencode" / "plugins").mkdir(parents=True)  # an ancestor of it
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        details = {}
+        self.assertEqual(orchestrate._probe("opencode", "github-copilot/gpt-5", details), "error")
+        self.assertEqual(fake.calls, [])                   # never launched
+        self.assertIn(".opencode/plugins", details["detail"]); self.assertIn("refusing", details["detail"])
+        self.assertTrue(state.is_dir())
+
+    def test_arg_transported_prompt_is_budgeted_in_bytes_not_chars(self):
+        # 100k `é` is 100k chars but 200 KB; a char budget alone would overshoot into a skip.
+        files = {"f.py": "é" * 100_000, "g.py": "x" * 50_000}
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        import io, contextlib
+        with contextlib.redirect_stdout(io.StringIO()):
+            out = orchestrate.review("opencode", "p/m", "S", "story", "small diff", files, repo="/repo")
+        self.assertEqual(out, fake.out)
+        self.assertLess(len(fake.calls[0][0][-1].encode()), orchestrate._MAX_ARG_BYTES)
 
     def test_opencode_clears_inherited_explicit_config_variables(self):
         # OPENCODE_CONFIG / _CONFIG_DIR / _CONFIG_CONTENT are honoured regardless of

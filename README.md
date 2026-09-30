@@ -262,8 +262,10 @@ shows none, `auth list` unchanged); any inherited `OPENCODE_CONFIG`, `OPENCODE_C
 and runs a project's `.opencode/plugins/*.{ts,js}` — and the singular `.opencode/plugin/`,
 which its loader scans too (upstream anomalyco/opencode#49836, open). That would be
 branch-controlled code executing outside the permission layer, so cork refuses to run the
-OpenCode lane at all when the tree under review (up to the worktree root) contains either
-directory, and reports it as a skipped reviewer. Pi runs with **no tools at all**: its `read` and `find` accept
+OpenCode lane at all when either directory exists in the tree under review or in any
+directory above it (OpenCode walks every ancestor of its cwd), and reports it as a skipped
+reviewer — the message says whether the hit is the branch's or your own environment's. The
+auth probe applies the same refusal before it launches the CLI. Pi runs with **no tools at all**: its `read` and `find` accept
 absolute paths, so a read allowlist would still let a prompt-injected review reach other
 reviewers' `/tmp/cork-review-*` files. Its extensions, skills, prompt templates, themes,
 context files and ambient `APPEND_SYSTEM.md` are disabled too; it keeps no session, ignores

@@ -300,6 +300,7 @@ HARNESSES: dict[str, dict] = {
 # user-overridable, so the read-only contract does not depend on configuration.
 _HARNESS_CONFIG_KEYS = ("bin", "extra_args", "timeout")
 _MAX_ARG_BYTES = 131_072  # Linux MAX_ARG_STRLEN — counts the NUL terminator, so usable bytes are one fewer
+_STANDARDS_SEPARATOR = "\n\n=== END OF REVIEW STANDARDS — REVIEW TASK FOLLOWS ===\n\n"  # lanes with no system flag
 
 DEFAULT_CONFIG = {
     "version": 1,
@@ -1277,17 +1278,45 @@ def _harness_env(spec: dict) -> dict[str, str]:
 
 
 def _find_upward(start: Path, rel: str) -> Path | None:
-    # CLIs discover project config upward from their cwd to the worktree root, so a repo
-    # path naming a subdirectory must not skip a match higher up. Walk from `start` to the
-    # first ancestor holding `.git` (a dir, or a file for linked worktrees), inclusive;
-    # without one, to the filesystem root.
+    # OpenCode discovers `.opencode/{plugin,plugins}` by walking EVERY ancestor of its cwd
+    # (not just to the worktree root), so the scan goes all the way up: a repo path naming
+    # a subdirectory, or a plugins dir sitting above the repo, both count.
     here = start.resolve()
     while True:
         if (here / rel).exists():
             return here / rel
-        if (here / ".git").exists() or here.parent == here:
+        if here.parent == here:
             return None
         here = here.parent
+
+
+def _worktree_root(start: Path) -> Path | None:
+    # Nearest ancestor (inclusive) holding `.git` — a dir, or a file for linked worktrees.
+    here = start.resolve()
+    while True:
+        if (here / ".git").exists():
+            return here
+        if here.parent == here:
+            return None
+        here = here.parent
+
+
+def _refusal(spec: dict, provider: str, cwd: str) -> str | None:
+    # Fail-closed check shared by the review call and the auth probe: the reason a lane
+    # must not be launched from `cwd`, or None. Says whose directory it is: inside the
+    # worktree it is branch-controlled code; above it, the user's own environment.
+    root = _worktree_root(Path(cwd))
+    for rel in spec.get("refuse_paths", []):
+        hit = _find_upward(Path(cwd), rel)
+        if hit is None:
+            continue
+        where = ("in the tree under review (branch-controlled code)"
+                 if root is not None and hit.is_relative_to(root) else
+                 "above the working directory, in your own environment")
+        return (f"{provider}: {hit} exists {where} and {spec['bin']} would execute it "
+                f"(anomalyco/opencode#49836) — refusing to run this lane; remove it or leave "
+                f"the lane disabled")
+    return None
 
 
 def _harness_call(provider: str, model: str, system: str, user_msg: str,
@@ -1296,15 +1325,11 @@ def _harness_call(provider: str, model: str, system: str, user_msg: str,
     if not repo:
         fail(f"{provider} harness review needs a repo path (cwd for the reviewer)")
     spec = _harness_settings(provider)
-    for rel in spec.get("refuse_paths", []):
-        hit = _find_upward(Path(repo), rel)
-        if hit is not None:
-            return 403, (f"{provider}: {hit} exists in the tree under review and {spec['bin']} "
-                         f"would execute it (branch-controlled code, anomalyco/opencode#49836) — "
-                         f"refusing to run this lane")
+    refused = _refusal(spec, provider, repo)
+    if refused:
+        return 403, refused
     timeout = timeout or spec["timeout"]
-    prompt = user_msg if spec["system_flag"] else (
-        f"{system}\n\n=== END OF REVIEW STANDARDS — REVIEW TASK FOLLOWS ===\n\n{user_msg}")
+    prompt = user_msg if spec["system_flag"] else system + _STANDARDS_SEPARATOR + user_msg
     argv = _harness_argv(spec, model, repo, system)
     if spec["prompt_via"] == "stdin":
         run_kw: dict = {"input": prompt}
@@ -1383,10 +1408,15 @@ def _harness_auth_probe(provider: str, model: str) -> dict:
         return result
     sub = {"model_provider": model.split("/", 1)[0]}
     argv = [spec["bin"], *(arg.format(**sub) for arg in spec["auth_probe"]["argv"])]
+    cwd = _probe_cwd()
+    refused = _refusal(spec, provider, cwd)  # the probe launches the CLI too
+    if refused:
+        result["detail"] = refused
+        return result
     try:
         # Same environment hardening as the review call, from a cork-owned cwd (never the
         # repo), decoded leniently: a stray byte must yield `error`, not a traceback.
-        completed = subprocess.run(argv, timeout=10, stdin=subprocess.DEVNULL, cwd=_probe_cwd(),
+        completed = subprocess.run(argv, timeout=10, stdin=subprocess.DEVNULL, cwd=cwd,
                                    env=_harness_env(spec), capture_output=True, text=True,
                                    encoding="utf-8", errors="replace")
     except subprocess.TimeoutExpired:
@@ -1550,19 +1580,29 @@ def review(provider: str, model: str, instructions: str, story: str,
         if instructions else REVIEW_SYSTEM
     )
     system = review_system + "\n\n" + SPEC_CONFORMANCE_SUFFIX
-    if provider in HARNESSES and HARNESSES[provider]["prompt_via"] == "arg":
-        # The whole prompt (for a lane without a system flag, the standards too) travels as
-        # ONE argv element, capped by the kernel at _MAX_ARG_BYTES. Budget the file block to
-        # fit instead of letting _harness_call's guard skip the lane on ordinary diffs.
-        char_budget = min(char_budget, _MAX_ARG_BYTES - 1)
     fixed_chars = len(system) + len(story) + len(diff) + 500
-    file_block, n_included = _budget_files(files, max(0, char_budget - fixed_chars))
+
+    def build(budget: int) -> tuple[str, int]:
+        file_block, n = _budget_files(files, max(0, budget - fixed_chars))
+        return (f"## Story / Task\n{story}\n\n"
+                f"## Changed Files (current state)\n{file_block}\n\n"
+                f"## Branch Diff\n```diff\n{diff}\n```"), n
+
+    user_msg, n_included = build(char_budget)
+    spec = HARNESSES.get(provider)
+    if spec and spec["prompt_via"] == "arg":
+        # The whole prompt (plus the standards, for a lane with no system flag) travels as
+        # ONE argv element the kernel caps at _MAX_ARG_BYTES — in BYTES, while the budget is
+        # in characters. Shrink the file budget against the encoded size of the exact element
+        # until it fits, so UTF-8-heavy files trim instead of skipping the lane.
+        element = user_msg if spec["system_flag"] else system + _STANDARDS_SEPARATOR + user_msg
+        while len(element.encode("utf-8", "replace")) >= _MAX_ARG_BYTES and n_included > 0:
+            char_budget = int(char_budget * (_MAX_ARG_BYTES - 1) / len(element.encode("utf-8", "replace")))
+            user_msg, n_included = build(char_budget)
+            element = user_msg if spec["system_flag"] else system + _STANDARDS_SEPARATOR + user_msg
     if n_included < len(files):
         print(f"  → token budget: included {n_included}/{len(files)} files "
               f"(diff-only for the rest)")
-    user_msg = (f"## Story / Task\n{story}\n\n"
-                f"## Changed Files (current state)\n{file_block}\n\n"
-                f"## Branch Diff\n```diff\n{diff}\n```")
 
     if provider in HARNESSES:  # one shot; a dead harness is a skipped reviewer, never a traceback
         status, text = _call_and_extract(provider, model, system, user_msg, repo=repo)
