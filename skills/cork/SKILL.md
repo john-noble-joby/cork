@@ -161,7 +161,7 @@ done
 wait
 ```
 
-Each `--review-model` call is stateless and read-only — it only prints findings. Pass `--skip-validation` here to avoid repeating API availability requests after preflight; harness validation re-runs the CLI's login probe (no model turn is spent) and never checks model access. The positional ticket arg isn't used by review output, so any placeholder is fine when there's no ticket. Copilot and OpenAI API lanes auto-route `gpt-5.x`/`gpt-6.x`/codex to `/responses`; CLI harnesses retain their own provider routing. If a model errors, drop it and keep the rest (see *Model availability* under full mode).
+Each `--review-model` call is stateless and read-only — it only prints findings. Pass `--skip-validation` here to bypass both API availability requests and harness login probes already performed by preflight. Without this flag, harness validation re-runs the CLI's login probe (no model turn is spent) but still does not check model access. The positional ticket arg isn't used by review output, so any placeholder is fine when there's no ticket. Copilot and OpenAI API lanes auto-route `gpt-5.x`/`gpt-6.x`/codex to `/responses`; CLI harnesses retain their own provider routing. If a model errors, drop it and keep the rest (see *Model availability* under full mode).
 
 ### R2 — Consolidate into one report
 

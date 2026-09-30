@@ -321,8 +321,9 @@ no system-prompt flag, so the standards are prepended to the prompt body under a
 `--system-prompt` argument. Linux caps a single argument at 128 KiB, so a standards layer
 that large — or an OpenCode prompt that large, since that lane passes the prompt as an
 argument — is refused by cork before the CLI runs and the lane is skipped with an explicit
-size message. Codex, claude and pi take the prompt itself on stdin, so for them only the
-`--system-prompt` standards argument is subject to the limit. **Trust boundary:** the
+size message. Codex, Claude and Pi take the prompt itself on stdin. Only Claude and Pi
+have a `--system-prompt` standards argument subject to that limit; Codex sends both the
+standards and task on stdin. **Trust boundary:** the
 reviewer follows instructions from the branch under review (`code-review/AGENTS.md`, file
 contents) with your local login, so a hostile branch could steer it into reading and quoting
 files it can reach (`--restricted` limits claude to the repo; codex has no file access,

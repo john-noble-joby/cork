@@ -1,4 +1,4 @@
-import inspect, io, json, os, shutil, subprocess, tempfile, unittest
+import ast, inspect, io, json, os, shutil, subprocess, tempfile, unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 import orchestrate
@@ -39,6 +39,19 @@ class HarnessBase(unittest.TestCase):
         for k, v in self._env.items():
             os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
         self.tmp.cleanup()
+
+
+class HarnessRegistryTest(unittest.TestCase):
+    def test_harness_source_has_unique_literal_keys(self) -> None:
+        # Inspect source: constructing the dict has already discarded duplicate keys.
+        tree = ast.parse(Path(orchestrate.__file__).read_text(encoding="utf-8"))
+        table = next(node.value for node in tree.body
+                     if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+                     and node.target.id == "HARNESSES")
+        self.assertIsInstance(table, ast.Dict)
+        keys = [ast.literal_eval(key) for key in table.keys]
+        self.assertEqual(len(keys), len(set(keys)), f"Duplicate HARNESSES keys: {keys}")
+        self.assertEqual(keys.count("pi"), 1)
 
 
 class ArgvTest(HarnessBase):
