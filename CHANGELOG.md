@@ -25,9 +25,10 @@ change, and add a section here.
 
 ### Added
 - **OpenCode and Pi harness reviewers** — opt-in `opencode/<provider/model>` and
-  `pi/<provider/model>` lanes use each CLI's read-only mode, ephemeral/no-session operation,
-  and argument-based prompts. Pi auth checks include `--no-refresh`, so preflight never writes
-  refreshed credentials.
+  `pi/<provider/model>` lanes run under cork-enforced isolation — OpenCode through immutable
+  `OPENCODE_PERMISSION` denies (its stock `plan` agent is not read-only on its own) and Pi
+  prompt-only with no tools — with ephemeral/no-session operation and argument-based prompts.
+  Pi auth checks include `--no-refresh`, so preflight never writes refreshed credentials.
 - **Live harness auth probes** — enabled harness lanes now check CLI login state during
   preflight and report `ok`, `not_logged_in`, `missing_binary`, `timeout`, or `error`, with the
   lane-specific login command. Preflight continues past a full selection to report every enabled

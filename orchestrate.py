@@ -127,8 +127,12 @@ def _opencode_credential_providers(result: subprocess.CompletedProcess) -> set[s
 
 
 def _opencode_has_provider(result: subprocess.CompletedProcess, model: str) -> bool:
+    # The listing shows models.dev display names, not provider ids ("Vertex" for
+    # google-vertex, "GitHub Copilot" for github-copilot), so slug equality is not
+    # enough: accept containment in either direction between the slugged name and the id.
     provider = model.split("/", 1)[0].lower()
-    return provider in _opencode_credential_providers(result)
+    return any(name == provider or name in provider or provider in name
+               for name in _opencode_credential_providers(result) if len(name) >= 3)
 
 
 def _opencode_auth_ready(result: subprocess.CompletedProcess, model: str) -> bool:

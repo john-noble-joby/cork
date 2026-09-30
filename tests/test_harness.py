@@ -500,6 +500,9 @@ class AuthProbeTest(HarnessBase):
             (listing, "openai/gpt-5", "not_logged_in"),          # others' credentials don't count
             (with_env, "openai/gpt-5", "ok"),                    # environment-backed counts for its provider
             (with_env, "google/gemini", "not_logged_in"),        # footers never parse as providers
+            # display names are models.dev labels, not ids: "Vertex" must satisfy google-vertex/…
+            (with_env + "●  Vertex GOOGLE_APPLICATION_CREDENTIALS\n", "google-vertex/gemini-2.5-pro", "ok"),
+            (with_env + "●  Amazon Bedrock AWS_ACCESS_KEY_ID\n", "amazon-bedrock/claude", "ok"),
             ("└  2 credentials\n", "github-copilot/gpt-5", "not_logged_in"),  # aggregate count alone is not auth
             ("└  0 credentials\n", "github-copilot/gpt-5", "not_logged_in"),
             ("●  GitHub Copilot oauth\n1 credential", "github-copilot/gpt-5", "ok"),
