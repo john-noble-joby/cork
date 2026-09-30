@@ -293,6 +293,14 @@ HARNESSES: dict[str, dict] = {
         # the permission layer, so the lane refuses to run at all when the tree under review
         # ships either directory.
         "refuse_paths": [".opencode/plugins", ".opencode/plugin"],
+        # The legacy global dir $HOME/.opencode is loaded regardless of XDG_CONFIG_HOME
+        # and OPENCODE_DISABLE_PROJECT_CONFIG (verified on 1.17.3 with a repo outside
+        # HOME: an MCP server declared there was started). Its config would hand the
+        # reviewer MCP tools past the permission layer, and its plugins are executed, so
+        # the lane refuses to run while any of these exist. The upward scan above only
+        # reaches $HOME/.opencode when the repo is under HOME.
+        "refuse_home_paths": [".opencode/opencode.json", ".opencode/opencode.jsonc",
+                              ".opencode/plugins", ".opencode/plugin"],
         "auth_probe": {"argv": ["auth", "list"], "success": _opencode_auth_ready,
                        "logged_out": _opencode_auth_logged_out,
                        "detail": _auth_detail, "login": "opencode auth login"},
@@ -1333,6 +1341,12 @@ def _refusal(spec: dict, provider: str, cwd: str) -> str | None:
         return (f"{provider}: {hit} exists {where} and {spec['bin']} would execute it "
                 f"(anomalyco/opencode#49836) — refusing to run this lane; remove it or leave "
                 f"the lane disabled")
+    for rel in spec.get("refuse_home_paths", []):
+        hit = Path.home() / rel
+        if hit.exists():
+            return (f"{provider}: {hit} exists and {spec['bin']} loads it regardless of "
+                    f"XDG_CONFIG_HOME (legacy global config) — refusing to run this lane; move "
+                    f"it under ~/.config/opencode/, which cork isolates, or leave the lane disabled")
     return None
 
 
@@ -1426,7 +1440,11 @@ def _harness_auth_probe(provider: str, model: str) -> dict:
         return result
     sub = {"model_provider": model.split("/", 1)[0]}
     argv = [spec["bin"], *(arg.format(**sub) for arg in spec["auth_probe"]["argv"])]
-    cwd = _probe_cwd()
+    try:
+        cwd = _probe_cwd()
+    except OSError as e:  # unwritable state dir: this lane errors, preflight continues
+        result["detail"] = f"cannot create {STATE_DIR}: {e}"
+        return result
     refused = _refusal(spec, provider, cwd)  # the probe launches the CLI too
     if refused:
         result["detail"] = refused

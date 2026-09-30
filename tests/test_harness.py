@@ -1,4 +1,4 @@
-import inspect, io, json, os, subprocess, tempfile, unittest
+import inspect, io, json, os, shutil, subprocess, tempfile, unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 import orchestrate
@@ -113,6 +113,39 @@ class ArgvTest(HarnessBase):
         self.assertEqual(kw["env"]["OPENCODE_DB"], str(scratch / "opencode.db"))
         self.assertNotIn("OPENCODE_CONFIG", kw["env"])
         self.assertEqual((kw["encoding"], kw["errors"]), ("utf-8", "replace"))
+
+    def test_opencode_refuses_legacy_home_config_and_plugins(self):
+        # $HOME/.opencode/opencode.json{,c} and plugin dirs load regardless of XDG_CONFIG_HOME
+        # (verified on 1.17.3 with a repo outside HOME); the upward scan misses them there.
+        home = Path(self.tmp.name) / "home"; home.mkdir()
+        os.environ["HOME"] = str(home); self.addCleanup(os.environ.pop, "HOME", None)
+        repo = Path(self.tmp.name) / "elsewhere" / "repo"; repo.mkdir(parents=True); (repo / ".git").mkdir()
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        self.assertEqual(orchestrate._harness_call("opencode", "p/m", "S", "U", str(repo))[0], 200)
+        for rel in (".opencode/opencode.json", ".opencode/opencode.jsonc", ".opencode/plugin", ".opencode/plugins"):
+            with self.subTest(rel=rel):
+                hit = home / rel; hit.parent.mkdir(parents=True, exist_ok=True)
+                hit.mkdir() if rel.endswith(("plugin", "plugins")) else hit.write_text("{}")
+                status, body = orchestrate._harness_call("opencode", "p/m", "S", "U", str(repo))
+                self.assertEqual(status, 403); self.assertIn(str(hit), body); self.assertIn("~/.config/opencode/", body)
+                details = {}
+                self.assertEqual(orchestrate._probe("opencode", "gh/m", details), "error")  # probe refuses too
+                self.assertIn(str(hit), details["detail"])
+                shutil.rmtree(home / ".opencode")
+        self.assertEqual(len(fake.calls), 1)                          # the CLI was never launched while refused
+        for lane in ("codex", "claude", "pi"):                        # opencode-specific
+            (home / ".opencode").mkdir(); (home / ".opencode" / "opencode.json").write_text("{}")
+            self.assertEqual(orchestrate._harness_call(lane, "p/m", "S", "U", str(repo))[0], 200)
+            shutil.rmtree(home / ".opencode")
+
+    def test_unwritable_state_dir_makes_the_probe_error_not_crash(self):
+        blocker = Path(self.tmp.name) / "blocker"; blocker.write_text("not a dir")
+        orchestrate.STATE_DIR = blocker / "state"
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        details = {}
+        self.assertEqual(orchestrate._probe("opencode", "gh/m", details), "error")
+        self.assertIn(str(orchestrate.STATE_DIR), details["detail"])
+        self.assertEqual(fake.calls, [])
 
     def test_opencode_scratch_is_fresh_per_run_and_removed(self):
         # opencode 1.17.3 scaffolds $XDG_CONFIG_HOME/opencode/opencode.jsonc on every start

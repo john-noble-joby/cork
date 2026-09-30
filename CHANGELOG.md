@@ -43,7 +43,10 @@ change, and add a section here.
   afterwards), so your interactive MCP servers and plugins are not loaded into the reviewer;
   login and the models cache are unaffected. The reviewer's session goes to a throwaway
   `OPENCODE_DB` in that scratch dir and repo snapshots are off (`snapshot: false`), so a review
-  leaves no session or snapshot in `~/.local/share/opencode`.
+  leaves no session or snapshot in `~/.local/share/opencode`. The legacy global directory
+  `~/.opencode/` is loaded regardless of `XDG_CONFIG_HOME`, so the lane (and its auth probe)
+  refuses to run while `~/.opencode/opencode.json{,c}` or `~/.opencode/plugin{,s}/` exists, with
+  a message to move the config under `~/.config/opencode/`.
   Because OpenCode still executes a project's `.opencode/{plugin,plugins}/*.{ts,js}` despite
   those switches (anomalyco/opencode#49836), the lane — and its auth probe — refuse to run when
   either directory exists in the tree under review or any directory above it, and it is reported
@@ -58,6 +61,8 @@ change, and add a section here.
   scaffolds a stub `opencode.jsonc` into `$XDG_CONFIG_HOME/opencode/` on every start, which
   tripped cork's "must be empty" check on the next review (or auth probe). Each run now gets a
   fresh scratch directory that is removed when the CLI exits.
+- An unwritable or file-occupied cork state dir makes a harness auth probe report `error` with
+  the cause instead of aborting preflight with a `PermissionError`/`FileExistsError` traceback.
 - A failed harness auth probe with no structured reason (malformed Pi JSON, a nonzero OpenCode
   `auth list`) reports an empty detail instead of presenting the model's provider as the cause
   (`unavailable (error: glm-internal)`); structured JSON reasons are still preserved.

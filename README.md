@@ -270,9 +270,14 @@ replaced with cork's own `{"snapshot":false}`. `opencode run` always records a s
 also sets `OPENCODE_DB` to a throwaway database in that scratch directory: the review's session
 and messages never land in your `~/.local/share/opencode/opencode.db`, and with snapshots off no
 copy of the repo is written under `~/.local/share/opencode/snapshot/` either (verified on 1.17.3:
-session count and snapshot tree unchanged across reviews; only `account.json` is touched). Note
-that OpenCode also reads `.opencode/opencode.json` from every directory *above* the repo — those
-are yours, not the branch's, so cork leaves them alone. One gap those flags do not close: OpenCode still imports
+session count and snapshot tree unchanged across reviews; only `account.json` is touched). None
+of that covers the **legacy global directory `~/.opencode/`**: OpenCode 1.17.3 loads
+`~/.opencode/opencode.json{,c}` regardless of `XDG_CONFIG_HOME` and the project-config switch
+(verified with a repo outside `$HOME`: an MCP server declared there was started), and would hand a
+prompt-injected reviewer MCP tools past the permission layer, so cork refuses to run the lane —
+and its auth probe — while `~/.opencode/opencode.json`, `opencode.jsonc`, `plugin/` or `plugins/`
+exists, and tells you to move the config under `~/.config/opencode/` (which cork isolates). The
+rest of `~/.opencode/` (OpenCode's own `bin/` and `node_modules/`) is fine. One gap those flags do not close: OpenCode still imports
 and runs a project's `.opencode/plugins/*.{ts,js}` — and the singular `.opencode/plugin/`,
 which its loader scans too (upstream anomalyco/opencode#49836, open). That would be
 branch-controlled code executing outside the permission layer, so cork refuses to run the
