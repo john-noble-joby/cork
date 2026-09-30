@@ -265,6 +265,11 @@ HARNESSES: dict[str, dict] = {
             # cache (XDG_CACHE_HOME) stay available. Substituted in _harness_call.
             "XDG_CONFIG_HOME": "{empty_config_home}",
         },
+        # opencode still imports and runs .opencode/plugins/*.js from the project despite
+        # --pure and OPENCODE_DISABLE_PROJECT_CONFIG (anomalyco/opencode#49836, open). That
+        # is branch-controlled code executing outside the permission layer, so the lane
+        # refuses to run at all when the repo under review ships that directory.
+        "refuse_paths": [".opencode/plugins", ".opencode/plugin"],
         "auth_probe": {"argv": ["auth", "list"], "success": _opencode_auth_ready,
                        "logged_out": _opencode_auth_logged_out,
                        "detail": _auth_detail, "login": "opencode auth login"},
@@ -1249,6 +1254,11 @@ def _harness_call(provider: str, model: str, system: str, user_msg: str,
     if not repo:
         fail(f"{provider} harness review needs a repo path (cwd for the reviewer)")
     spec = _harness_settings(provider)
+    for rel in spec.get("refuse_paths", []):
+        if (Path(repo) / rel).exists():
+            return 403, (f"{provider}: {rel} exists in the repo under review and {spec['bin']} "
+                         f"would execute it (branch-controlled code, anomalyco/opencode#49836) — "
+                         f"refusing to run this lane")
     timeout = timeout or spec["timeout"]
     prompt = user_msg if spec["system_flag"] else (
         f"{system}\n\n=== END OF REVIEW STANDARDS — REVIEW TASK FOLLOWS ===\n\n{user_msg}")

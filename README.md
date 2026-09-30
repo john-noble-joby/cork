@@ -257,7 +257,11 @@ disables external plugins. Neither stops OpenCode loading your **global**
 wildcard allow admits, so cork also points `XDG_CONFIG_HOME` at an empty directory it owns for
 the run: no global config, while your login (`~/.local/share/opencode/auth.json`) and the models
 cache (`~/.cache/opencode/`) live elsewhere and stay available (verified on 1.17.3: `mcp list`
-shows none, `auth list` unchanged). Pi runs with **no tools at all**: its `read` and `find` accept
+shows none, `auth list` unchanged). One gap those flags do not close: OpenCode still imports
+and runs a project's `.opencode/plugins/*.js` (upstream anomalyco/opencode#49836, open), which
+would be branch-controlled code executing outside the permission layer — so cork refuses to
+run the OpenCode lane at all when the repo under review contains `.opencode/plugins`, and
+reports it as a skipped reviewer. Pi runs with **no tools at all**: its `read` and `find` accept
 absolute paths, so a read allowlist would still let a prompt-injected review reach other
 reviewers' `/tmp/cork-review-*` files. Its extensions, skills, prompt templates, themes,
 context files and ambient `APPEND_SYSTEM.md` are disabled too; it keeps no session, ignores

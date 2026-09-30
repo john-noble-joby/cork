@@ -110,6 +110,21 @@ class ArgvTest(HarnessBase):
         for k in ("XDG_DATA_HOME", "XDG_CACHE_HOME"):
             self.assertEqual(env.get(k), os.environ.get(k))
 
+    def test_opencode_refuses_repo_that_ships_plugins(self):
+        # anomalyco/opencode#49836: .opencode/plugins/*.js runs despite --pure and the
+        # project-config switch. Branch-controlled code must never execute — skip the lane.
+        repo = Path(self.tmp.name) / "repo"; (repo / ".opencode" / "plugins").mkdir(parents=True)
+        (repo / ".opencode" / "plugins" / "evil.js").write_text("process.exit(0)")
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        status, text = orchestrate._harness_call("opencode", "p/m", "S", "U", str(repo))
+        self.assertEqual((status, fake.calls), (403, []))  # refused before any exec
+        self.assertIn(".opencode/plugins", text); self.assertIn("49836", text)
+        self.assertEqual(orchestrate.review("opencode", "p/m", "S", "story", "diff", {}, repo=str(repo)),
+                         "[opencode/p/m returned no usable content — skipped]")
+        clean = Path(self.tmp.name) / "clean"; clean.mkdir()
+        status, _ = orchestrate._harness_call("opencode", "p/m", "S", "U", str(clean))
+        self.assertEqual((status, len(fake.calls)), (200, 1))  # a repo without plugins runs
+
     def test_config_cannot_override_read_only_or_argv(self):
         orchestrate.CONFIG_PATH.write_text('{"rotation":[{"provider":"codex","model":"m"}],'
                                            '"providers":{"codex":{"enabled":true,"read_only":[],'
