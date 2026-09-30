@@ -7,7 +7,7 @@ description: "Use when the user says \"cork\" / \"run cork\" on a branch (full m
 
 "Cork" = **C**ode **Or**chestrator **R**eview **K**ickoff.
 
-**Version:** 0.13.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
+**Version:** 0.14.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
 
 **The active Claude session is the coding agent.** Unlike the legacy headless mode (where `orchestrate.py` spawned `claude --print` subprocesses), here *you* — the session with full codebase + conversation context — do the implementing and fixing. The orchestrator script is used only as a stateless review tool: `--review-model MODEL` returns one outside model's findings on the current branch diff.
 
@@ -89,7 +89,7 @@ Review your own diff with subagents (dispatch parallel reviewers), apply fixes, 
 
 ### Steps 3+ — One blind pass per model
 
-**Division of labour (do not blur):** each selected model is a *read-only reviewer* — it only returns findings on the current diff. It never edits the worktree, never commits, never applies its own suggestions. **You — the active Claude Code session — are the only thing that writes code.** You read each model's findings, decide what's valid, apply the fixes yourself, run tests, and commit. The `--review-model` call is a one-shot, stateless "give me your review of this diff" — nothing more.
+**Division of labour (do not blur):** each reviewer model is a *read-only reviewer* — it only returns findings on the current diff. It never edits the worktree, never commits, never applies its own suggestions. **You — the active Claude Code session — are the only thing that writes code.** You read each model's findings, decide what's valid, apply the fixes yourself, run tests, and commit. The `--review-model` call is a one-shot, stateless "give me your review of this diff" — nothing more.
 
 Rotation — use the `provider/model` lines printed by `preflight` in Step 0, in order. One review→fix cycle per model: (1) the model reviews the diff, (2) you apply/reject its findings and commit. Save the strongest model for last so it reviews after the others' fixes have landed. (For Copilot API lanes, `gpt-5.x`/`gpt-6.x`/codex use `/responses` automatically; harness lanes use their configured CLI instead.)
 
@@ -118,13 +118,13 @@ python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} -
 
 This command **only prints the model's review to stdout** — it makes no changes. Applying the findings is your job (next paragraph).
 
-**Model availability** is seat-dependent. `preflight` probes API model access; for harnesses it checks only binary presence, not login/model availability. If a model errors mid-run with "not found in your account" or "not accessible", drop it and continue. Copilot and OpenAI API lanes route `gpt-5.x`/`gpt-6.x`/codex through `/responses`; harness lanes use their own provider routing and login. For openai/anthropic API models, `preflight` needs the matching provider token (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` env vars, or keys `"openai"` / `"anthropic"` in `~/.config/cork/auth.json` — chmod 600; tokens never go in `config.json`).
+**Model availability** is seat-dependent. `preflight` probes API model access; for harnesses it probes the CLI's login state live (binary present, logged in) but not model availability. If a model errors mid-run with "not found in your account" or "not accessible", drop it and continue. Copilot and OpenAI API lanes route `gpt-5.x`/`gpt-6.x`/codex through `/responses`; harness lanes use their own provider routing and login. For openai/anthropic API models, `preflight` needs the matching provider token (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` env vars, or keys `"openai"` / `"anthropic"` in `~/.config/cork/auth.json` — chmod 600; tokens never go in `config.json`).
 
-**Harness reviewers.** `preflight` may also print `claude/<model>` or `codex/<model>` lines: those are locally installed coding-agent CLIs run by `orchestrate.py` as read-only reviewers (`claude --safe-mode --restricted` with only `Read,Grep,Glob` in plan mode; `codex exec -s read-only --ephemeral` with its shell/exec tools and user MCP config disabled, so codex reviews from the prompt alone). Treat them exactly like API models — same `--review-model` ref, same output format, same consolidation. They are selected when `providers.<harness>.enabled` is true and the binary is found (on PATH, or at the configured absolute `bin` path); a harness that fails or times out prints the usual `… — skipped]` sentinel and the rotation continues.
+**Harness reviewers.** `preflight` reports enabled local CLIs with status lines such as `claude: live (…)`, then includes selected harnesses in the trailing `provider/model` list (`claude/<model>`, `codex/<model>`, `opencode/<provider/model>`, or `pi/<provider/model>`). Treat selected harnesses exactly like API models — same `--review-model` ref, output format, and consolidation. Selection requires an enabled provider, installed binary, and live auth probe; a harness that fails or times out prints the usual `… — skipped]` sentinel and the rotation continues.
 
 Pi harness refs retain the inner provider: `pi/openai-codex/gpt-6-sol`. Pi uses its own
 login and `--thinking` effort, with no tools, session persistence or ambient resources.
-As with other harnesses, preflight checks binary presence, not login/model availability.
+As with other harnesses, preflight verifies the binary and its login (`pi auth check … --no-refresh`), not model availability.
 
 Read the findings from stdout. For each: apply the fix in the worktree (run tests before committing), or push back with reasoning if wrong. Commit after each model's fixes with message `fix: apply {MODEL} review [{TICKET}]`.
 
@@ -161,7 +161,7 @@ done
 wait
 ```
 
-Each `--review-model` call is stateless and read-only — it only prints findings. Pass `--skip-validation` here to avoid repeating API availability requests after preflight; harness validation only checks binary presence and spends no model turn. The positional ticket arg isn't used by review output, so any placeholder is fine when there's no ticket. Copilot and OpenAI API lanes auto-route `gpt-5.x`/`gpt-6.x`/codex to `/responses`; CLI harnesses retain their own provider routing. If a model errors, drop it and keep the rest (see *Model availability* under full mode).
+Each `--review-model` call is stateless and read-only — it only prints findings. Pass `--skip-validation` here to bypass both API availability requests and harness login probes already performed by preflight. Without this flag, harness validation re-runs the CLI's login probe (no model turn is spent) but still does not check model access. The positional ticket arg isn't used by review output, so any placeholder is fine when there's no ticket. Copilot and OpenAI API lanes auto-route `gpt-5.x`/`gpt-6.x`/codex to `/responses`; CLI harnesses retain their own provider routing. If a model errors, drop it and keep the rest (see *Model availability* under full mode).
 
 ### R2 — Consolidate into one report
 

@@ -50,7 +50,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NoReturn
@@ -82,13 +82,155 @@ PROVIDER_BASE = {
     "anthropic": "https://api.anthropic.com",
 }
 
+
+def _auth_exit_zero(result: subprocess.CompletedProcess, _model: str) -> bool:
+    return result.returncode == 0
+
+
+def _auth_exit_one(result: subprocess.CompletedProcess, _model: str) -> bool:
+    return result.returncode == 1
+
+
+def _strip_ansi(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def _plain_auth_output(result: subprocess.CompletedProcess) -> str:
+    # stdout + stderr, for human-text patterns (codex prints its login line on stderr).
+    return _strip_ansi(f"{result.stdout}\n{result.stderr}")
+
+
+def _auth_json(result: subprocess.CompletedProcess) -> dict:
+    # JSON is parsed from stdout ONLY: a warning on stderr must not turn a valid
+    # {"status":"ready"} into a JSONDecodeError and a usable login into `error`.
+    try:
+        payload = json.loads(_strip_ansi(result.stdout or ""))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+# opencode caches models.dev here: {provider_id: {"name": <display name>, "env": [..], ...}}.
+# It is the authoritative map from what `auth list` prints back to provider ids.
+_OPENCODE_MODELS_CACHE = (Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+                          / "opencode" / "models.json")
+
+
+def _opencode_provider_index() -> tuple[dict[str, str], dict[str, str]]:
+    # (display name lower -> id, ENV_VAR -> id). Empty maps when the cache is absent or
+    # unreadable; callers then fall back to slugging the display name.
+    try:
+        data = json.loads(_OPENCODE_MODELS_CACHE.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}, {}
+    if not isinstance(data, dict):
+        return {}, {}
+    by_name: dict[str, str] = {}
+    by_env: dict[str, str] = {}
+    for pid, spec in data.items():
+        if not isinstance(spec, dict):
+            continue
+        if isinstance(spec.get("name"), str):
+            by_name[spec["name"].strip().lower()] = pid
+        env = spec.get("env")
+        for var in (env if isinstance(env, list) else []):  # a shape-drifted entry is ignored, not fatal
+            if isinstance(var, str):
+                by_env[var] = pid
+    return by_name, by_env
+
+
+def _opencode_credential_providers(result: subprocess.CompletedProcess) -> set[str]:
+    # `opencode auth list` (1.17.3) prints one "●  <Display Name> <method>" line per stored
+    # credential ("●  GitHub Copilot oauth") and, under a separate "Environment" section,
+    # one "●  <Display Name> <ENV_VAR>" line per env-backed provider ("●  OpenAI
+    # OPENAI_API_KEY"). The "N credentials" / "N environment variable" footers say nothing
+    # about WHICH provider is usable. Display names are models.dev labels ("Vertex" is
+    # google-vertex; "Google" is a different provider), so they are resolved to ids through
+    # opencode's own models.dev cache — the env var first (unambiguous), then the name —
+    # and only slugged ("GitHub Copilot" -> "github-copilot") when no cache is available.
+    by_name, by_env = _opencode_provider_index()
+    providers: set[str] = set()
+    # stdout ONLY: a stderr diagnostic such as "warning: set OPENAI_API_KEY" must not read
+    # as an environment-backed credential (its last token is a known env var).
+    for line in _strip_ansi(result.stdout or "").splitlines():
+        # Each credential line is "<Display Name> <method-or-ENV_VAR>" (optionally
+        # bulleted); footers/headers ("└  2 credentials", "┌  Environment") are not.
+        tokens = re.sub(r"^\s*●\s*", "", line).split()
+        if len(tokens) < 2:
+            continue
+        name, token = " ".join(tokens[:-1]), tokens[-1]
+        if token in by_env:                       # env-backed entry: the var is unambiguous
+            providers.add(by_env[token])
+        elif name.lower() in by_name:             # known display name, whatever the method word
+            providers.add(by_name[name.lower()])
+        elif re.fullmatch(r"(?i:oauth|api|apikey|api-key|env|token)|[A-Z][A-Z0-9_]{2,}", token):
+            providers.add(re.sub(r"\s+", "-", name.lower()))  # no cache: slug the name
+    return providers
+
+
+def _opencode_has_provider(result: subprocess.CompletedProcess, model: str) -> bool:
+    # Exact id match only: `google` and `google-vertex` are distinct providers.
+    return model.split("/", 1)[0].lower() in _opencode_credential_providers(result)
+
+
+def _opencode_auth_ready(result: subprocess.CompletedProcess, model: str) -> bool:
+    return result.returncode == 0 and _opencode_has_provider(result, model)
+
+
+def _opencode_auth_logged_out(result: subprocess.CompletedProcess, model: str) -> bool:
+    # Exit 0 without a credential for THIS model's provider: another provider's login
+    # (or none at all) must not make this lane look live.
+    return result.returncode == 0 and not _opencode_has_provider(result, model)
+
+
+def _pi_auth_payload(result: subprocess.CompletedProcess) -> dict:
+    return _auth_json(result)
+
+
+def _pi_auth_ready(result: subprocess.CompletedProcess, _model: str) -> bool:
+    return result.returncode == 0 and _pi_auth_payload(result).get("status") == "ready"
+
+
+def _pi_auth_logged_out(result: subprocess.CompletedProcess, _model: str) -> bool:
+    payload = _pi_auth_payload(result)
+    return (result.returncode == 1 and payload.get("status") == "not_ready"
+            and payload.get("reason") != "provider_not_found")
+
+
+def _pi_auth_detail(result: subprocess.CompletedProcess, model: str) -> str:
+    # Pi speaks JSON: a structured reason wins; a ready probe names its provider; anything
+    # else (malformed or non-object output, even at exit 0) has no cause to report, and the
+    # model's provider must not be presented as one.
+    payload = _pi_auth_payload(result)
+    if payload.get("reason"):
+        return str(payload["reason"])
+    if _pi_auth_ready(result, model):
+        return str(payload.get("provider") or model.split("/", 1)[0])
+    return ""
+
+
+def _auth_detail(result: subprocess.CompletedProcess, model: str) -> str:
+    text = _plain_auth_output(result)
+    for pattern in (r"^Logged in using (.+)$", r"^Login method: (.+)$"):
+        match = re.search(pattern, text, re.MULTILINE)
+        if match:
+            return match.group(1).strip()
+    payload = _auth_json(result)
+    if payload.get("reason"):
+        return str(payload["reason"])
+    if result.returncode != 0:
+        return ""  # a failed probe with no structured reason: don't present the provider as the reason
+    return str(payload.get("provider") or (model.split("/", 1)[0] if "/" in model else ""))
+
+
 # Locally installed coding-agent CLIs used as independent, READ-ONLY reviewers.
 # Adding a lane is a data-only change: `argv` is the harness's own flag set
 # ({model}/{repo} substituted), `read_only` is the subset that enforces
 # no-write/no-shell, `system_flag` is how the standards travel (None = prepend
-# to the prompt body), `prompt_via` is "stdin" or "arg". Never leave a shell
-# tool enabled: a reviewer with a shell could read the other reviewers'
-# /tmp/cork-review-* files and break blindness.
+# to the prompt body), and `prompt_via` is "stdin" or "arg". `auth_probe` owns
+# live-login argv/predicates; optional `env` is immutable process hardening and
+# `model_ref_parts` declares a provider/model-shaped model ref. Never include a
+# shell tool: it could read the other reviewers' /tmp/cork-review-* files.
 HARNESSES: dict[str, dict] = {
     "claude": {  # claude 2.1.x — verified against `claude --help`
         "bin": "claude", "bin_env": "CORK_CLAUDE_BIN",
@@ -99,14 +241,10 @@ HARNESSES: dict[str, dict] = {
         "read_only": ["--safe-mode", "--restricted", "--tools", "Read,Grep,Glob",
                       "--permission-mode", "plan"],
         "system_flag": "--system-prompt", "prompt_via": "stdin", "timeout": 900,
-    },
-    "pi": {  # pi 0.87.1 — existing Pi auth, prompt-only blind review
-        "bin": "pi", "bin_env": "CORK_PI_BIN",
-        "argv": ["--print", "--model", "{model}", "--no-session"],
-        "read_only": ["--no-tools", "--no-extensions", "--no-skills",
-                      "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve",
-                      "--append-system-prompt", ""],  # suppress ambient APPEND_SYSTEM.md too
-        "system_flag": "--system-prompt", "prompt_via": "stdin", "timeout": 900,
+        "auth_probe": {"argv": ["auth", "status", "--text"], "success": _auth_exit_zero,
+                       "logged_out": _auth_exit_one,
+                       "detail": _auth_detail, "login": "claude auth login",
+                       "env_flag": "ANTHROPIC_API_KEY"},
     },
     "codex": {  # codex-cli 0.146.x — verified against `codex exec --help`
         "bin": "codex", "bin_env": "CORK_CODEX_BIN",
@@ -120,11 +258,108 @@ HARNESSES: dict[str, dict] = {
                       "--disable", "shell_tool", "--disable", "unified_exec",
                       "--disable", "code_mode_host", "--disable", "apps"],
         "system_flag": None, "prompt_via": "stdin", "timeout": 900,
+        "auth_probe": {"argv": ["login", "status"], "success": _auth_exit_zero,
+                       "logged_out": _auth_exit_one,
+                       "detail": _auth_detail, "login": "codex login"},
+    },
+    "opencode": {  # opencode 1.17.x — verified against `opencode run --help`
+        "bin": "opencode", "bin_env": "CORK_OPENCODE_BIN",
+        "argv": ["run", "-m", "{model}"],
+        "read_only": ["--agent", "plan", "--format", "default", "--dir", "{repo}",
+                      "--pure", "--"],
+        "system_flag": None, "prompt_via": "arg", "timeout": 900,
+        "model_ref_parts": 2,
+        "env": {
+            "OPENCODE_PERMISSION": json.dumps({
+                # In OpenCode 1.17.x, `edit` governs both write and patch tools.
+                "bash": "deny", "edit": "deny", "task": "deny",
+                "webfetch": "deny", "websearch": "deny",
+                "external_directory": "deny",
+                "lsp": "deny",  # experimental tool that starts language-server processes
+            }, separators=(",", ":")),
+            "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
+            # Branch-controlled instructions arrive through more than config: external skill
+            # discovery (.claude/skills, .agents/skills) and Claude Code compatibility
+            # (CLAUDE.md, .claude/*) are separate switches in 1.17.x.
+            "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
+            "OPENCODE_DISABLE_CLAUDE_CODE": "1",
+            # Global ~/.config/opencode/opencode.json is still loaded by --pure and the
+            # project-config switch; its MCP servers have dynamic tool names the plan
+            # agent's wildcard allow admits. Point XDG_CONFIG_HOME at a fresh cork-owned
+            # scratch dir instead (per run — opencode scaffolds a stub opencode.jsonc and
+            # a node_modules tree there on every start, so a persistent dir would not stay
+            # empty): no global config, while login (XDG_DATA_HOME) and the models cache
+            # (XDG_CACHE_HOME) stay available. The reviewer's session goes to a throwaway
+            # database in the same dir, and repo snapshots are off, so a review leaves no
+            # trace in ~/.local/share/opencode. {scratch} is substituted per invocation.
+            "XDG_CONFIG_HOME": "{scratch}",
+            "OPENCODE_DB": "{scratch}/opencode.db",
+            # share: disabled makes the share call throw even when something (an inherited
+            # OPENCODE_AUTO_SHARE runtime flag, which bypasses config) asks for it — a
+            # review must never upload the prompt or repo contents to opencode.ai.
+            "OPENCODE_CONFIG_CONTENT": json.dumps({"snapshot": False, "share": "disabled"},
+                                                  separators=(",", ":")),
+            "OPENCODE_DISABLE_SHARE": "1",
+            # An unattended reviewer must not replace the user's binary mid-run.
+            "OPENCODE_DISABLE_AUTOUPDATE": "1",
+        },
+        # These are honoured independently of XDG_CONFIG_HOME and would re-introduce a
+        # config (MCP servers, plugins) from the inherited environment. (An inherited
+        # OPENCODE_CONFIG_CONTENT is replaced by the overlay above.)
+        "unset_env": ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_AUTO_SHARE"],
+        # Feature switches read from the environment independently of config: every
+        # OPENCODE_EXPERIMENTAL* / OPENCODE_ENABLE_* (lsp tool, background subagents,
+        # question tool, exa web search, ...) can enable behaviour the deny list predates,
+        # so none of the user's interactive ones reach the reviewer.
+        "unset_env_prefixes": ["OPENCODE_EXPERIMENTAL", "OPENCODE_ENABLE_"],
+        # opencode still imports and runs a project's .opencode/{plugin,plugins}/*.{ts,js}
+        # (its loader scans both spellings) despite --pure and OPENCODE_DISABLE_PROJECT_CONFIG
+        # (anomalyco/opencode#49836, open). That is branch-controlled code executing outside
+        # the permission layer, so the lane refuses to run at all when the tree under review
+        # ships either directory.
+        "refuse_paths": [".opencode/plugins", ".opencode/plugin"],
+        # The legacy global dir $HOME/.opencode is loaded in full regardless of
+        # XDG_CONFIG_HOME and OPENCODE_DISABLE_PROJECT_CONFIG (verified on 1.17.3 with a
+        # repo outside HOME: an MCP server declared in opencode.json there was started, a
+        # tool/*.ts registered a tool, an agent/plan.md replaced the plan agent). Any of
+        # that hands the reviewer code or tools past the permission layer, so the lane
+        # refuses to run while the dir holds anything beyond OpenCode's own install
+        # artifacts (the binary itself lives in ~/.opencode/bin on a default install).
+        # A branch's own .opencode/{opencode.json,agent,tool} is NOT loaded under the
+        # project-config switch (verified); plugins are the exception, handled above.
+        "legacy_home_dir": ".opencode",
+        "legacy_home_allow": ["bin", "node_modules", "package.json", "package-lock.json",
+                              "bun.lock", "bun.lockb", ".gitignore"],
+        "auth_probe": {"argv": ["auth", "list"], "success": _opencode_auth_ready,
+                       "logged_out": _opencode_auth_logged_out,
+                       "detail": _auth_detail, "login": "opencode auth login"},
+    },
+    "pi": {  # pi 0.85–0.87 — prompt-only blind review using Pi's own login; prompt on stdin
+        "bin": "pi", "bin_env": "CORK_PI_BIN",
+        "argv": ["--print", "--model", "{model}"],
+        # Prompt-only: pi's `read`/`find` take absolute paths, so a read allowlist cannot
+        # confine it to the repo (it could read other reviewers' /tmp/cork-review-* files).
+        # Ambient extensions/skills/templates/themes/context files and APPEND_SYSTEM.md
+        # (via an empty --append-system-prompt) are all disabled.
+        "read_only": ["--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates",
+                      "--no-themes", "--no-context-files", "--no-approve", "--no-session",
+                      "--append-system-prompt", ""],
+        # stdin transport: only the --system-prompt standards argument is subject to the
+        # 128 KiB per-argument limit, not the prompt itself.
+        "system_flag": "--system-prompt", "prompt_via": "stdin", "timeout": 900,
+        "model_ref_parts": 2,
+        "auth_probe": {"argv": ["auth", "check", "--provider", "{model_provider}",
+                                "--json", "--no-refresh"],
+                       "success": _pi_auth_ready, "logged_out": _pi_auth_logged_out,
+                       "detail": _pi_auth_detail,
+                       "login": "pi, then /login"},
     },
 }
 # The only per-harness keys config.json may set — `argv`/`read_only` are not
 # user-overridable, so the read-only contract does not depend on configuration.
 _HARNESS_CONFIG_KEYS = ("bin", "extra_args", "timeout")
+_MAX_ARG_BYTES = 131_072  # Linux MAX_ARG_STRLEN — counts the NUL terminator, so usable bytes are one fewer
+_STANDARDS_SEPARATOR = "\n\n=== END OF REVIEW STANDARDS — REVIEW TASK FOLLOWS ===\n\n"  # lanes with no system flag
 
 DEFAULT_CONFIG = {
     "version": 1,
@@ -514,7 +749,7 @@ def _provider_token(provider: str) -> str:
 
 
 def _provider_token_available(provider: str) -> bool:
-    if provider in HARNESSES:  # no token — a present binary (PATH or absolute path) is the credential
+    if provider in HARNESSES:  # no token — a present binary (PATH or absolute path) is the gate; _probe verifies its live login
         return shutil.which(_harness_bin(provider)) is not None
     match provider:
         case "copilot":
@@ -651,6 +886,7 @@ def _validate_config(cfg: dict) -> None:
         if entry["provider"] not in PROVIDER_BASE and entry["provider"] not in HARNESSES:
             fail(f"unknown provider '{entry['provider']}' "
                  f"(known: {', '.join([*PROVIDER_BASE, *HARNESSES])})")
+        _validate_model_ref(entry["provider"], entry["model"])
         key = f"{entry['provider']}/{entry['model']}"
         if key in seen:
             fail(f"duplicate rotation entry: {key}")
@@ -676,11 +912,27 @@ def _validate_config(cfg: dict) -> None:
         fail("config.responses_effort must be low, medium, or high")
 
 
+def _validate_model_ref(provider: str, model: object) -> None:
+    # Shape check shared by config loading and direct `--review-model` refs, so a
+    # malformed opencode/pi ref (`opencode/github-copilot`, `pi//m`) fails before any probe
+    # instead of probing the provider successfully and then handing the CLI a bad model.
+    spec = HARNESSES.get(provider)
+    if spec and spec.get("model_ref_parts", 1) > 1:
+        parts = model.split("/", 1) if isinstance(model, str) else []
+        if len(parts) != 2 or not all(part.strip() for part in parts):
+            fail(f"{provider} model must be <provider>/<model> with both parts non-empty: {model!r}")
+
+
 def _validate_harness_cfg(name: str, hc: dict) -> None:
     # Malformed values would otherwise surface as a traceback (or no timeout at all)
     # from subprocess.run instead of the documented skipped-review sentinel.
     if not isinstance(hc, dict):
         fail(f"config.providers.{name} must be an object")
+    unknown = sorted(set(hc) - {"enabled", *_HARNESS_CONFIG_KEYS})
+    if unknown:  # stderr: stdout of `auth status --json` / `config show` must stay parseable
+        print(f"  ⚠ config.providers.{name}: ignoring unknown keys: {', '.join(unknown)} "
+              f"(only enabled, {', '.join(_HARNESS_CONFIG_KEYS)} are configurable; env/unset_env/"
+              f"refuse_paths are cork-enforced)", file=sys.stderr)
     if "bin" in hc and (not isinstance(hc["bin"], str) or not hc["bin"].strip()):
         fail(f"config.providers.{name}.bin must be a non-empty string")
     if "bin" in hc:
@@ -688,6 +940,10 @@ def _validate_harness_cfg(name: str, hc: dict) -> None:
     ea = hc.get("extra_args", [])
     if not isinstance(ea, list) or not all(isinstance(a, str) for a in ea):
         fail(f"config.providers.{name}.extra_args must be a list of strings")
+    if "--" in ea:
+        # The read-only flags are appended AFTER extra_args; an option terminator there
+        # would make the CLI read every protected flag as positional input.
+        fail(f"config.providers.{name}.extra_args must not contain the option terminator '--'")
     t = hc.get("timeout", 1)
     try:
         valid = (not isinstance(t, bool) and isinstance(t, (int, float))
@@ -963,20 +1219,26 @@ def load_agent_instructions(repo: str) -> tuple[str, str]:
     return "\n\n---\n\n".join(parts), " + ".join(labels)
 
 
-def _budget_files(files: dict[str, str], budget_chars: int) -> tuple[str, int]:
-    """
-    Pack as many file contents as fit within budget_chars.
-    Returns (file_block_str, included_count).
-    Sorts by size ascending so small files always get in.
-    """
-    sorted_files = sorted(files.items(), key=lambda x: len(x[1]))
+def _utf8_len(text: str) -> int:
+    return len(text.encode("utf-8", "replace"))
+
+
+def _budget_files(files: dict[str, str], budget: int,
+                  size: Callable[[str], int] = len) -> tuple[str, int]:
+    # Pack as many file contents as fit within `budget`, measured by `size` (characters
+    # for API lanes, encoded bytes for arg-transported lanes — ordering and stopping must
+    # use the same unit as the limit, or a small-in-chars multibyte file that is big in
+    # bytes would block an ASCII file behind it that fits). Whole entries (path + fence)
+    # are what get emitted, so they are what gets sorted and charged, joins included:
+    # smallest entry first, so small files always get in. Returns (file_block, included_count).
+    entries = sorted((f"### {name}\n```\n{content}\n```" for name, content in files.items()), key=size)
     included, used = [], 0
-    for name, content in sorted_files:
-        entry = f"### {name}\n```\n{content}\n```"
-        if used + len(entry) > budget_chars:
+    for entry in entries:
+        cost = size(entry) + (size("\n\n") if included else 0)
+        if used + cost > budget:
             break
         included.append(entry)
-        used += len(entry)
+        used += cost
     if not included:
         return "(files omitted — diff too large; see diff section)", 0
     block = "\n\n".join(included)
@@ -1043,7 +1305,94 @@ def _harness_argv(spec: dict, model: str, repo: str, system: str) -> list[str]:
     if spec["system_flag"]:
         argv += [spec["system_flag"], system]
     # read-only flags go LAST so user extra_args cannot out-rank them on last-wins parsers
-    return argv + list(spec["extra_args"]) + list(spec["read_only"])
+    return argv + list(spec["extra_args"]) + [a.format(**sub) for a in spec["read_only"]]
+
+
+def _harness_scratch(spec: dict) -> contextlib.AbstractContextManager[str]:
+    # A fresh owner-only directory per invocation for a lane whose env references
+    # {scratch} (config home, session database), deleted when the CLI exits: nothing a
+    # previous run — or anyone else — left there can be loaded as global config, and the
+    # reviewer's session state does not accumulate. Lanes without the placeholder never
+    # touch the state dir.
+    if not any("{scratch}" in v for v in spec.get("env", {}).values()):
+        return contextlib.nullcontext("")
+    STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return tempfile.TemporaryDirectory(dir=STATE_DIR, prefix="harness-")
+
+
+def _probe_cwd() -> str:
+    # Auth probes never run from the repo under review: a CLI may load project config or
+    # plugins from its cwd, and preflight runs before _harness_call's refusal check.
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    return str(STATE_DIR)
+
+
+def _harness_env(spec: dict, scratch: str) -> dict[str, str]:
+    # The subprocess environment: inherited env minus the lane's `unset_env`, plus the
+    # table-owned overlay (immutable hardening). The only substitution is the per-run
+    # scratch dir placeholder (str.replace, not .format: OPENCODE_PERMISSION holds JSON
+    # braces).
+    prefixes = tuple(spec.get("unset_env_prefixes", ()))
+    env = {k: v for k, v in os.environ.items()
+           if k not in spec.get("unset_env", ()) and not k.startswith(prefixes)}
+    for k, v in spec.get("env", {}).items():
+        env[k] = v.replace("{scratch}", scratch)
+    return env
+
+
+def _find_upward(start: Path, rel: str) -> Path | None:
+    # OpenCode discovers `.opencode/{plugin,plugins}` by walking EVERY ancestor of its cwd
+    # (not just to the worktree root), so the scan goes all the way up: a repo path naming
+    # a subdirectory, or a plugins dir sitting above the repo, both count.
+    here = start.resolve()
+    while True:
+        if (here / rel).exists():
+            return here / rel
+        if here.parent == here:
+            return None
+        here = here.parent
+
+
+def _worktree_root(start: Path) -> Path | None:
+    # Nearest ancestor (inclusive) holding `.git` — a dir, or a file for linked worktrees.
+    here = start.resolve()
+    while True:
+        if (here / ".git").exists():
+            return here
+        if here.parent == here:
+            return None
+        here = here.parent
+
+
+def _refusal(spec: dict, provider: str, cwd: str) -> str | None:
+    # Fail-closed check shared by the review call and the auth probe: the reason a lane
+    # must not be launched from `cwd`, or None. Says whose directory it is: inside the
+    # worktree it is branch-controlled code; above it, the user's own environment.
+    root = _worktree_root(Path(cwd))
+    for rel in spec.get("refuse_paths", []):
+        hit = _find_upward(Path(cwd), rel)
+        if hit is None:
+            continue
+        where = ("in the tree under review (branch-controlled code)"
+                 if root is not None and hit.is_relative_to(root) else
+                 "above the working directory, in your own environment")
+        return (f"{provider}: {hit} exists {where} and {spec['bin']} would execute it "
+                f"(anomalyco/opencode#49836) — refusing to run this lane; remove it or leave "
+                f"the lane disabled")
+    legacy = spec.get("legacy_home_dir")
+    if legacy and (Path.home() / legacy).is_dir():
+        home_dir = Path.home() / legacy
+        try:
+            strays = sorted(p.name for p in home_dir.iterdir()
+                            if p.name not in spec.get("legacy_home_allow", ()))
+        except OSError as e:  # fail closed: what cannot be inspected cannot be cleared
+            strays = [f"(unreadable: {e})"]
+        if strays:
+            return (f"{provider}: {home_dir} contains {', '.join(strays)} and {spec['bin']} loads "
+                    f"everything there (config, agents, tools, plugins) regardless of "
+                    f"XDG_CONFIG_HOME — refusing to run this lane; move it under "
+                    f"~/.config/opencode/, which cork isolates, or leave the lane disabled")
+    return None
 
 
 def _harness_call(provider: str, model: str, system: str, user_msg: str,
@@ -1052,19 +1401,30 @@ def _harness_call(provider: str, model: str, system: str, user_msg: str,
     if not repo:
         fail(f"{provider} harness review needs a repo path (cwd for the reviewer)")
     spec = _harness_settings(provider)
+    refused = _refusal(spec, provider, repo)
+    if refused:
+        return 403, refused
     timeout = timeout or spec["timeout"]
-    prompt = user_msg if spec["system_flag"] else (
-        f"{system}\n\n=== END OF REVIEW STANDARDS — REVIEW TASK FOLLOWS ===\n\n{user_msg}")
+    prompt = user_msg if spec["system_flag"] else system + _STANDARDS_SEPARATOR + user_msg
     argv = _harness_argv(spec, model, repo, system)
     if spec["prompt_via"] == "stdin":
         run_kw: dict = {"input": prompt}
     else:
         argv.append(prompt); run_kw = {"stdin": subprocess.DEVNULL}
+    # review() budgets ~192k chars, but a single argv element (an arg-transported prompt,
+    # or the --system-prompt standards) is capped at 128 KiB by the kernel. Refuse up
+    # front with a legible reason instead of surfacing "[Errno 7] Argument list too long".
+    largest = max((len(a.encode("utf-8", "replace")) for a in argv), default=0)
+    if largest + 1 > _MAX_ARG_BYTES:  # +1: the kernel measures the string including its NUL
+        return 413, (f"{provider}: a single argument is {largest} bytes but the platform limit "
+                     f"is {_MAX_ARG_BYTES}; reduce the diff or standards, or use a stdin-prompt lane")
     try:
         # utf-8 + replace: a stray byte from a wrapper must not raise UnicodeDecodeError
-        # past the sentinel handling below.
-        r = subprocess.run(argv, cwd=repo, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=timeout, **run_kw)
+        # past the sentinel handling below. Table-owned `env` is immutable hardening.
+        with _harness_scratch(spec) as scratch:
+            r = subprocess.run(argv, cwd=repo, env=_harness_env(spec, scratch),
+                               capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=timeout, **run_kw)
     except subprocess.TimeoutExpired:
         return 504, f"{provider} timed out after {timeout}s"
     except (OSError, ValueError) as e:
@@ -1117,9 +1477,58 @@ def _classify_preflight(status: int, body: str) -> str:
     return "other"
 
 
-def _probe(provider: str, model: str) -> str:
-    if provider in HARNESSES:  # presence check only — never spends a harness turn
-        return "ok" if shutil.which(_harness_bin(provider)) else "no binary"
+def _harness_auth_probe(provider: str, model: str) -> dict:
+    spec = _harness_settings(provider)
+    result = {"provider": provider, "model": model, "status": "error",
+              "detail": "", "login": spec["auth_probe"]["login"]}
+    env_flag = spec["auth_probe"].get("env_flag")
+    if env_flag:
+        result["env_flag"] = env_flag
+        result["env_key"] = env_flag in os.environ
+    if not shutil.which(spec["bin"]):
+        result["status"] = "missing_binary"
+        return result
+    sub = {"model_provider": model.split("/", 1)[0]}
+    argv = [spec["bin"], *(arg.format(**sub) for arg in spec["auth_probe"]["argv"])]
+    try:
+        cwd = _probe_cwd()
+    except OSError as e:  # unwritable state dir: this lane errors, preflight continues
+        result["detail"] = f"cannot create {STATE_DIR}: {e}"
+        return result
+    refused = _refusal(spec, provider, cwd)  # the probe launches the CLI too
+    if refused:
+        result["detail"] = refused
+        return result
+    try:
+        # Same environment hardening as the review call, from a cork-owned cwd (never the
+        # repo), decoded leniently: a stray byte must yield `error`, not a traceback.
+        with _harness_scratch(spec) as scratch:
+            completed = subprocess.run(argv, timeout=10, stdin=subprocess.DEVNULL, cwd=cwd,
+                                       env=_harness_env(spec, scratch), capture_output=True,
+                                       text=True, encoding="utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        result["status"] = "timeout"
+        return result
+    except FileNotFoundError:
+        result["status"] = "missing_binary"
+        return result
+    except (OSError, ValueError) as e:  # ValueError: a NUL byte in a config-supplied model string
+        result["detail"] = str(e)  # e.g. an existing but unwritable state dir failing the scratch mkdtemp
+        return result
+    result["detail"] = spec["auth_probe"]["detail"](completed, model)
+    if spec["auth_probe"]["success"](completed, model):
+        result["status"] = "ok"
+    elif spec["auth_probe"]["logged_out"](completed, model):
+        result["status"] = "not_logged_in"
+    return result
+
+
+def _probe(provider: str, model: str, details: dict | None = None) -> str:
+    if provider in HARNESSES:
+        result = _harness_auth_probe(provider, model)
+        if details is not None:
+            details.update(result)
+        return result["status"]
     # A cheap availability probe — cap output hard so it can't burn review-sized
     # quota (the classification only needs the HTTP status, not the content).
     try:
@@ -1143,15 +1552,17 @@ def _eligible_rotation(cfg: dict, keep_unavailable_copilot: bool = False) -> lis
         # rotation entry alone never runs a local CLI without explicit opt-in.
         enabled  = providers_cfg.get(provider, {}).get("enabled", provider not in HARNESSES)
         if enabled is not True:  # validated as a JSON boolean; never truthiness
-            print(f"  ✗ {provider}/{model} skipped (provider disabled)", flush=True)
+            if provider not in HARNESSES:
+                print(f"  ✗ {provider}/{model} skipped (provider disabled)", flush=True)
             continue
         if keep_unavailable_copilot and provider == "copilot":
             kept.append(entry)
             continue
         if not _provider_token_available(provider):
-            why = (f"binary not found: {_harness_bin(provider)}" if provider in HARNESSES
-                   else f"no {provider} token")
-            print(f"  ✗ {provider}/{model} skipped ({why})", flush=True)
+            if provider in HARNESSES:
+                print(f"  ✗ {provider}: not installed ({_harness_bin(provider)})", flush=True)
+            else:
+                print(f"  ✗ {provider}/{model} skipped (no {provider} token)", flush=True)
             continue
         kept.append(entry)
     return kept
@@ -1167,18 +1578,27 @@ def preflight(rotation: list[dict], count: int) -> list[dict]:
         _token, source, expires_at, refreshable = copilot_auth
         print(_copilot_auth_summary(source, expires_at, refreshable), flush=True)
     for entry in rotation:
-        if len(selected) >= count:
-            break
+        if len(selected) >= count and entry["provider"] not in HARNESSES:
+            continue
         provider, model = entry["provider"], entry["model"]
         if provider == "copilot":
             assert copilot_auth is not None
             if copilot_auth[0] is None:
                 print(f"  ✗ {provider}/{model} skipped (no copilot token)", flush=True)
                 continue
-        verdict = _probe(provider, model)
+        probe: dict = {}
+        verdict = _probe(provider, model, probe)
+        env_note = f"; {probe['env_flag']} set" if probe.get("env_key") else ""
         if verdict == "ok":
-            selected.append({"provider": provider, "model": model})
-            print(f"  ✓ {provider}/{model}", flush=True)
+            was_selected = len(selected) < count
+            if len(selected) < count:
+                selected.append({"provider": provider, "model": model})
+            if provider in HARNESSES:
+                detail = probe.get("detail") or "authenticated"
+                selection_note = "" if was_selected else " (not selected — count reached)"
+                print(f"  ✓ {provider}: live ({detail}{env_note}){selection_note}", flush=True)
+            else:
+                print(f"  ✓ {provider}/{model}", flush=True)
         elif verdict == "auth":
             if provider == "copilot":
                 assert copilot_auth is not None
@@ -1186,9 +1606,15 @@ def preflight(rotation: list[dict], count: int) -> list[dict]:
                 fail(_copilot_auth_failure(source, refreshable))
             fail(f"{provider}: auth failed (401/403) — token invalid/expired. "
                  f"Fix the {provider} token and retry.")
-        else:
+        elif verdict == "not_logged_in":
+            detail = f" ({probe['detail']})" if probe.get("detail") else ""
+            print(f"  ✗ {provider}: logged-out{detail} — run {probe['login']}{env_note}", flush=True)
+        elif provider not in HARNESSES:
             detail = "connection error" if verdict == "connection" else verdict
             print(f"  ✗ {provider}/{model} dropped ({detail})", flush=True)
+        else:
+            detail = f": {probe['detail']}" if probe.get("detail") else ""
+            print(f"  ✗ {provider}: unavailable ({verdict}{detail}{env_note})", flush=True)
     if not selected:
         fail("No usable models on this seat — check your config rotation / tokens.")
     if len(selected) < count:
@@ -1242,14 +1668,39 @@ def review(provider: str, model: str, instructions: str, story: str,
         if instructions else REVIEW_SYSTEM
     )
     system = review_system + "\n\n" + SPEC_CONFORMANCE_SUFFIX
-    fixed_chars = len(system) + len(story) + len(diff) + 500
-    file_block, n_included = _budget_files(files, max(0, char_budget - fixed_chars))
+
+    def build(budget: int, size: Callable[[str], int] = len) -> tuple[str, int]:
+        fixed = size(system) + size(story) + size(diff) + 500
+        file_block, n = _budget_files(files, max(0, budget - fixed), size)
+        return (f"## Story / Task\n{story}\n\n"
+                f"## Changed Files (current state)\n{file_block}\n\n"
+                f"## Branch Diff\n```diff\n{diff}\n```"), n
+
+    user_msg, n_included = build(char_budget)
+    spec = HARNESSES.get(provider)
+    if spec and spec["prompt_via"] == "arg":
+        # The whole prompt (plus the standards, for a lane with no system flag) travels as
+        # ONE argv element the kernel caps at _MAX_ARG_BYTES — in BYTES, while the default
+        # budget is in characters. Repack by encoded size: files are added whole, so the
+        # element size is a step function of the budget, and the byte-sized pack can still
+        # miss by the joins/headings the 500 slack estimates — binary-search the largest
+        # byte budget that fits (≈17 rebuilds) rather than shrinking proportionally, which
+        # can spin thousands of times near the boundary.
+        def fits(msg: str) -> bool:
+            element = msg if spec["system_flag"] else system + _STANDARDS_SEPARATOR + msg
+            return _utf8_len(element) < _MAX_ARG_BYTES
+        if not fits(user_msg):
+            lo, hi = 0, _MAX_ARG_BYTES  # build(lo) has no files; build(hi) cannot fit with its headings
+            while hi - lo > 1:
+                mid = (lo + hi) // 2
+                if fits(build(mid, _utf8_len)[0]):
+                    lo = mid
+                else:
+                    hi = mid
+            user_msg, n_included = build(lo, _utf8_len)  # a diff alone over the limit still gets the 413 skip
     if n_included < len(files):
         print(f"  → token budget: included {n_included}/{len(files)} files "
               f"(diff-only for the rest)")
-    user_msg = (f"## Story / Task\n{story}\n\n"
-                f"## Changed Files (current state)\n{file_block}\n\n"
-                f"## Branch Diff\n```diff\n{diff}\n```")
 
     if provider in HARNESSES:  # one shot; a dead harness is a skipped reviewer, never a traceback
         status, text, _ = _call_and_extract(provider, model, system, user_msg, repo=repo)
@@ -1666,6 +2117,7 @@ def cmd_auth_print_token(as_json: bool = False) -> None:
 
 
 def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True) -> None:
+    _validate_model_ref(*_split_model_ref(model_ref))  # shape only; independent of --skip-validation
     require_base_ref(repo, base)
     diff = git_diff_branch(repo, base)
     if not diff.strip():

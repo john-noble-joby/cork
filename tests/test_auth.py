@@ -333,7 +333,7 @@ class AuthRefreshTest(unittest.TestCase):
             "rotation": [{"provider": "copilot", "model": "configured-model"}],
         }
         calls = []
-        orchestrate._probe = lambda provider, model: calls.append((provider, model)) or "ok"
+        orchestrate._probe = lambda provider, model, details=None: calls.append((provider, model)) or "ok"
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             orchestrate.cmd_auth_status(as_json=True)
@@ -411,7 +411,7 @@ class AuthRefreshTest(unittest.TestCase):
 
     def test_auth_status_json_exits_one_when_nothing_resolves(self):
         calls = []
-        orchestrate._probe = lambda provider, model: calls.append((provider, model)) or "ok"
+        orchestrate._probe = lambda provider, model, details=None: calls.append((provider, model)) or "ok"
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
                 self.assertRaises(SystemExit) as raised:
@@ -428,7 +428,7 @@ class AuthRefreshTest(unittest.TestCase):
     def test_auth_status_json_exits_one_when_probe_fails(self):
         os.environ["CORK_COPILOT_TOKEN"] = "ENV"
         calls = []
-        orchestrate._probe = lambda provider, model: calls.append((provider, model)) or "auth"
+        orchestrate._probe = lambda provider, model, details=None: calls.append((provider, model)) or "auth"
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
                 self.assertRaises(SystemExit) as raised:
@@ -441,7 +441,7 @@ class AuthRefreshTest(unittest.TestCase):
         self.assertIn("CORK_COPILOT_TOKEN", err.getvalue())  # names the winning source
 
     def test_auth_status_401_names_the_winning_source(self):
-        orchestrate._probe = lambda provider, model: "auth"
+        orchestrate._probe = lambda provider, model, details=None: "auth"
         cases = (
             ("env", lambda: os.environ.__setitem__("CORK_COPILOT_TOKEN", "ENV"),
              "CORK_COPILOT_TOKEN env override"),
@@ -464,7 +464,7 @@ class AuthRefreshTest(unittest.TestCase):
         self.cork.write_text(json.dumps(
             {"token": "OLD", "refresh_token": "DEAD", "expires_at": 5000, "openai": "OA"}))
         orchestrate._post_form = lambda *a, **k: {"error": "invalid_grant"}
-        orchestrate._probe = lambda provider, model: self.fail("must not probe after a rejected refresh")
+        orchestrate._probe = lambda provider, model, details=None: self.fail("must not probe after a rejected refresh")
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
                 self.assertRaises(SystemExit) as raised:
@@ -520,7 +520,7 @@ class AuthRefreshTest(unittest.TestCase):
         }
         for verdict, message in expected.items():
             with self.subTest(verdict=verdict):
-                orchestrate._probe = lambda provider, model, result=verdict: result
+                orchestrate._probe = lambda provider, model, result=verdict, details=None: result
                 out, err = io.StringIO(), io.StringIO()
                 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
                         self.assertRaises(SystemExit) as raised:
@@ -533,7 +533,7 @@ class AuthRefreshTest(unittest.TestCase):
 
     def test_auth_status_text_reports_probe_failure_reason(self):
         os.environ["CORK_COPILOT_TOKEN"] = "ENV"
-        orchestrate._probe = lambda provider, model: "connection"
+        orchestrate._probe = lambda provider, model, details=None: "connection"
         out = io.StringIO()
         with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
             orchestrate.cmd_auth_status(as_json=False)
@@ -543,7 +543,7 @@ class AuthRefreshTest(unittest.TestCase):
         orchestrate._now = lambda: 10000.0
         self.cork.write_text(json.dumps({"token": "OLD", "expires_at": 5000}))
         calls = []
-        orchestrate._probe = lambda provider, model: calls.append((provider, model)) or "ok"
+        orchestrate._probe = lambda provider, model, details=None: calls.append((provider, model)) or "ok"
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
                 self.assertRaises(SystemExit):

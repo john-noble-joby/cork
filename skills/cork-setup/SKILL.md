@@ -5,7 +5,7 @@ description: "Use when the user says \"set up cork\", \"cork setup\", \"configur
 
 # cork-setup — guided setup
 
-**Version:** 0.13.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.14.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 Walk the user through getting cork working. Resolve `CORK_HOME` (default `~/dev/cork`).
 Do the steps in order; confirm each before moving on.
@@ -27,16 +27,19 @@ this choice. Never switch providers without approval.
 Authenticate the chosen lanes below, then run `python3 "$CORK_HOME/orchestrate.py" preflight`
 on the approved rotation and show the selected models. Diagnose unavailable/skipped requested lanes individually; a successful
 preflight with fewer lanes is not proof that every requested provider is authenticated.
-- **Claude harness:** uses Claude Code's login, not a Copilot token. Preflight only checks
-  binary presence. Verify the intended subscription/account with the configured binary's
+- **Claude harness:** uses Claude Code's login, not a Copilot token. Preflight probes login
+  state live (`claude: live (…)` / `logged-out — run claude auth login`) but not model access.
+  Verify the intended subscription/account with the configured binary's
   `--safe-mode --restricted auth status` from the shell that will run the reviews.
   If logged out, ask the user to run `claude auth login` using that binary. Never fall back
   to an API lane or ask for Copilot credentials to fix Claude authentication.
 - **Pi harness:** use `providers.pi.enabled: true` and qualified model IDs such as
   `openai-codex/gpt-6-sol` (CLI: `--review-model pi/openai-codex/gpt-6-sol`). Check the
   configured Pi binary's `auth check --provider openai-codex --json` without credential
-  printing; if needed, have the user `/login` in Pi. Preflight checks only binary presence:
-  smoke-test requested models with Cork's no-tools/resource-disabled harness flags.
+  printing; if needed, have the user `/login` in Pi. Preflight runs that probe live
+  (`--no-refresh`, so it never rewrites credentials) and reports `live` / `logged-out` /
+  `unavailable (<reason>)`, but it does not validate model access: smoke-test requested
+  models with Cork's no-tools/resource-disabled harness flags.
   Pi keeps its own credentials; neither Codex login nor an OpenAI API key is required.
 - **OpenAI/Anthropic API lanes:** require their own credentials; follow **Secrets** below.
 - **Copilot:** only when an enabled Copilot lane is in the chosen rotation, run

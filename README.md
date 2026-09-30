@@ -215,7 +215,7 @@ and `anthropic` are supported but disabled by default; enable a provider in `con
 and supply its token via `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` (or keys `"openai"` /
 `"anthropic"` in `~/.config/cork/auth.json`). Secrets never go in `config.json`.
 
-### Harness reviewers (`claude`, `codex`, `pi`)
+### Harness reviewers (`claude`, `codex`, `opencode`, `pi`)
 
 Besides API providers, cork can drive a **locally installed coding-agent CLI** as an
 independent, read-only reviewer. It receives the same review inputs as an API model —
@@ -224,12 +224,20 @@ and its stdout is consumed as the findings. Same `--review-model provider/model`
 same rotation/preflight/consolidation. Harnesses are disabled by default; enable one in
 `config.json` and add rotation entries:
 
+| Harness | Read-only boundary | Auth probe |
+|---------|--------------------|------------|
+| `claude` | Safe/restricted plan mode; only `Read,Grep,Glob` | `claude auth status --text` |
+| `codex` | Read-only sandbox; ephemeral session | `codex login status` |
+| `opencode` | Env-denied write/shell/network/task tools; project config disabled; global config (MCP servers, plugins) isolated | `opencode auth list` shows a credential for the model's provider |
+| `pi` | No tools at all (prompt-only); no session, extensions, skills, templates, themes, context files, or project approval | `pi auth check … --no-refresh` |
+
 ```json
-"providers": { "codex": {"enabled": true}, "claude": {"enabled": true, "extra_args": ["--max-budget-usd", "3"]} },
-"rotation":  [ {"provider": "codex", "model": "gpt-5.6-sol"}, {"provider": "claude", "model": "claude-opus-4.7"} ]
+"providers": { "codex": {"enabled": true}, "opencode": {"enabled": true}, "pi": {"enabled": true} },
+"rotation":  [ {"provider": "codex", "model": "gpt-5.6-sol"}, {"provider": "opencode", "model": "github-copilot/gpt-5.5"}, {"provider": "pi", "model": "glm-internal/glm-5.3-onprem"} ]
 ```
 
-Invocations (flags verified against `claude --help` 2.1.x and `codex exec --help` 0.146.x):
+Invocations (flags verified against `claude --help` 2.1.x, `codex exec --help` 0.146.x,
+`opencode run --help` 1.17.x, and `pi --help` 0.85–0.87):
 
 ```bash
 claude -p --no-session-persistence --output-format text --model <m> --system-prompt <standards> \
@@ -237,6 +245,10 @@ claude -p --no-session-persistence --output-format text --model <m> --system-pro
 codex exec -m <m> --ephemeral --skip-git-repo-check -C <repo> --color never - -s read-only \
        --ignore-user-config --disable shell_tool --disable unified_exec \
        --disable code_mode_host --disable apps                                          # prompt on stdin
+opencode run -m <provider/model> --agent plan --format default --dir <repo> --pure -- <prompt>
+pi --print --model <provider/model> --system-prompt <standards> --no-tools --no-extensions --no-skills \
+   --no-prompt-templates --no-themes --no-context-files --no-approve --no-session \
+   --append-system-prompt ""                                                            # prompt on stdin
 ```
 
 **Read-only guarantees and their limits.** `claude` runs with `--safe-mode` (no CLAUDE.md,
@@ -250,12 +262,68 @@ commands and read anywhere the user can. So cork also passes `--disable shell_to
 (features listed by `codex features list`, flags by `codex exec --help`): the codex
 reviewer then has **no command execution, no file access and none of your MCP servers**
 and reviews from the prompt alone, like an API model (verified with a tool-inventory probe
-on codex-cli 0.146.0; it still has web search, image tools and sub-agent tools). Neither
-lane can modify the repo (the manual check in the 0.11.0 PR shows `git status --porcelain`
-identical before and after). Codex has no system-prompt flag, so the standards are prepended to the prompt
-body under a `=== END OF REVIEW STANDARDS ===` separator. Claude and Pi pass standards as one
-`--system-prompt` argument, so a standards layer over ~128 KiB hits the Linux per-argument
-limit and the lane is skipped with `Argument list too long`. **Trust boundary:** the
+on codex-cli 0.146.0; it still has web search, image tools and sub-agent tools). OpenCode's stock `plan` agent still allows shell and plan-file
+writes, so cork injects `OPENCODE_PERMISSION` denies for `bash`; `edit` (which governs both
+write and patch tools); `task`; `webfetch`; `websearch`; `external_directory` access; and the
+experimental `lsp` tool (it starts language-server processes; the `OPENCODE_EXPERIMENTAL*`
+switches that enable it are cleared from the lane's environment). External skill discovery
+(`.claude/skills`, `.agents/skills`) and Claude Code compatibility (`CLAUDE.md`, `.claude/*`)
+are disabled with `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` / `OPENCODE_DISABLE_CLAUDE_CODE=1`, since
+a branch could otherwise inject instructions through them.
+`OPENCODE_DISABLE_PROJECT_CONFIG=1` prevents a branch's
+`.opencode/` configuration or project instructions from weakening that policy; `--pure` also
+disables external plugins. Neither stops OpenCode loading your **global**
+`~/.config/opencode/opencode.json`, whose MCP servers have dynamic tool names the `plan` agent's
+wildcard allow admits, so cork also points `XDG_CONFIG_HOME` at a fresh scratch directory it
+owns for the run and deletes afterwards (OpenCode scaffolds a stub `opencode.jsonc` and a
+`node_modules` tree there on every start, so a persistent "empty" directory would not stay
+empty): no global config, while your login (`~/.local/share/opencode/auth.json`) and the models
+cache (`~/.cache/opencode/`) live elsewhere and stay available (verified on 1.17.3: `mcp list`
+shows none, `auth list` unchanged); any inherited `OPENCODE_CONFIG` or `OPENCODE_CONFIG_DIR` is
+cleared from the lane's environment for the same reason, and `OPENCODE_CONFIG_CONTENT` is
+replaced with cork's own `{"snapshot":false,"share":"disabled"}`. Sharing is also refused at the
+runtime-flag level: an inherited `OPENCODE_AUTO_SHARE` (which OpenCode reads independently of
+config and would upload the review prompt to opencode.ai) is cleared and `OPENCODE_DISABLE_SHARE=1`
+set; every inherited `OPENCODE_EXPERIMENTAL*` / `OPENCODE_ENABLE_*` feature switch is cleared
+too, since those can enable tools the deny list predates; and `OPENCODE_DISABLE_AUTOUPDATE=1`
+keeps an unattended reviewer from replacing your binary. `opencode run` always records a session, so cork
+also sets `OPENCODE_DB` to a throwaway database in that scratch directory: the review's session
+and messages never land in your `~/.local/share/opencode/opencode.db`, and with snapshots off no
+copy of the repo is written under `~/.local/share/opencode/snapshot/` either (verified on 1.17.3:
+session count and snapshot tree unchanged across reviews; only `account.json` is touched). None
+of that covers the **legacy global directory `~/.opencode/`**: OpenCode 1.17.3 loads it in full
+regardless of `XDG_CONFIG_HOME` and the project-config switch (verified with a repo outside
+`$HOME`: an MCP server declared in `opencode.json` there was started, a `tool/*.ts` registered a
+tool, an `agent/plan.md` replaced the plan agent) — any of which hands a prompt-injected reviewer
+code or tools past the permission layer. So cork refuses to run the lane — and its auth probe —
+while `~/.opencode/` holds anything beyond OpenCode's own install artifacts (`bin/`, where the
+binary itself lives on a default install, `node_modules/`, `package.json`, lockfiles,
+`.gitignore`), naming the offending entries and telling you to move them under
+`~/.config/opencode/` (which cork isolates). A branch's own `.opencode/opencode.json`, `agent/`
+or `tool/` is *not* loaded under `OPENCODE_DISABLE_PROJECT_CONFIG=1` (verified the same way);
+plugins are the exception, below. One gap those flags do not close: OpenCode still imports
+and runs a project's `.opencode/plugins/*.{ts,js}` — and the singular `.opencode/plugin/`,
+which its loader scans too (upstream anomalyco/opencode#49836, open). That would be
+branch-controlled code executing outside the permission layer, so cork refuses to run the
+OpenCode lane at all when either directory exists in the tree under review or in any
+directory above it (OpenCode walks every ancestor of its cwd), and reports it as a skipped
+reviewer — the message says whether the hit is the branch's or your own environment's. The
+auth probe runs from cork's own state directory, never the repo, so preflight cannot see
+branch-local plugins; it applies the same scan to that directory's ancestors (and the legacy
+`~/.opencode/` check) before it launches the CLI. Pi runs with **no tools at all**: its `read` and `find` accept
+absolute paths, so a read allowlist would still let a prompt-injected review reach other
+reviewers' `/tmp/cork-review-*` files. Its extensions, skills, prompt templates, themes,
+context files and ambient `APPEND_SYSTEM.md` are disabled too; it keeps no session, ignores
+project-local `.pi/` resources with `--no-approve`, and reads the prompt from stdin. None can modify the repo (the manual checks in the
+release PRs show `git status --porcelain` identical before and after). Codex and OpenCode have
+no system-prompt flag, so the standards are prepended to the prompt body under a
+`=== END OF REVIEW STANDARDS ===` separator. Claude and Pi receive the standards as one
+`--system-prompt` argument. Linux caps a single argument at 128 KiB, so a standards layer
+that large — or an OpenCode prompt that large, since that lane passes the prompt as an
+argument — is refused by cork before the CLI runs and the lane is skipped with an explicit
+size message. Codex, Claude and Pi take the prompt itself on stdin. Only Claude and Pi
+have a `--system-prompt` standards argument subject to that limit; Codex sends both the
+standards and task on stdin. **Trust boundary:** the
 reviewer follows instructions from the branch under review (`code-review/AGENTS.md`, file
 contents) with your local login, so a hostile branch could steer it into reading and quoting
 files it can reach (`--restricted` limits claude to the repo; codex has no file access,
@@ -264,9 +332,25 @@ Run harness lanes only on branches you would run the repo's own hooks or tests f
 same trust you already extend to the implementer step. A timeout kills the CLI process
 itself; tool subprocesses it spawned are not tracked.
 
+Preflight checks live login state for every enabled harness without opening a browser or making
+a model request. Logged-out lanes print the exact recovery action: `claude auth login`,
+`codex login`, `opencode auth login`, or launch `pi` and run `/login`. Pi's probe always uses
+`--no-refresh`; alternatively, set the selected Pi provider's API-key environment variable.
+The other probes are status/list commands and do not write credentials. OpenCode's probe
+checks that `opencode auth list` shows a credential — stored, or environment-backed such as
+`OpenAI OPENAI_API_KEY` — for the model's *own* provider (the `github-copilot` in
+`github-copilot/gpt-5`), not merely that some provider is logged in. Display names are resolved
+to provider ids through OpenCode's own models.dev cache (`~/.cache/opencode/models.json`), so
+`Vertex` means `google-vertex` and never `google`. If
+`ANTHROPIC_API_KEY` is set, the Claude probe reports that fact without validating the key,
+because an invalid value can make `claude -p` hang silently until cork's timeout. Some Pi
+installations are wrapped in a provider-policy shim; cork passes the model through unchanged,
+so such a shim may refuse unsupported providers. OpenCode's `github-copilot` provider uses the
+same Copilot seat as cork's own Copilot API lane; it does not require a second subscription.
+
 Per-harness config keys — the only ones read:
 
-- `bin` (or env `CORK_CLAUDE_BIN` / `CORK_CODEX_BIN` / `CORK_PI_BIN`, which wins): a bare command name
+- `bin` (or env `CORK_CLAUDE_BIN` / `CORK_CODEX_BIN` / `CORK_OPENCODE_BIN` / `CORK_PI_BIN`, which wins): a bare command name
   resolved on `PATH`, or an absolute path (`~` is expanded). A relative path is rejected:
   preflight would resolve it from cork's cwd while the review runs from the target repo.
 - `extra_args`: appended verbatim, *before* the read-only flags; treated as trusted — it is
@@ -274,7 +358,8 @@ Per-harness config keys — the only ones read:
 - `timeout`: seconds, default 900.
 
 The argv template and read-only flags are not configurable. `preflight` selects a harness
-iff its binary is found (on `PATH`, or at the configured absolute `bin` path) — no spend. A
+iff its binary is found (on `PATH`, or at the configured absolute `bin` path) and its auth probe
+succeeds — no model spend. A
 harness that exits non-zero, times out, or prints nothing is reported and skipped
 (`[codex/<m> returned no usable content — skipped]`); there is no retry.
 
@@ -323,9 +408,11 @@ Pi retains its user-level provider configuration and login; explicit `extra_args
 trusted and must not re-enable resources/tools. Cork does not copy or export credentials.
 `openai-codex` uses Pi's ChatGPT OAuth login, distinct from OpenAI API-key billing; account
 limits still apply. Check `pi auth check --provider openai-codex --json` (no credentials
-flag), then smoke-test each model. Harness preflight checks only binary presence, not
-login or model access. No Codex CLI login is required, and `responses_effort` does not
-control Pi: use `--thinking` as above.
+flag), then smoke-test each model. Harness preflight runs that same login probe live
+(`pi: live (openai-codex)` / `logged-out — run …`), but it does not validate model access —
+a model the account cannot use still surfaces only at review time, so the smoke test stays.
+No Codex CLI login is required, and `responses_effort` does not control Pi: use `--thinking`
+as above.
 
 ### Interactive review (`interactive_review`, default on)
 
@@ -373,7 +460,7 @@ token-only cork file and the read-only opencode fallback are not refreshable; ru
 | `CORK_COPILOT_TOKEN` | — | Copilot token used directly (highest priority) |
 | `CORK_COPILOT_CLIENT_ID` | `Iv1.b507a08c87ecfe98` | GitHub OAuth client id for `login` |
 | `CLAUDE_BIN` | `~/.local/bin/claude` | Path to Claude Code CLI (headless mode) |
-| `CORK_CLAUDE_BIN` / `CORK_CODEX_BIN` / `CORK_PI_BIN` | `claude` / `codex` / `pi` (PATH) | Harness reviewer binaries (see *Harness reviewers*) |
+| `CORK_CLAUDE_BIN` / `CORK_CODEX_BIN` / `CORK_OPENCODE_BIN` / `CORK_PI_BIN` | CLI name (PATH) | Harness reviewer binaries (see *Harness reviewers*) |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | — | Native-provider tokens (only if you enable those providers) |
 
 ### Using your Copilot seat for the Codex lane
