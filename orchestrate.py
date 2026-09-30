@@ -2127,10 +2127,11 @@ def cmd_auth_print_token(as_json: bool = False) -> None:
 def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True,
                story_file: str | None = None, story_text: str | None = None) -> None:
     if story_file is not None:
-        story_path = Path(story_file).expanduser()
+        story_path = Path(story_file)
         try:
+            story_path = story_path.expanduser()  # RuntimeError for an unknown ~user
             story = story_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as e:
+        except (OSError, UnicodeError, RuntimeError) as e:
             fail(f"Cannot read story file {story_path}: {e}")
         story_source = f"--story-file {story_path}"
     elif story_text is not None:
@@ -2330,6 +2331,10 @@ def main() -> None:
                              help="Review-only story/acceptance contract supplied inline. "
                                   "Use --story=TEXT when TEXT starts with '-'.")
     args = parser.parse_args()
+    if (args.story_file is not None or args.story is not None) and not args.review_model:
+        # Otherwise a forgotten --review-model silently turns an intended review into a full
+        # implementation run that ignores the supplied story.
+        parser.error("--story/--story-file are review-only flags: add --review-model MODEL")
 
     if args.status:
         cmd_status(args.ticket_id)

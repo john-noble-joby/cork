@@ -36,6 +36,26 @@ class ReviewStoryTest(unittest.TestCase):
             setattr(orchestrate, name, value)
         self.tmp.cleanup()
 
+    def test_unknown_user_in_story_path_fails_cleanly(self):
+        err = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(err), self.assertRaises(SystemExit) as cm:
+            orchestrate.cmd_review("TASK-1", self.tmp.name, "origin/main", "copilot/model",
+                                   validate=False, story_file="~no-such-user-cork-test/story.md")
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("Cannot read story file ~no-such-user-cork-test/story.md", err.getvalue())
+
+    def test_story_flags_require_review_model(self):
+        for argv in (["orchestrate.py", "TASK-1", self.tmp.name, "--story", "x"],
+                     ["orchestrate.py", "TASK-1", self.tmp.name, "--story-file", str(self.story_file)]):
+            with self.subTest(flag=argv[3]):
+                orig = sys.argv; sys.argv = argv; self.addCleanup(setattr, sys, "argv", orig)
+                err = io.StringIO()
+                with redirect_stderr(err), self.assertRaises(SystemExit) as cm:
+                    orchestrate.main()
+                self.assertEqual(cm.exception.code, 2)          # argparse usage error, before any run
+                self.assertIn("--review-model", err.getvalue())
+                sys.argv = orig
+
     def _api_prompt(self, **kwargs) -> tuple[str, str]:
         seen = {}
 
