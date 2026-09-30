@@ -24,6 +24,10 @@ class HarnessBase(unittest.TestCase):
         # never let a test create scratch dirs in the real ~/.local/share/code-orchestrator
         self.addCleanup(setattr, orchestrate, "STATE_DIR", orchestrate.STATE_DIR)
         orchestrate.STATE_DIR = Path(self.tmp.name) / "state"
+        # ...nor depend on what the developer's real ~/.opencode holds (legacy-dir refusal)
+        real_home = os.environ.get("HOME")
+        self.addCleanup(lambda: os.environ.update(HOME=real_home) if real_home is not None else os.environ.pop("HOME", None))
+        os.environ["HOME"] = str(Path(self.tmp.name) / "home"); (Path(self.tmp.name) / "home").mkdir()
         self._env = {k: os.environ.pop(k, None)
                      for k in ("ANTHROPIC_API_KEY", "CORK_CLAUDE_BIN", "CORK_CODEX_BIN",
                                "CORK_OPENCODE_BIN", "CORK_PI_BIN", "OPENCODE_PERMISSION",
@@ -114,29 +118,39 @@ class ArgvTest(HarnessBase):
         self.assertNotIn("OPENCODE_CONFIG", kw["env"])
         self.assertEqual((kw["encoding"], kw["errors"]), ("utf-8", "replace"))
 
-    def test_opencode_refuses_legacy_home_config_and_plugins(self):
-        # $HOME/.opencode/opencode.json{,c} and plugin dirs load regardless of XDG_CONFIG_HOME
-        # (verified on 1.17.3 with a repo outside HOME); the upward scan misses them there.
-        home = Path(self.tmp.name) / "home"; home.mkdir()
+    def test_opencode_refuses_legacy_home_dir_with_anything_beyond_the_install(self):
+        # $HOME/.opencode is loaded in full regardless of XDG_CONFIG_HOME (verified on 1.17.3
+        # with a repo outside HOME: config MCP started, tool/*.ts registered, agent/plan.md
+        # replaced the agent); the upward scan misses it there. Only OpenCode's own install
+        # artifacts are tolerated — the binary itself lives in ~/.opencode/bin by default.
+        home = Path(self.tmp.name) / "home"; legacy = home / ".opencode"; legacy.mkdir(parents=True)
         os.environ["HOME"] = str(home); self.addCleanup(os.environ.pop, "HOME", None)
         repo = Path(self.tmp.name) / "elsewhere" / "repo"; repo.mkdir(parents=True); (repo / ".git").mkdir()
         fake = _FakeRun(); orchestrate.subprocess.run = fake
-        self.assertEqual(orchestrate._harness_call("opencode", "p/m", "S", "U", str(repo))[0], 200)
-        for rel in (".opencode/opencode.json", ".opencode/opencode.jsonc", ".opencode/plugin", ".opencode/plugins"):
+        for name in ("bin", "node_modules"):
+            (legacy / name).mkdir()
+        for name in ("package.json", "package-lock.json", "bun.lock", ".gitignore"):
+            (legacy / name).write_text("x")
+        self.assertEqual(orchestrate._harness_call("opencode", "p/m", "S", "U", str(repo))[0], 200)  # default install
+        for rel in ("opencode.json", "opencode.jsonc", "plugin", "plugins", "tool/probe.ts",
+                    "agent/plan.md", "agents/plan.md", "command/x.md", "skill/x/SKILL.md", "whatever"):
             with self.subTest(rel=rel):
-                hit = home / rel; hit.parent.mkdir(parents=True, exist_ok=True)
-                hit.mkdir() if rel.endswith(("plugin", "plugins")) else hit.write_text("{}")
+                hit = legacy / rel; hit.parent.mkdir(parents=True, exist_ok=True)
+                hit.mkdir() if rel in ("plugin", "plugins") else hit.write_text("{}")
                 status, body = orchestrate._harness_call("opencode", "p/m", "S", "U", str(repo))
-                self.assertEqual(status, 403); self.assertIn(str(hit), body); self.assertIn("~/.config/opencode/", body)
+                self.assertEqual(status, 403)
+                self.assertIn(str(legacy), body); self.assertIn(rel.split("/")[0], body)   # names the stray entry
+                self.assertIn("~/.config/opencode/", body)
                 details = {}
                 self.assertEqual(orchestrate._probe("opencode", "gh/m", details), "error")  # probe refuses too
-                self.assertIn(str(hit), details["detail"])
-                shutil.rmtree(home / ".opencode")
+                self.assertIn(str(legacy), details["detail"])
+                shutil.rmtree(legacy / rel.split("/")[0]) if (legacy / rel.split("/")[0]).is_dir() else (legacy / rel).unlink()
         self.assertEqual(len(fake.calls), 1)                          # the CLI was never launched while refused
+        (legacy / "opencode.json").write_text("{}")
         for lane in ("codex", "claude", "pi"):                        # opencode-specific
-            (home / ".opencode").mkdir(); (home / ".opencode" / "opencode.json").write_text("{}")
             self.assertEqual(orchestrate._harness_call(lane, "p/m", "S", "U", str(repo))[0], 200)
-            shutil.rmtree(home / ".opencode")
+        shutil.rmtree(legacy)
+        self.assertEqual(orchestrate._harness_call("opencode", "p/m", "S", "U", str(repo))[0], 200)  # no legacy dir at all
 
     def test_unwritable_state_dir_makes_the_probe_error_not_crash(self):
         blocker = Path(self.tmp.name) / "blocker"; blocker.write_text("not a dir")

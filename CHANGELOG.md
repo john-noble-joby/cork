@@ -44,9 +44,10 @@ change, and add a section here.
   login and the models cache are unaffected. The reviewer's session goes to a throwaway
   `OPENCODE_DB` in that scratch dir and repo snapshots are off (`snapshot: false`), so a review
   leaves no session or snapshot in `~/.local/share/opencode`. The legacy global directory
-  `~/.opencode/` is loaded regardless of `XDG_CONFIG_HOME`, so the lane (and its auth probe)
-  refuses to run while `~/.opencode/opencode.json{,c}` or `~/.opencode/plugin{,s}/` exists, with
-  a message to move the config under `~/.config/opencode/`.
+  `~/.opencode/` is loaded in full (config, agents, custom tools, plugins) regardless of
+  `XDG_CONFIG_HOME`, so the lane (and its auth probe) refuses to run while it holds anything
+  beyond OpenCode's own install artifacts (`bin/`, `node_modules/`, `package.json`, lockfiles,
+  `.gitignore`), naming the entries and pointing at `~/.config/opencode/`.
   Because OpenCode still executes a project's `.opencode/{plugin,plugins}/*.{ts,js}` despite
   those switches (anomalyco/opencode#49836), the lane — and its auth probe — refuse to run when
   either directory exists in the tree under review or any directory above it, and it is reported

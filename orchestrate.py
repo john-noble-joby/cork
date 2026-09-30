@@ -293,14 +293,18 @@ HARNESSES: dict[str, dict] = {
         # the permission layer, so the lane refuses to run at all when the tree under review
         # ships either directory.
         "refuse_paths": [".opencode/plugins", ".opencode/plugin"],
-        # The legacy global dir $HOME/.opencode is loaded regardless of XDG_CONFIG_HOME
-        # and OPENCODE_DISABLE_PROJECT_CONFIG (verified on 1.17.3 with a repo outside
-        # HOME: an MCP server declared there was started). Its config would hand the
-        # reviewer MCP tools past the permission layer, and its plugins are executed, so
-        # the lane refuses to run while any of these exist. The upward scan above only
-        # reaches $HOME/.opencode when the repo is under HOME.
-        "refuse_home_paths": [".opencode/opencode.json", ".opencode/opencode.jsonc",
-                              ".opencode/plugins", ".opencode/plugin"],
+        # The legacy global dir $HOME/.opencode is loaded in full regardless of
+        # XDG_CONFIG_HOME and OPENCODE_DISABLE_PROJECT_CONFIG (verified on 1.17.3 with a
+        # repo outside HOME: an MCP server declared in opencode.json there was started, a
+        # tool/*.ts registered a tool, an agent/plan.md replaced the plan agent). Any of
+        # that hands the reviewer code or tools past the permission layer, so the lane
+        # refuses to run while the dir holds anything beyond OpenCode's own install
+        # artifacts (the binary itself lives in ~/.opencode/bin on a default install).
+        # A branch's own .opencode/{opencode.json,agent,tool} is NOT loaded under the
+        # project-config switch (verified); plugins are the exception, handled above.
+        "legacy_home_dir": ".opencode",
+        "legacy_home_allow": ["bin", "node_modules", "package.json", "package-lock.json",
+                              "bun.lock", "bun.lockb", ".gitignore"],
         "auth_probe": {"argv": ["auth", "list"], "success": _opencode_auth_ready,
                        "logged_out": _opencode_auth_logged_out,
                        "detail": _auth_detail, "login": "opencode auth login"},
@@ -1341,12 +1345,19 @@ def _refusal(spec: dict, provider: str, cwd: str) -> str | None:
         return (f"{provider}: {hit} exists {where} and {spec['bin']} would execute it "
                 f"(anomalyco/opencode#49836) — refusing to run this lane; remove it or leave "
                 f"the lane disabled")
-    for rel in spec.get("refuse_home_paths", []):
-        hit = Path.home() / rel
-        if hit.exists():
-            return (f"{provider}: {hit} exists and {spec['bin']} loads it regardless of "
-                    f"XDG_CONFIG_HOME (legacy global config) — refusing to run this lane; move "
-                    f"it under ~/.config/opencode/, which cork isolates, or leave the lane disabled")
+    legacy = spec.get("legacy_home_dir")
+    if legacy and (Path.home() / legacy).is_dir():
+        home_dir = Path.home() / legacy
+        try:
+            strays = sorted(p.name for p in home_dir.iterdir()
+                            if p.name not in spec.get("legacy_home_allow", ()))
+        except OSError as e:  # fail closed: what cannot be inspected cannot be cleared
+            strays = [f"(unreadable: {e})"]
+        if strays:
+            return (f"{provider}: {home_dir} contains {', '.join(strays)} and {spec['bin']} loads "
+                    f"everything there (config, agents, tools, plugins) regardless of "
+                    f"XDG_CONFIG_HOME — refusing to run this lane; move it under "
+                    f"~/.config/opencode/, which cork isolates, or leave the lane disabled")
     return None
 
 
