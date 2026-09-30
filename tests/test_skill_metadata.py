@@ -5,9 +5,12 @@ from pathlib import Path
 class SkillMetadataTest(unittest.TestCase):
     def test_descriptions_are_quoted_yaml_scalars(self):
         root = Path(__file__).resolve().parents[1] / "skills"
-        for name in ("coding-standards", "cork", "cork-setup", "copilot-review-loop", "devit"):
+        paths = sorted(root.glob("*/SKILL.md"))
+        self.assertTrue(paths)
+        for path in paths:
+            name = path.parent.name
             with self.subTest(skill=name):
-                text = (root / name / "SKILL.md").read_text(encoding="utf-8")
+                text = path.read_text(encoding="utf-8")
                 self.assertTrue(text.startswith("---\n"))
                 frontmatter = text.split("---\n", 2)[1]
                 self.assertIn(f"name: {name}\n", frontmatter)
