@@ -7,7 +7,7 @@ the active Claude session implements, then several independent models review the
 diff — each seeing only the current code, never prior reviewers' notes — so every
 model hunts for issues with fresh eyes.
 
-It ships three user-facing skills (plus `cork-setup` and the auto-loaded
+It ships four user-facing skills (plus `cork-setup` and the auto-loaded
 `coding-standards` rubric):
 
 | Skill | Say | What it does |
@@ -15,8 +15,10 @@ It ships three user-facing skills (plus `cork-setup` and the auto-loaded
 | **devit** | `devit MXE-123` | The full dev loop: verify the story → size-gate (split if too big) → worktree + branch → implement → cork review → PR → Copilot review loop → surface pushbacks. The top-level entry point. |
 | **cork** | `cork` / `cork review` | Multi-model review of a branch. *Full*: implement + apply each model's fixes + PR. *Review-only*: run all models in parallel, print a consolidated findings report, change nothing. |
 | **copilot-review-loop** | `run the copilot review loop` | Iterative GitHub Copilot PR review: request → fix/push-back each comment → reply + resolve → re-request, up to N passes. |
+| **cork-cross-review** | `cross review PR 42` | Cross-vendor PR verification: the session acts as tech lead, fans the diff out to independent reviewers from vendors other than the author's (harness lanes against a scratch worktree, plus API models), consolidates one verdict with a reviewer roster, routes blockers back to the author. Never merges. |
 
-`devit` orchestrates the other two — you'll mostly just run `devit`.
+`devit` orchestrates `cork` and `copilot-review-loop` — you'll mostly just run `devit`;
+`cork-cross-review` is the independent check you run on someone else's PR (or your own, before merge).
 
 ---
 
@@ -37,7 +39,7 @@ steps below are manual.
    ```bash
    cd ~/dev/cork && ./install.sh
    ```
-   Copies `coding-standards`, `cork`, `copilot-review-loop`, `devit`, and `cork-setup` into
+   Copies `coding-standards`, `cork`, `cork-cross-review`, `copilot-review-loop`, `devit`, and `cork-setup` into
    `~/.claude/skills/` and `statusline.py` into `~/.claude/`, and verifies every version stamp matches `VERSION`.
    Re-run after a `git pull` to update. (`orchestrate.py` itself isn't copied — the skills
    run it straight from `$CORK_HOME`, so `git pull` updates the engine.) `install.sh` can also

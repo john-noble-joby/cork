@@ -136,9 +136,10 @@ file the gates left behind (tracked, untracked and ignored alike), so Step 5 can
 reviewer's write — including an in-place edit of an existing file — from a gate's build artifact:
 
 ```bash
-snapshot() {   # content of every regular file, plus type/mode/link target of every entry:
-               # a chmod +x, a new or retargeted symlink, or a file turned into a link all show up
-  find "$WT" -path "$WT/.git" -prune -o \( -type f -o -type l \) -print0 | sort -z | xargs -0 stat -c '%A %N'
+snapshot() {   # type/mode/link target of EVERY entry except .git (dirs and special files too),
+               # plus the content of every regular file: a chmod, a new empty dir, a new or
+               # retargeted symlink, or a file turned into a link all show up
+  find "$WT" -mindepth 1 -path "$WT/.git" -prune -o -print0 | sort -z | xargs -0 stat -c '%A %N'
   find "$WT" -path "$WT/.git" -prune -o -type f -print0 | sort -z | xargs -0 sha256sum
 }
 snapshot > "$OUT/post-gate-hashes"
