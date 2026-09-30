@@ -10,7 +10,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
 VERSION="$(tr -d '[:space:]' < "$REPO/VERSION")"
-SKILLS=(coding-standards copilot-review-loop cork cork-setup devit)
+SKILLS=(coding-standards copilot-review-loop cork cork-cross-review cork-setup devit)
 : "${DEST:?DEST must not be empty}"
 
 dest_logical="$DEST"
