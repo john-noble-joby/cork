@@ -129,7 +129,8 @@ def _opencode_provider_index() -> tuple[dict[str, str], dict[str, str]]:
             continue
         if isinstance(spec.get("name"), str):
             by_name[spec["name"].strip().lower()] = pid
-        for var in spec.get("env") or []:
+        env = spec.get("env")
+        for var in (env if isinstance(env, list) else []):  # a shape-drifted entry is ignored, not fatal
             if isinstance(var, str):
                 by_env[var] = pid
     return by_name, by_env
@@ -1388,7 +1389,7 @@ def _harness_auth_probe(provider: str, model: str) -> dict:
     except FileNotFoundError:
         result["status"] = "missing_binary"
         return result
-    except OSError:
+    except (OSError, ValueError):  # ValueError: a NUL byte in a config-supplied model string
         return result
     result["detail"] = spec["auth_probe"]["detail"](completed, model)
     if spec["auth_probe"]["success"](completed, model):
