@@ -44,6 +44,26 @@ class ReviewStoryTest(unittest.TestCase):
         self.assertEqual(cm.exception.code, 1)
         self.assertIn("Cannot read story file ~no-such-user-cork-test/story.md", err.getvalue())
 
+    def test_cli_forwards_both_story_flags_to_cmd_review(self):
+        # Positive dispatch: main() must hand each flag to cmd_review, or the advertised CLI
+        # silently falls back to the checkpoint while the direct cmd_review tests stay green.
+        seen = []
+        orig = orchestrate.cmd_review
+        orchestrate.cmd_review = lambda *a, **k: seen.append((a, k))
+        self.addCleanup(setattr, orchestrate, "cmd_review", orig)
+        base = ["orchestrate.py", "TASK-1", self.tmp.name, "--review-model", "copilot/model"]
+        for extra, expected in ((["--story", "inline text"], {"story_file": None, "story_text": "inline text"}),
+                                (["--story-file", str(self.story_file)], {"story_file": str(self.story_file), "story_text": None})):
+            with self.subTest(flag=extra[0]):
+                orig_argv = sys.argv; sys.argv = base + extra
+                try:
+                    orchestrate.main()
+                finally:
+                    sys.argv = orig_argv
+                args, kwargs = seen[-1]
+                self.assertEqual(args[3], "copilot/model")
+                self.assertEqual({k: kwargs.get(k) for k in expected}, expected)
+
     def test_story_flags_require_review_model(self):
         for argv in (["orchestrate.py", "TASK-1", self.tmp.name, "--story", "x"],
                      ["orchestrate.py", "TASK-1", self.tmp.name, "--story-file", str(self.story_file)]):
