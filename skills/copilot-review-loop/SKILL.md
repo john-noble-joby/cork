@@ -45,8 +45,8 @@ bot *is* assigned (a false "not requested" that stalls the loop; issue #19):
 
 ```bash
 gh api graphql --paginate -f query='query($endCursor: String) { repository(owner:"{owner}", name:"{repo}") { pullRequest(number:{pr}) {
-  reviewRequests(first:100, after:$endCursor) { pageInfo { hasNextPage endCursor } nodes { requestedReviewer { ... on Bot { login } ... on User { login } ... on Team { slug } } } } } } }' \
-  --jq '.data.repository.pullRequest.reviewRequests.nodes[].requestedReviewer | .login // .slug' \
+  reviewRequests(first:100, after:$endCursor) { pageInfo { hasNextPage endCursor } nodes { requestedReviewer { __typename ... on Bot { login } } } } } } }' \
+  --jq '.data.repository.pullRequest.reviewRequests.nodes[].requestedReviewer | select(.__typename == "Bot") | .login' \
   | grep -qxE 'copilot-pull-request-reviewer(\[bot\])?' && echo OK || echo "NOT REQUESTED — re-check login"
 ```
 
@@ -55,8 +55,8 @@ behind any number of other reviewers is still found (a bare `first:N` would miss
 first page). `grep -xE` matches the **whole** line against the bot's login — GraphQL reports it
 as `copilot-pull-request-reviewer`, and the `(\[bot\])?` alternative accepts the suffixed form
 should it ever appear — so an unrelated account that merely starts with those words cannot pass.
-Team requests surface as a `slug`; the `// .slug` fallback keeps the list complete without a
-`null` line.
+`select(.__typename == "Bot")` keeps only Bot identities: a requested *user* or *team* that
+happens to carry the same name is not the Copilot reviewer and must not print `OK`.
 
 If it didn't stick, you almost certainly used the display name instead of the bot login — re-run
 with `copilot-pull-request-reviewer[bot]`. Don't start the loop until this prints `OK`. (The same
