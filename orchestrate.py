@@ -1136,16 +1136,159 @@ def git_diff_branch(cwd: str, base: str) -> str:
     )
 
 
+def _git_changed_names(cwd: str, *diff_args: str) -> list[str]:
+    # NUL-delimited and decoded as filesystem paths: with the default core.quotePath, plain
+    # `--name-only` C-quotes a name like café.py into "caf\303\251.py", which no file matches.
+    raw = subprocess.check_output(["git", "diff", *diff_args, "--name-only", "-z"], cwd=cwd)
+    return [os.fsdecode(part) for part in raw.split(b"\0") if part]
+
+
 def changed_files_branch(cwd: str, base: str) -> dict[str, str]:
-    names = subprocess.check_output(
-        ["git", "diff", f"{base}...HEAD", "--name-only"], cwd=cwd, text=True
-    ).strip().splitlines()
+    return _file_contents(cwd, _git_changed_names(cwd, f"{base}...HEAD"))
+
+
+def _split_range(rng: str) -> tuple[str, str]:
+    # `A..B` or `A...B`; both endpoints must be non-empty. `..` alone is not a range.
+    sep = "..." if "..." in rng else ".."
+    a, _, b = rng.partition(sep)
+    if not a or not b or sep not in rng:
+        fail(f"--diff-range must be A..B or A...B with both endpoints, got {rng!r}")
+    return a, b
+
+
+def require_range(repo: str, rng: str) -> None:
+    a, b = _split_range(rng)
+    for ref in (a, b):
+        check = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+                               cwd=repo, capture_output=True, text=True)
+        if check.returncode != 0:
+            fail(f"--diff-range endpoint {ref!r} does not resolve")
+    if "..." in rng:  # the symmetric form diffs from the merge base, so one must exist
+        mb = subprocess.run(["git", "merge-base", a, b], cwd=repo, capture_output=True, text=True)
+        if mb.returncode != 0:
+            fail(f"--diff-range {rng!r}: no merge base between {a!r} and {b!r} (use A..B for a plain two-commit diff)")
+
+
+def git_diff_range(cwd: str, rng: str) -> str:
+    return subprocess.check_output(["git", "diff", rng], cwd=cwd, text=True)
+
+
+def changed_files_range(cwd: str, rng: str) -> dict[str, str]:
+    return _file_contents(cwd, _git_changed_names(cwd, rng))
+
+
+_GIT_ESCAPES = {b"n": b"\n", b"t": b"\t", b"r": b"\r", b"a": b"\a", b"b": b"\b", b"f": b"\f",
+                b"v": b"\v", b'"': b'"', b"\\": b"\\"}
+
+
+def _unquote_git_path(quoted: str) -> str:
+    # Reverse git's C-style quoting of a path ("caf\303\251.py", "a\tb", "say \"hi\""):
+    # \ooo is an octal byte, the usual \n \t \" \\ escapes apply, the result is bytes
+    # decoded as a filesystem path.
+    out = bytearray(); i = 0; raw = quoted.encode("utf-8", "surrogateescape")
+    while i < len(raw):
+        ch = raw[i:i + 1]
+        if ch != b"\\":
+            out += ch; i += 1; continue
+        nxt = raw[i + 1:i + 2]
+        octal = raw[i + 1:i + 4]
+        if len(octal) == 3 and all(c in b"01234567" for c in octal):
+            value = int(octal, 8)
+            if not 1 <= value <= 255:  # \000 is not a path byte; \400+ is not a byte at all
+                fail(f"octal escape \\{octal.decode()} out of range in quoted git path {quoted!r}")
+            out.append(value); i += 4
+        elif nxt.isdigit():
+            fail(f"invalid octal escape in quoted git path {quoted!r}")
+        elif nxt in _GIT_ESCAPES:
+            out += _GIT_ESCAPES[nxt]; i += 2
+        else:
+            fail(f"unrecognised escape in quoted git path {quoted!r}")
+    return os.fsdecode(bytes(out))
+
+
+def read_diff_file(path: str) -> tuple[str, list[str]]:
+    # A unified diff supplied by the caller (e.g. `git diff old..new > delta.patch`). Changed
+    # file names come from the `+++ b/<path>` headers; deletions (`+++ /dev/null`) have no
+    # current file to show and are skipped by _file_contents anyway.
+    p = Path(path)
+    try:
+        p = p.expanduser()
+        text = p.read_bytes().decode("utf-8")   # raw: universal-newline mode would turn a lone CR into a line break
+    except (OSError, UnicodeError, RuntimeError) as e:
+        fail(f"Cannot read diff file {p}: {e}")
+    # Headers are either `+++ b/<path>` or, for names git C-quotes (non-ASCII, tabs, quotes,
+    # backslashes), `+++ "b/<escaped>"` — both are what `git diff` writes by default. The
+    # `diff --git` line is optional (`diff -urN a b` has none), so the file header is recognised
+    # structurally: a `+++` line directly after a `---` line, outside any hunk. Hunk extent comes
+    # from the `@@ -a,b +c,d @@` counts, so an added source line reading `++ b/foo` (which shows
+    # up in a hunk as `+++ b/foo`) can never pull an unrelated working-tree file into the review.
+    # `diff -u` appends a tab + timestamp to the path; git C-quotes any path containing a tab,
+    # so an unquoted name always ends at the first tab. The `b/` prefix is required: a header
+    # like `+++ new.py` (`diff -u old.py new.py`, `git diff --no-prefix`) has no knowable strip
+    # level, so it is refused rather than silently yielding no changed files. Lines are split
+    # on LF only (CR trimmed as the CRLF terminator): splitlines() would also break on VT, FF
+    # and NEL, which are ordinary bytes inside a source line, letting one crafted added line
+    # exhaust the hunk count and leave `--- a/x` / `+++ b/secret` looking like a header.
+    header_re = re.compile(r'^\+\+\+ (?:"b/((?:[^"\\]|\\.)*)"|b/([^\t]+))(?:\t.*)?$')
+    hunk_re = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+    names: list[str] = []
+    old_left = new_left = 0   # hunk lines still to consume on each side
+    saw_section = False       # a `---`/`+++` pair, or a `diff --git` line (binary / mode-only sections have no `+++`)
+    prev = ""
+    for line in text.split("\n"):
+        line = line.removesuffix("\r")
+        if line.startswith("diff --git ") and not (old_left > 0 or new_left > 0):
+            saw_section = True
+        if old_left > 0 or new_left > 0:
+            if line.startswith("\\"):           # `\ No newline at end of file` is not counted
+                pass
+            elif line.startswith("-"):
+                old_left -= 1
+            elif line.startswith("+"):
+                new_left -= 1
+            else:                               # context (a stripped blank context line is "")
+                old_left -= 1; new_left -= 1
+        elif (h := hunk_re.match(line)):
+            old_left = int(h.group(1) or 1); new_left = int(h.group(2) or 1)
+        elif prev.startswith("--- ") and line.startswith("+++ "):
+            saw_section = True
+            if (m := header_re.match(line)):
+                names.append(_unquote_git_path(m.group(1)) if m.group(1) is not None else m.group(2))
+            elif not line.startswith("+++ /dev/null"):  # a deletion has no new path
+                fail(f"--diff-file {p}: header {line!r} lacks the b/ prefix — cork needs git-style a/ b/ paths")
+        prev = line
+    if text.strip() and not saw_section:  # a blank file falls through to the shared empty-diff guard
+        fail(f"--diff-file {p}: no unified diff found (expected `---`/`+++` file headers or `diff --git` sections)")
+    # A patch is caller-supplied input: its paths must stay inside the repo, or the reviewer
+    # prompt would carry the contents of arbitrary files (`+++ b/../../etc/passwd`). Git
+    # metadata is inside the repo but is not working-tree content: `.git/config` can hold
+    # remote URLs with embedded credentials, so no path component may be `.git`. Separator
+    # semantics are the platform's (a backslash is an ordinary filename byte on POSIX); the
+    # resolved containment check in _file_contents is the authoritative guard either way.
+    for name in names:
+        parts = Path(name).parts
+        if Path(name).is_absolute() or ".." in parts:
+            fail(f"--diff-file {p}: path {name!r} escapes the repository")
+        if any(part.lower() == ".git" for part in parts):
+            fail(f"--diff-file {p}: path {name!r} names git metadata")
+    return text, names
+
+
+def _file_contents(cwd: str, names: list[str]) -> dict[str, str]:
     contents: dict[str, str] = {}
+    root = Path(cwd).resolve()
     for name in names:
         path = Path(cwd) / name
         if not path.exists():
             continue
-        lines = path.read_text(errors="replace").splitlines()
+        resolved = path.resolve()
+        if not resolved.is_relative_to(root):  # symlink or `..` pointing outside the tree
+            fail(f"changed file {name!r} resolves outside the repository")
+        if any(part.lower() == ".git" for part in resolved.relative_to(root).parts):  # `alias -> .git/config`
+            fail(f"changed file {name!r} resolves into git metadata")
+        if not resolved.is_file():  # a changed submodule is listed as a directory; its pointer change is in the diff
+            continue
+        lines = resolved.read_text(errors="replace").splitlines()
         if len(lines) <= MAX_FILE_LINES:
             contents[name] = "\n".join(lines)
         elif Path(name).suffix.lower() in {
@@ -2125,7 +2268,8 @@ def cmd_auth_print_token(as_json: bool = False) -> None:
 
 
 def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True,
-               story_file: str | None = None, story_text: str | None = None) -> None:
+               story_file: str | None = None, story_text: str | None = None,
+               diff_range: str | None = None, diff_file: str | None = None) -> None:
     if story_file is not None:
         story_path = Path(story_file)
         try:
@@ -2152,10 +2296,21 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
         fail(f"Story from {story_source} is empty.")
 
     _validate_model_ref(*_split_model_ref(model_ref))  # shape only; independent of --skip-validation
-    require_base_ref(repo, base)
-    diff = git_diff_branch(repo, base)
+    # The diff under review comes from exactly one source: a commit range (delta rounds), a
+    # patch file (a diff produced elsewhere), or — the default — merge-base...HEAD vs the base
+    # branch. Changed-file contents are always read from the working tree, so the tree should
+    # be checked out at the diff's newer end.
+    if diff_range is not None:
+        require_range(repo, diff_range)
+        diff, files_fn, scope = git_diff_range(repo, diff_range), (lambda: changed_files_range(repo, diff_range)), diff_range
+    elif diff_file is not None:
+        diff, names = read_diff_file(diff_file)
+        files_fn, scope = (lambda: _file_contents(repo, names)), f"diff file {diff_file}"
+    else:
+        require_base_ref(repo, base)
+        diff, files_fn, scope = git_diff_branch(repo, base), (lambda: changed_files_branch(repo, base)), base
     if not diff.strip():
-        fail(f"No diff vs {base} — nothing to review.")
+        fail(f"No diff for {scope} — nothing to review.")
     provider, model = _split_model_ref(model_ref)
     if validate:
         verdict = _probe(provider, model)
@@ -2164,10 +2319,10 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     instructions, instructions_path = load_agent_instructions(repo)
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
-    files = changed_files_branch(repo, base)
+    files = files_fn()
     print(f"Story: {story_source} ({len(story)} chars)")
     print(f"\n── Review: {provider}/{model} — {len(files)} files, "
-          f"{len(diff.splitlines())} diff lines vs {base}\n", flush=True)
+          f"{len(diff.splitlines())} diff lines vs {scope}\n", flush=True)
     print(review(provider, model, instructions, story, diff, files, _DEFAULT_CHAR_BUDGET,
                  repo=repo))
 
@@ -2321,8 +2476,9 @@ def main() -> None:
     parser.add_argument("ticket_id",  help="Linear ticket ID, e.g. ENG-123")
     parser.add_argument("repo_path",  nargs="?", default=None,
                         help="Absolute path to target git repo (omit with --status)")
-    parser.add_argument("--base-branch", default="origin/develop",
-                        help="Branch to diff against (default: origin/develop)")
+    parser.add_argument("--base-branch", default=None,
+                        help="Branch to diff against (default: origin/develop). Not combinable "
+                             "with --diff-range/--diff-file.")
     parser.add_argument("--reset", action="store_true",
                         help="Delete checkpoint and start from scratch")
     parser.add_argument("--seed-only", action="store_true",
@@ -2349,11 +2505,25 @@ def main() -> None:
     story_group.add_argument("--story", metavar="TEXT",
                              help="Review-only story/acceptance contract supplied inline. "
                                   "Use --story=TEXT when TEXT starts with '-'.")
+    diff_group = parser.add_mutually_exclusive_group()
+    diff_group.add_argument("--diff-range", metavar="A..B",
+                            help="Review-only: review `git diff A..B` (or A...B) instead of the "
+                                 "merge-base diff vs --base-branch — e.g. old-head..new-head to "
+                                 "review only the delta of a fix round. Changed-file contents "
+                                 "are read from the working tree.")
+    diff_group.add_argument("--diff-file", metavar="PATH",
+                            help="Review-only: review a unified diff read from PATH (UTF-8); "
+                                 "changed files are taken from its `+++ b/<path>` headers.")
     args = parser.parse_args()
-    if (args.story_file is not None or args.story is not None) and not args.review_model:
+    review_only_flags = [f for f, v in (("--story", args.story), ("--story-file", args.story_file),
+                                        ("--diff-range", args.diff_range), ("--diff-file", args.diff_file))
+                         if v is not None]
+    if review_only_flags and not args.review_model:
         # Otherwise a forgotten --review-model silently turns an intended review into a full
-        # implementation run that ignores the supplied story.
-        parser.error("--story/--story-file are review-only flags: add --review-model MODEL")
+        # implementation run that ignores the supplied story or diff.
+        parser.error(f"{'/'.join(review_only_flags)} are review-only flags: add --review-model MODEL")
+    if (args.diff_range is not None or args.diff_file is not None) and args.base_branch is not None:
+        parser.error("--diff-range/--diff-file replace the base-branch diff; drop --base-branch")
 
     if args.status:
         cmd_status(args.ticket_id)
@@ -2364,14 +2534,15 @@ def main() -> None:
 
     tid  = args.ticket_id
     repo = str(Path(args.repo_path).expanduser().resolve())
-    base = args.base_branch
+    base = args.base_branch or "origin/develop"
 
     if not Path(repo).is_dir():
         fail(f"repo_path does not exist: {repo}")
 
     if args.review_model:
         cmd_review(tid, repo, base, args.review_model, validate=not args.skip_validation,
-                   story_file=args.story_file, story_text=args.story)
+                   story_file=args.story_file, story_text=args.story,
+                   diff_range=args.diff_range, diff_file=args.diff_file)
         return
 
     require_base_ref(repo, base)

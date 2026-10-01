@@ -179,19 +179,27 @@ Review-only usage accepts the contract directly for both API and harness lanes:
 
 ```bash
 python3 orchestrate.py <TICKET> <repo-path> --review-model <provider/model> \
-  [--story-file <path> | --story <text>] [--base-branch <branch>] [--skip-validation]
+  [--story-file <path> | --story <text>] \
+  [--base-branch <branch> | --diff-range <A..B> | --diff-file <path>] [--skip-validation]
 ```
 
 Story precedence is `--story-file` → `--story` → checkpoint `done.summary` → checkpoint
 `summary` → the built-in fallback. The selected source and character count are printed before
 the review starts; explicit stories are not written to the checkpoint.
 
+The diff under review comes from exactly one source — `--diff-range`, `--diff-file`, or the
+default merge-base diff vs `--base-branch` (the three are mutually exclusive). Changed-file
+contents are always read from the working tree, so check the tree out at the diff's newer end.
+Every source applies the same empty-diff guard.
+
 | Flag | Review-only behavior |
 |------|----------------------|
 | `--review-model MODEL` | Run one API or harness reviewer and print its findings. |
 | `--story-file PATH` | Read the story/acceptance contract from a UTF-8 file. |
 | `--story TEXT` | Supply the story inline; use `--story=TEXT` if it starts with `-`. |
-| `--base-branch BRANCH` | Select the branch used for the review diff. |
+| `--base-branch BRANCH` | Diff `merge-base(BRANCH, HEAD)...HEAD` (default `origin/develop`). |
+| `--diff-range A..B` | Review `git diff A..B` (or `A...B`) instead — e.g. `old-head..new-head` so a fix round reviews only its delta. Both endpoints must resolve. |
+| `--diff-file PATH` | Review a unified diff read from PATH; changed files come from its `+++ b/<path>` headers. Paths must carry git's `a/`/`b/` prefixes (`git diff`, or `diff -urN a b`); `diff --git` lines are optional and an unprefixed header is refused. |
 | `--skip-validation` | Skip the model availability probe. |
 
 Keep stories to a few KB: large stories crowd changed-file contents out of API lane budgets, while

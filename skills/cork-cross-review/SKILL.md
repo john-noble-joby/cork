@@ -83,7 +83,13 @@ Confirm before running:
 Stop here — do not proceed — if fewer than two vendor families remain after excluding the author's.
 
 Once confirmed, record the kept refs for the fan-out exactly as preflight printed them:
-`LANES="codex/gpt-5.6-sol claude/claude-opus-4.7 …"` (space-separated `provider/model`).
+`LANES="codex/gpt-5.6-sol claude/claude-opus-4.7 …"` (space-separated `provider/model`), and
+start the round state clean — a previous cross-review in the same shell may have left a fix-round
+range behind, which would make this PR's first round review the wrong commits:
+
+```bash
+unset DIFF_ARGS ROUND_RANGE     # Step 0 only: fix rounds loop back to Step 1, which must keep them
+```
 
 ## Step 1 — Diff and contract
 
@@ -177,18 +183,23 @@ scratch trees are yours and are discarded at the end.
 
 ## Step 3 — Slice large PRs
 
-A "slice" here is a **focus area**, not a smaller prompt: review-only mode has no pathspec or
-diff-range input, so **every lane always receives the full `<base>...HEAD` diff** (see issue #22).
+A "slice" here is a **focus area**, not a smaller prompt: review-only mode has no pathspec
+input, so **every lane receives the whole diff of the round** (the full `<base>...HEAD` diff on
+the first round; the `--diff-range <old>..<new>` delta on fix rounds, Step 7).
 Under ~1,500 diff lines: one slice, the whole diff. Above that, define slices by **concern** as
 disjoint pathspecs (e.g. `Server/**` vs `WebClient/**`, or migration vs handler vs tests), each
 with a contract excerpt and an "in-scope paths — ignore the rest" instruction in its story, plus
 one **seams** slice whose story says "review only the interactions between the parts; ignore tests
 and docs". The per-slice patch below is for *your* reading when you consolidate and attribute
-findings — no lane consumes it. Above ~5,000 lines the prompt budget will truncate file contents
-regardless of slicing, so tell the user the PR should be split before review.
+findings — no lane consumes it. It must cover the **same round diff the lanes see**: the whole
+PR on round 1, only the `OLD_HEAD..NEW_HEAD` delta on a fix round (Step 7 sets `ROUND_RANGE`
+alongside `DIFF_ARGS`), otherwise you would be attributing delta-only lane reports against a
+full-PR patch. Above ~5,000 lines the prompt budget will truncate file contents regardless of
+slicing, so tell the user the PR should be split before review.
 
 ```bash
-git -C "$WT" diff "origin/$(jq -r .baseRefName "$OUT/pr.json")...HEAD" -- <pathspec…> > "$OUT/slice-<name>.patch"
+[ -n "${ROUND_RANGE+x}" ] || ROUND_RANGE="origin/$(jq -r .baseRefName "$OUT/pr.json")...HEAD"   # round 1 default
+git -C "$WT" diff "$ROUND_RANGE" -- <pathspec…> > "$OUT/slice-<name>.patch"
 ```
 
 ## Step 4 — Fan out (all lanes in parallel, one attempt each)
@@ -203,6 +214,11 @@ is for. Prefer API and prompt-only lanes for breadth.
 
 ```bash
 BASE=$(jq -r .baseRefName "$OUT/pr.json")
+# What each lane diffs. First round: the whole PR vs its base. Fix rounds: only the delta
+# between the previous and the new head — Step 7 sets DIFF_ARGS to that range BEFORE looping
+# back here, so the default is only applied when nothing has set it yet (Step 0 unsets both
+# for a fresh invocation, so a stale range never survives from an earlier PR).
+[ -n "${DIFF_ARGS+x}" ] || DIFF_ARGS=(--base-branch "origin/$BASE")   # round 1 default
 SLICE=whole                     # or the slice's name: every report file carries it, so a reviewer
                                 # reused on another slice never overwrites its earlier report
 # The story every lane receives (--story-file): contract + scope + the verbatim rule below.
@@ -219,7 +235,7 @@ for LANE in $LANES; do
   esac
   ( python3 "$CORK_HOME/orchestrate.py" "$TID" "$LANE_WT" \
         --review-model "$LANE" --story-file "$OUT/story.md" \
-        --base-branch "origin/$BASE" --skip-validation \
+        "${DIFF_ARGS[@]}" --skip-validation \
         > "$OUT/review-$SLICE-$safe.txt" 2> "$OUT/review-$SLICE-$safe.err"
     echo $? > "$OUT/review-$SLICE-$safe.status" ) &      # `wait` alone discards exit codes
 done
@@ -235,7 +251,8 @@ with that slice's contract excerpt and in-scope paths.
 **How the contract reaches a lane (0.17.0).** The story file written at the top of the block
 above travels with `--story-file`, so API and harness lanes receive the same acceptance contract
 without touching cork's checkpoints (the `$TID` positional is only a label for this run).
-`--review-model` has no pathspec/slice option, so every call receives the full branch diff: for a
+`--review-model` has no pathspec/slice option, so every call receives the whole diff of the round
+(the full `<base>...HEAD` diff on round 1, the `--diff-range` delta on fix rounds): for a
 sliced review, write a story file per slice with that slice's contract excerpt and in-scope paths,
 then pass it with `--story-file` in that slice's lane loop. Harness lanes run with the
 scratch worktree as their working directory — `orchestrate.py` passes it as `cwd` and applies the
@@ -332,13 +349,20 @@ missed, run another lane on it.
 - **You are the author's session** (the PR is yours): apply the fixes yourself, run the gates,
   commit, push (never force-push), then **run the Step 8 cleanup block for this round** (its
   worktrees) and loop to Step 1, which allocates the next round's `$OUT`, `$WT` and
-  `$TID`. Review-only mode has no diff-range input: every
-  `--review-model` call receives the full `<base>...HEAD` diff, so each round is a full re-review.
-  Focus it on the delta through the story instead — write a new story file with the previous
-  round's blockers and the delta (`git diff --stat <old-head>..<new-head>`, plus the hunks if
-  small) and pass it with `--story-file`, asking each lane to confirm its own blockers are closed and to look for
-  regressions there first. Run the *same* lanes. A `--diff-range` input that makes rounds
-  delta-only is a registered follow-on.
+  `$TID`. Fix rounds review **only the delta**. Before leaving this round record its head, and
+  after the new Step 1 fetch set the lanes' diff to the range between the two:
+
+  ```bash
+  OLD_HEAD=$HEAD                                     # the head this round reviewed (Step 2)
+  # … Step 8 cleanup, then Step 1 (new $OUT/$WT/$TID, fetches the pushed head into pr.json) …
+  NEW_HEAD=$(jq -r .headRefOid "$OUT/pr.json")
+  ROUND_RANGE="$OLD_HEAD..$NEW_HEAD"                 # Step 3 slice patches cover the same delta
+  DIFF_ARGS=(--diff-range "$ROUND_RANGE")            # replaces --base-branch for this round
+  ```
+
+  Step 2 checks the trees out at `$NEW_HEAD`, so changed-file contents are current. Write a new
+  story file with the previous round's blockers, asking each lane to confirm its own blockers
+  are closed and to look for regressions in the delta, then run Step 4 with the *same* lanes.
 - **Someone else's PR**: post `$OUT/consolidated.md` as a PR comment (`gh pr comment $N
   --body-file …`) or hand it to the author as they prefer. Never push to their branch.
 - After **three** loops without reaching zero blockers, stop and escalate to the human with the
