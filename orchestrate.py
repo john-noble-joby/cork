@@ -1245,10 +1245,15 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
             names.append(_unquote_git_path(m.group(1)) if m.group(1) is not None else m.group(2))
         prev = line
     # A patch is caller-supplied input: its paths must stay inside the repo, or the reviewer
-    # prompt would carry the contents of arbitrary files (`+++ b/../../etc/passwd`).
+    # prompt would carry the contents of arbitrary files (`+++ b/../../etc/passwd`). Git
+    # metadata is inside the repo but is not working-tree content: `.git/config` can hold
+    # remote URLs with embedded credentials, so no path component may be `.git`.
     for name in names:
-        if Path(name).is_absolute() or ".." in Path(name).parts or "\\" in name:
+        parts = Path(name).parts
+        if Path(name).is_absolute() or ".." in parts or "\\" in name:
             fail(f"--diff-file {p}: path {name!r} escapes the repository")
+        if any(part.lower() == ".git" for part in parts):
+            fail(f"--diff-file {p}: path {name!r} names git metadata")
     return text, names
 
 

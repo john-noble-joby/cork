@@ -137,12 +137,17 @@ class ReviewDiffSourceTest(unittest.TestCase):
 
     def test_patch_paths_cannot_escape_the_repository(self):
         secret = Path(self.tmp.name) / "secret.txt"; secret.write_text("TOP SECRET\n")
-        for escaping in ("../secret.txt", "/etc/passwd", "sub/../../secret.txt"):
+        # `.git/config` is inside the tree but holds remote URLs that may embed credentials
+        _git(self.repo, "remote", "add", "origin", "https://user:TOP%20SECRET@example.com/r.git")
+        cases = {"../secret.txt": "escapes the repository", "/etc/passwd": "escapes the repository",
+                 "sub/../../secret.txt": "escapes the repository",
+                 ".git/config": "names git metadata", "vendor/.GIT/config": "names git metadata"}
+        for escaping, message in cases.items():
             with self.subTest(path=escaping):
                 patch = Path(self.tmp.name) / "evil.patch"
                 patch.write_text(f"diff --git a/{escaping} b/{escaping}\n--- a/{escaping}\n+++ b/{escaping}\n@@ -1 +1 @@\n-x\n+y\n")
-                self._fails("escapes the repository", diff_file=str(patch))
-                self.assertNotIn("TOP SECRET", self.seen.get("prompt", ""))
+                self._fails(message, diff_file=str(patch))
+                self.assertNotIn("TOP", self.seen.get("prompt", ""))
         # a symlink inside the tree that points outside is refused at content-read time, too
         (self.repo / "link.txt").symlink_to(secret)
         err = io.StringIO()
