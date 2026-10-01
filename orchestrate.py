@@ -2180,25 +2180,42 @@ def cmd_preflight() -> None:
 
 
 def _classify_reviews(reviews: list) -> str:
-    # Latest Copilot review → "state=… tc=… verdict=… suppressed=…" for the
-    # copilot-review-loop skill. `block` (Not ready to approve) is checked first;
-    # `approve` comes from state==APPROVED or a LINE-ANCHORED 'ready to approve' so a
-    # phrase like 'not quite ready to approve' can't false-positive into a clean stop.
+    # Latest Copilot review → "state=… tc=… verdict=… suppressed=… missed=…" for the
+    # copilot-review-loop skill. `block` is checked first; `approve` comes from
+    # state==APPROVED or a HEADING-ANCHORED verdict, so a phrase like 'not quite ready to
+    # approve' or prose that opens a line with the words can't false-positive. Two body dialects are recognised:
+    # the older 'Ready to approve' / 'Not ready to approve', and the ccr-overview-v2
+    # 'Approval recommended' / 'Changes recommended' (a 'Needs a closer look' verdict is
+    # neither — it still needs a human and its body notes still need processing).
+    # Body-level findings live in two sections: 'Suppressed comments (N)' (Lite effort) and
+    # 'Previously missed (N)' (findings in code unchanged since the last pass); 'Open (N)'
+    # items are the inline threads `tc` already counts.
     cop = [r for r in reviews
            if ((r.get("author") or {}).get("login") or "").startswith("copilot-pull-request-reviewer")]
     if not cop:
-        return "state=NONE tc=0 verdict=none suppressed=0"
+        return "state=NONE tc=0 verdict=none suppressed=0 missed=0"
     r = cop[-1]
     low = (r.get("body") or "").lower()
-    if "not ready to approve" in low:
+    # Verdict phrases (all four, legacy and v2) must be Markdown HEADINGS
+    # (`### 🟢 Approval recommended`): a line of
+    # prose that merely starts with the words ("Changes recommended earlier were applied.")
+    # must not override the real verdict.
+    heading = r"(?m)^#{1,6}[^\w\n]*"
+    if re.search(heading + "not ready to approve", low) or re.search(heading + "changes recommended", low):
         verdict = "block"
-    elif r.get("state") == "APPROVED" or re.search(r"(?m)^\W*ready to approve", low):
+    elif (r.get("state") == "APPROVED" or re.search(heading + "ready to approve", low)
+          or re.search(heading + "approval recommended", low)):
         verdict = "approve"
     else:
         verdict = "none"
-    m = re.search(r"suppressed comments \((\d+)\)", low)
+    # Counts come from the sections' own markers, never from prose that mentions them: the
+    # legacy `### Suppressed comments (N)` heading, and v2's collapsed-block summary
+    # `<summary><strong>Previously missed (N)</strong></summary>`.
+    suppressed = re.search(heading + r"suppressed comments \((\d+)\)", low)
+    missed = re.search(r"(?m)^<summary><strong>previously missed \((\d+)\)</strong></summary>", low)
     tc = (r.get("comments") or {}).get("totalCount", 0)
-    return f"state={r.get('state')} tc={tc} verdict={verdict} suppressed={m.group(1) if m else 0}"
+    return (f"state={r.get('state')} tc={tc} verdict={verdict} "
+            f"suppressed={suppressed.group(1) if suppressed else 0} missed={missed.group(1) if missed else 0}")
 
 
 def cmd_review_classify() -> None:

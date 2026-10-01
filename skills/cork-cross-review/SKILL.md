@@ -5,7 +5,7 @@ description: "Use when the user says \"cross review PR <n>\", \"cork cross-revie
 
 # cork-cross-review — independent, cross-vendor PR verification
 
-**Version:** 0.17.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.17.1 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 **You are the tech lead, not the reviewer.** The author never signs off on their own work, and
 neither do you — a *different vendor's* model does. Your job is to gather the diff and its

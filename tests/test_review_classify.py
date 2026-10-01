@@ -16,63 +16,136 @@ def _cop(state="COMMENTED", body="", tc=0):
 class ClassifyReviewsTest(unittest.TestCase):
     def test_no_copilot_review(self):
         self.assertEqual(orchestrate._classify_reviews([]),
-                         "state=NONE tc=0 verdict=none suppressed=0")
+                         "state=NONE tc=0 verdict=none suppressed=0 missed=0")
 
     def test_ignores_null_author(self):
         self.assertEqual(orchestrate._classify_reviews([{"author": None, "state": "COMMENTED"}]),
-                         "state=NONE tc=0 verdict=none suppressed=0")
+                         "state=NONE tc=0 verdict=none suppressed=0 missed=0")
 
     def test_approved_state(self):
         self.assertEqual(orchestrate._classify_reviews([_cop(state="APPROVED")]),
-                         "state=APPROVED tc=0 verdict=approve suppressed=0")
+                         "state=APPROVED tc=0 verdict=approve suppressed=0 missed=0")
 
     def test_ready_to_approve_body_anchored(self):
         self.assertEqual(
             orchestrate._classify_reviews([_cop(body="### 🟢 Ready to approve\n...")]),
-            "state=COMMENTED tc=0 verdict=approve suppressed=0")
+            "state=COMMENTED tc=0 verdict=approve suppressed=0 missed=0")
 
     def test_not_ready_to_approve_with_inline(self):
         self.assertEqual(
             orchestrate._classify_reviews([_cop(body="### 🟡 Not ready to approve", tc=2)]),
-            "state=COMMENTED tc=2 verdict=block suppressed=0")
+            "state=COMMENTED tc=2 verdict=block suppressed=0 missed=0")
 
     def test_suppressed_only(self):
         self.assertEqual(
             orchestrate._classify_reviews(
                 [_cop(body="### 🟡 Not ready to approve\n### Suppressed comments (3)")]),
-            "state=COMMENTED tc=0 verdict=block suppressed=3")
+            "state=COMMENTED tc=0 verdict=block suppressed=3 missed=0")
 
     def test_mixed_inline_and_suppressed(self):
         self.assertEqual(
             orchestrate._classify_reviews(
                 [_cop(body="### 🟡 Not ready to approve\n### Suppressed comments (2)", tc=1)]),
-            "state=COMMENTED tc=1 verdict=block suppressed=2")
+            "state=COMMENTED tc=1 verdict=block suppressed=2 missed=0")
 
     def test_misleading_phrase_is_not_approve(self):
         # 'not quite ready to approve' must not false-positive into approve
         self.assertEqual(
             orchestrate._classify_reviews([_cop(body="### 🟠 Not quite ready to approve yet")]),
-            "state=COMMENTED tc=0 verdict=none suppressed=0")
+            "state=COMMENTED tc=0 verdict=none suppressed=0 missed=0")
 
     def test_null_body(self):
         self.assertEqual(
             orchestrate._classify_reviews([{"author": {"login": "copilot-pull-request-reviewer[bot]"},
                                             "state": "COMMENTED", "body": None,
                                             "comments": {"totalCount": 0}}]),
-            "state=COMMENTED tc=0 verdict=none suppressed=0")
+            "state=COMMENTED tc=0 verdict=none suppressed=0 missed=0")
 
     def test_uses_latest_copilot_review(self):
         nodes = _nodes(_cop(body="### 🟡 Not ready to approve", tc=1),
                        _cop(state="APPROVED"))
         self.assertEqual(orchestrate._classify_reviews(nodes),
-                         "state=APPROVED tc=0 verdict=approve suppressed=0")
+                         "state=APPROVED tc=0 verdict=approve suppressed=0 missed=0")
 
 
     def test_author_object_without_login(self):
         nodes = [{"author": {}, "state": "COMMENTED"},
                  {"author": {"login": None}, "state": "COMMENTED"}]
         self.assertEqual(orchestrate._classify_reviews(nodes),
-                         "state=NONE tc=0 verdict=none suppressed=0")
+                         "state=NONE tc=0 verdict=none suppressed=0 missed=0")
+
+
+def _fixture(name):
+    from pathlib import Path
+    return (Path(__file__).parent / "fixtures" / name).read_text()
+
+
+class CcrOverviewV2Test(unittest.TestCase):
+    # Real review bodies captured from cork PRs (2026-09-30): the ccr-overview-v2 format
+    # uses emoji verdict headings and a 'Previously missed (N)' section that the older
+    # patterns did not see (issue #18) — three consecutive passes classified verdict=none.
+
+    def test_changes_recommended_is_block_and_counts_previously_missed(self):
+        # cork #13 @ cc75057: 'Changes recommended', Open (inline) items, Previously missed body notes
+        self.assertEqual(
+            orchestrate._classify_reviews([_cop(body=_fixture("copilot-body-changes-recommended.md"), tc=3)]),
+            "state=COMMENTED tc=3 verdict=block suppressed=0 missed=1")
+
+    def test_needs_a_closer_look_is_not_approve_but_body_notes_count(self):
+        # cork #21 @ 35f2ce8: 'Needs a closer look', Findings None, yet real body-level notes
+        self.assertEqual(
+            orchestrate._classify_reviews([_cop(body=_fixture("copilot-body-closer-look.md"), tc=0)]),
+            "state=COMMENTED tc=0 verdict=none suppressed=0 missed=1")
+
+    def test_approval_recommended_is_approve(self):
+        # cork #15 @ e444061: the only genuinely clean pass shape
+        self.assertEqual(
+            orchestrate._classify_reviews([_cop(body=_fixture("copilot-body-approval-recommended.md"), tc=0)]),
+            "state=COMMENTED tc=0 verdict=approve suppressed=0 missed=0")
+
+    def test_new_verdicts_are_heading_anchored(self):
+        # prose mentioning the phrases — mid-line OR at the start of a line — must not flip
+        # the verdict; only a Markdown heading carries it
+        for prose in ("Earlier passes said approval recommended; this one does not.",
+                      "No changes recommended here, but see the notes.",
+                      "Changes recommended earlier were applied; nothing new.\n### 🟢 Approval recommended",
+                      "Approval recommended by a human is still required.\n### 🟡 Changes recommended"):
+            with self.subTest(prose=prose[:40]):
+                out = orchestrate._classify_reviews([_cop(body=prose)])
+                expected = "approve" if "### 🟢" in prose else ("block" if "### 🟡" in prose else "none")
+                self.assertEqual(out, f"state=COMMENTED tc=0 verdict={expected} suppressed=0 missed=0")
+        for heading in ("### 🟢 Approval recommended", "## Approval recommended", "#### 🟢 Approval recommended\nmore"):
+            self.assertEqual(orchestrate._classify_reviews([_cop(body=heading)]),
+                             "state=COMMENTED tc=0 verdict=approve suppressed=0 missed=0")
+
+    def test_legacy_block_phrase_is_heading_anchored_too(self):
+        # 'not ready to approve' in prose (quoting an earlier pass) must not flip an approval
+        self.assertEqual(
+            orchestrate._classify_reviews([_cop(body="### 🟢 Approval recommended\nThe earlier 'Not ready to approve' note is resolved.")]),
+            "state=COMMENTED tc=0 verdict=approve suppressed=0 missed=0")
+        self.assertEqual(
+            orchestrate._classify_reviews([_cop(body="Still not ready to approve, per the author.\n### 🔵 Needs a closer look")]),
+            "state=COMMENTED tc=0 verdict=none suppressed=0 missed=0")
+        self.assertEqual(
+            orchestrate._classify_reviews([_cop(body="### 🟡 Not ready to approve\nprose")]),
+            "state=COMMENTED tc=0 verdict=block suppressed=0 missed=0")
+
+    def test_counts_come_from_section_markers_not_prose(self):
+        # v2 marker is the collapsed block's <summary>; a sentence mentioning
+        # 'Previously missed (0)' earlier in the body must not win the search
+        body = ("### 🟢 Approval recommended\n\nThe earlier Previously missed (0) note was addressed.\n\n"
+                "<details>\n<summary><strong>Previously missed (2)</strong></summary>\n\n<details>\n<summary> x</summary>\n`a.py:1`\n</details>\n</details>")
+        self.assertEqual(orchestrate._classify_reviews([_cop(body=body)]),
+                         "state=COMMENTED tc=0 verdict=approve suppressed=0 missed=2")
+        # the legacy count is a heading too; prose with the words does not count
+        self.assertEqual(orchestrate._classify_reviews([_cop(body="### 🟢 Approval recommended\nNo suppressed comments (4) remain.")]),
+                         "state=COMMENTED tc=0 verdict=approve suppressed=0 missed=0")
+        # prose-only mention of the v2 phrase: zero
+        self.assertEqual(orchestrate._classify_reviews([_cop(body="### 🟢 Approval recommended\nPreviously missed (3) items were fixed.")]),
+                         "state=COMMENTED tc=0 verdict=approve suppressed=0 missed=0")
+        self.assertEqual(
+            orchestrate._classify_reviews([_cop(body="### 🟡 Changes recommended\n\n<details>\n<summary><strong>Previously missed (2)</strong></summary>")]),
+            "state=COMMENTED tc=0 verdict=block suppressed=0 missed=2")
 
 
 class ReviewClassifyCliTest(unittest.TestCase):

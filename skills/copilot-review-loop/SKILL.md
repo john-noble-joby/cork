@@ -5,7 +5,7 @@ description: "Use when the user says to run the Copilot review loop on a branch 
 
 # Copilot Review Loop
 
-**Version:** 0.17.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.17.1 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 ## Overview
 
@@ -64,7 +64,7 @@ COPILOT_REVIEW_LOOP pr={PR_NUMBER} repo={owner/repo} max={MAX} worktree={WORKTRE
 
 Extract: `pr`, `repo`, `max`, `worktree`, `iteration`.
 
-### 2. Check the review's state, comment count, **verdict, and suppressed comments**
+### 2. Check the review's state, comment count, **verdict, and body-level findings**
 
 Read the latest Copilot review's `state`, its own `comments.totalCount`, **and its `body`** in
 one call. Two things gate a clean pass, and `totalCount == 0` alone is **not** one of them:
@@ -72,11 +72,16 @@ one call. Two things gate a clean pass, and `totalCount == 0` alone is **not** o
 - `totalCount` — inline comments on this review. It's set at submission, so it's correct
   *before* the `reviewThreads` index finishes propagating; an empty thread fetch on a fresh
   `COMMENTED` is the index lagging, not a clean pass.
-- **The body carries the verdict and any *suppressed* comments.** Copilot's *Lite* effort
+- **The body carries the verdict and any body-level findings.** Copilot's *Lite* effort
   often posts **zero inline comments** (`totalCount == 0`) yet renders a `🟡 Not ready to
   approve` verdict with findings under a `### Suppressed comments (N)` section in the body.
-  Gating on `totalCount`/threads alone misses these entirely and declares a false clean pass.
-  **Clean = the verdict approves AND `totalCount == 0` AND zero suppressed comments.**
+  The current `ccr-overview-v2` body uses different verdict headings — `### 🟢 Approval
+  recommended`, `### 🟡 Changes recommended`, `### 🔵 Needs a closer look` — and lists
+  body-level findings in code that did not change since the last pass in a collapsed
+  **Previously missed (N)** block (its **Open (N)** items are the inline threads `totalCount`
+  already counts). Gating on `totalCount`/threads alone misses all of these and declares a
+  false clean pass. **Clean = the verdict approves AND `totalCount == 0` AND zero suppressed
+  comments AND zero previously-missed findings.**
 
 ```bash
 gh api graphql -f query='
@@ -88,25 +93,32 @@ gh api graphql -f query='
 }' | python3 "$CORK_HOME/orchestrate.py" review-classify
 ```
 
-`review-classify` picks the latest Copilot review (`last: 50`, null-author-safe) and classifies
-it — `block` (Not ready to approve) is checked first; `approve` comes from `state==APPROVED` or a
-line-anchored `ready to approve` (so `not quite ready to approve` can't false-positive). The
-logic is unit-tested in `tests/test_review_classify.py`, so a wording tweak can't silently
-restore the false-clean bug.
+`review-classify` picks the latest Copilot review (`last: 50`, null-author-safe) and prints
+`state=… tc=… verdict=… suppressed=… missed=…`. `block` is checked first (`Not ready to
+approve`, or a heading-anchored `Changes recommended`); `approve` comes from `state==APPROVED` or
+a heading-anchored `Ready to approve` / `Approval recommended` (so `not quite ready to approve` or
+prose mentioning the phrase can't false-positive); `Needs a closer look` is `none` — not a
+block, but never a clean pass either. `suppressed` counts `### Suppressed comments (N)`,
+`missed` counts the **Previously missed (N)** block. The logic is unit-tested against real captured
+bodies in `tests/test_review_classify.py`, so a wording tweak can't silently restore the
+false-clean bug (issue #18 is what happened when Copilot changed its headings).
 
-Route on `state tc verdict suppressed`:
+Route on `state tc verdict suppressed missed`:
 
 - `state=NONE`/`PENDING` (review not submitted yet) → reschedule and wait, nothing else this tick.
-- **`verdict=approve` AND `tc=0` AND `suppressed=0`** → clean pass → step 6 (stop / re-request per iteration). This is the ONLY clean case.
+- **`verdict=approve` AND `tc=0` AND `suppressed=0` AND `missed=0`** → clean pass → step 6 (stop / re-request per iteration). This is the ONLY clean case.
 - Otherwise the review has findings — **process every channel that is non-zero this pass, not
-  just one** (a Lite review can post some inline *and* suppress others; they are not
+  just one** (a review can post some inline *and* keep others in the body; they are not
   mutually exclusive):
   - if `tc > 0` → **2b** (settle the thread index) → step 3 → step 4 (inline threads);
-  - if `suppressed > 0` → **2c** (body findings);
+  - if `suppressed > 0` or `missed > 0` → **2c** (body findings);
   - do **both** when both are non-zero, then continue to step 5/6.
+- `verdict=none` with every count at zero (a bare `Needs a closer look`) is not clean: there is
+  nothing to fix, so treat it like a processed pass — re-request if `iteration < max`, else stop
+  and tell the user the pass carried no findings but no approval either.
 
-Never treat inline and suppressed as either/or — "all processed" in step 6 means inline
-threads **and** suppressed body findings from this pass are all handled.
+Never treat inline and body-level findings as either/or — "all processed" in step 6 means inline
+threads **and** body findings (suppressed and previously missed) from this pass are all handled.
 
 ### 2b. Wait for the thread index to surface the known comments
 
@@ -131,13 +143,23 @@ exactly 100 and step 3's `pageInfo.hasNextPage` is true, that's a capped artifac
 settled index — page through with `endCursor` before trusting it. Copilot rarely exceeds 100
 inline comments, but don't let the cap masquerade as "settled".
 
-### 2c. Process suppressed (body-level) comments
+### 2c. Process body-level comments (suppressed and previously missed)
 
-`suppressed > 0` means Copilot put its findings in the review **body**, not as inline threads
-— there is nothing for step 3 to fetch and nothing to `resolveReviewThread`. Fetch the body
-with the **same null-safe, `last: 50` GraphQL** as step 2 (the REST `reviews` endpoint is
-paginated and can return a stale review on a busy PR), and extract the
-`### Suppressed comments (N)` section:
+`suppressed > 0` or `missed > 0` means Copilot put findings in the review **body**, not as
+inline threads — there is nothing for step 3 to fetch and nothing to `resolveReviewThread`.
+Fetch the body with the **same null-safe, `last: 50` GraphQL** as step 2 (the REST `reviews`
+endpoint is paginated and can return a stale review on a busy PR). The two body channels have
+different markup:
+
+- **Suppressed (Lite effort, older layout):** a `### Suppressed comments (N)` heading, then one
+  item per finding — a `**path:line**` header, a description bullet and a code snippet.
+- **Previously missed (`ccr-overview-v2`):** a collapsed block whose marker is
+  `<summary><strong>Previously missed (N)</strong></summary>` (an HTML `<details>`, **not** a
+  `###` heading), introduced by "In code that hasn't changed since last review". Each finding is
+  a nested `<details>` whose `<summary>` is the title (after a severity `<picture>` badge),
+  followed by a `` `path:line` `` code span and a description paragraph.
+
+The snippet below prints the body with the badge markup stripped; read both sections from it:
 
 ```bash
 gh api graphql -f query='
@@ -148,7 +170,9 @@ gh api graphql -f query='
 import json, sys
 revs = json.load(sys.stdin)['data']['repository']['pullRequest']['reviews']['nodes']
 cop = [r for r in revs if ((r.get('author') or {}).get('login') or '').startswith('copilot-pull-request-reviewer')]
-print((cop[-1].get('body') or '') if cop else '')
+import re
+body = (cop[-1].get('body') or '') if cop else ''
+print(re.sub(r'<picture>.*?</picture>', '', body, flags=re.S))
 "
 ```
 
@@ -156,22 +180,24 @@ print((cop[-1].get('body') or '') if cop else '')
 `reviewThreads` index — so 2c needs **no** settle wait of its own; 2b exists only for the
 lagging thread index.)
 
-Each suppressed item is a `**path:line**` header + a description bullet + a code snippet. For
-each: **fix it (run tests, commit, push) or push back with reasoning** — same judgement as any
-comment. **Honor `interactive_review` here too** (step 3b): when it's on, present the suppressed
-findings + your recommendation and **wait** for the user before editing — the 3b pause covers
-inline threads, and suppressed findings must not slip past it. If the user chooses **Proceed
-(no changes)**, make **zero** edits/comments, keep the **same iteration**, and reschedule
-**without** re-requesting (there's no thread to leave "unresolved") until they later choose fix
-or push back. There is no thread to reply to/resolve, so acknowledge what you *did* fix via
-**one PR comment** (`gh pr comment {pr} --body "…"`) with the SHA and any push-backs.
+For each body-level finding of either kind: **fix it (run tests, commit, push) or push back
+with reasoning** — same judgement as any inline comment. **Honor `interactive_review` here too**
+(step 3b): when it's on, present the body findings + your recommendation and **wait** for the
+user before editing — the 3b pause covers inline threads, and body findings must not slip past
+it. If the user chooses **Proceed (no changes)**, make **zero** edits/comments, keep the **same
+iteration**, and reschedule **without** re-requesting (there's no thread to leave "unresolved")
+until they later choose fix or push back. There is no thread to reply to/resolve, so acknowledge
+what you *did* fix via **one PR comment** (`gh pr comment {pr} --body "…"`) naming the section
+each item came from, with the SHA and any push-backs.
 
 Do **not** re-request from here — return to step 5. Re-requesting is step 6/7's job, only
-after **every** active channel (inline threads *and* suppressed findings) is processed and the
-max-pass condition is evaluated.
+after **every** active channel (inline threads, suppressed *and* previously-missed findings) is
+processed and the max-pass condition is evaluated.
 
-Also compare against the prior pass: a suppressed note you already addressed in an earlier
-commit is done — acknowledge it as already-fixed rather than re-doing it.
+Also compare against the prior pass: a body note you already addressed in an earlier commit is
+done — acknowledge it as already-fixed rather than re-doing it. Expect the previously-missed
+block to keep surfacing new items in unchanged code for several passes; each is a real finding,
+not a repeat, until it names something you already fixed.
 
 ### 3. Get unresolved Copilot threads
 
@@ -246,13 +272,14 @@ Push any commits, then evaluate stop conditions.
 
 | Condition | Action |
 |---|---|
-| `verdict=approve` AND `tc=0` AND `suppressed=0` this pass | **STOP** — satisfied, clean pass |
-| Comments (inline + suppressed) all processed/resolved, `iteration == max` | **STOP** |
-| Comments (inline + suppressed) all processed/resolved, `iteration < max` | Re-request, increment, reschedule |
+| `verdict=approve` AND `tc=0` AND `suppressed=0` AND `missed=0` this pass | **STOP** — satisfied, clean pass |
+| Comments (inline + body-level) all processed/resolved, `iteration == max` | **STOP** |
+| Comments (inline + body-level) all processed/resolved, `iteration < max` | Re-request, increment, reschedule |
 
-Judge "clean pass" from step 2's **verdict + `tc` + `suppressed`** together — **never** from an
-empty `reviewThreads` fetch (the index lags a fresh `COMMENTED`) and **never** from `tc == 0`
-alone (Lite-mode reviews suppress findings into the body with `tc=0` but a `block` verdict).
+Judge "clean pass" from step 2's **verdict + `tc` + `suppressed` + `missed`** together — **never**
+from an empty `reviewThreads` fetch (the index lags a fresh `COMMENTED`), **never** from `tc == 0`
+alone (Lite-mode reviews suppress findings into the body with `tc=0` but a `block` verdict), and
+**never** from a `Needs a closer look` verdict (it is not an approval).
 
 Print final summary on stop: iterations run, commits made, PR URL.
 
@@ -274,10 +301,16 @@ Update loop prompt with `iteration={N+1}` and reschedule.
   `totalCount = 0` inline comments yet renders a `🟡 Not ready to approve` verdict with findings
   under a `### Suppressed comments (N)` section in the review **body**. A loop that gates only on
   threads/`totalCount` reads this as a clean pass and stops while the PR is unapproved. Gate on
-  the **verdict + `tc` + `suppressed`** (step 2 reads `review.body`), and process suppressed
-  items from the body — there's no thread to resolve, so acknowledge via a PR comment
-  (confirmed on cork PR #8, 2026-07: two passes were `Not ready to approve` with `tc=0` and 1–2
-  suppressed comments each).
+  the **verdict + `tc` + `suppressed` + `missed`** (step 2 reads `review.body`), and process
+  body items — there's no thread to resolve, so acknowledge via a PR comment (confirmed on cork
+  PR #8, 2026-07: two passes were `Not ready to approve` with `tc=0` and 1–2 suppressed comments
+  each; and on cork PRs #13–#21, 2026-09-30: nearly every pass carried `Previously missed (N)`
+  notes under an `Approval recommended` / `Needs a closer look` heading).
+- **Copilot renames its verdict headings.** `Ready to approve` / `Not ready to approve` became
+  `Approval recommended` / `Changes recommended` / `Needs a closer look` (`ccr-overview-v2`),
+  and three consecutive passes classified `verdict=none` until `review-classify` learned them
+  (issue #18). When a pass prints `verdict=none` on a review that visibly has a verdict, read the
+  body and fix the classifier + its fixture tests before trusting the loop again.
 - **Review state flips before its threads are indexed.** A review reaches `COMMENTED`/`APPROVED`, but its inline comments take seconds-to-longer to appear in `reviewThreads` / the pulls-comments API — so a thread fetch right at the transition can return an empty or partial list and trick the loop into a false "clean pass" + early STOP. The review's *own* `comments.totalCount` (GraphQL, step 2) is set atomically at submission and is the authoritative "are there comments?" signal; gate on it, and for `totalCount > 0` wait for the thread count to stabilize before processing (confirmed on cork PR #6, 2026-06: pass-3 clean review reported `totalCount=0`, comment-bearing passes reported their exact counts).
 - **Run tests** after every fix commit before pushing. Don't push broken builds.
 - **Worktree:** all edits go in the PR's worktree, not the main checkout.
