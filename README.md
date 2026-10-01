@@ -199,7 +199,7 @@ Every source applies the same empty-diff guard.
 | `--story TEXT` | Supply the story inline; use `--story=TEXT` if it starts with `-`. |
 | `--base-branch BRANCH` | Diff `merge-base(BRANCH, HEAD)...HEAD` (default `origin/develop`). |
 | `--diff-range A..B` | Review `git diff A..B` (or `A...B`) instead — e.g. `old-head..new-head` so a fix round reviews only its delta. Both endpoints must resolve. |
-| `--diff-file PATH` | Review a unified diff read from PATH; changed files come from its `+++ b/<path>` headers. |
+| `--diff-file PATH` | Review a unified diff read from PATH (`git diff` output or plain `diff -u`); changed files come from its `---`/`+++ b/<path>` headers. |
 | `--skip-validation` | Skip the model availability probe. |
 
 Keep stories to a few KB: large stories crowd changed-file contents out of API lane budgets, while

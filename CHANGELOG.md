@@ -31,7 +31,8 @@ procedure in the README's *Versioning* section.
 
 ### Added
 - **Review-only mode takes an explicit diff.** `--diff-range A..B` (or `A...B`) reviews
-  `git diff A..B` and `--diff-file PATH` reviews a unified diff read from a file; both drive
+  `git diff A..B` and `--diff-file PATH` reviews a unified diff read from a file (`git diff`
+  output or plain `diff -u`; changed submodules are skipped, not read as files); both drive
   the diff *and* the changed-files set, apply the same empty-diff guard, and are mutually
   exclusive with each other and with `--base-branch`. `cork-cross-review` fix rounds now pass
   `--diff-range <old-head>..<new-head>` so lanes review only the delta instead of the full PR.

@@ -90,10 +90,33 @@ class ReviewDiffSourceTest(unittest.TestCase):
         patch.write_text("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n a = 1\n+++ b/secret.txt\n")
         prompt, _ = self._review(diff_file=str(patch))
         self.assertIn("### a.py", prompt); self.assertNotIn("### secret.txt", prompt); self.assertNotIn("TOP SECRET", prompt)
-        # a second file after a hunk is still picked up (header state resumes at its diff --git line)
+        # a second file after a hunk is still picked up (its `---`/`+++` pair sits outside any hunk)
         patch.write_text(patch.read_text() + "diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n@@ -1 +1 @@\n-b = 1\n+b = 2\n")
         prompt, _ = self._review(diff_file=str(patch))
         self.assertIn("### a.py", prompt); self.assertIn("### b.py", prompt); self.assertNotIn("### secret.txt", prompt)
+
+    def test_plain_unified_diff_without_git_headers(self):
+        # `diff -u` output has no `diff --git` line: files are found from the `---`/`+++` pair.
+        # Hunk extent comes from the @@ counts, so a removed `-- x` + added `++ b/secret.txt`
+        # pair inside a hunk (rendered `--- x` / `+++ b/secret.txt`) is content, not a header.
+        (self.repo / "secret.txt").write_text("TOP SECRET\n")
+        patch = Path(self.tmp.name) / "plain.patch"
+        patch.write_text(
+            "--- a/a.py\t2026-10-01\n+++ b/a.py\t2026-10-01\n"
+            "@@ -1,3 +1,3 @@\n a = 1\n--- x\n+++ b/secret.txt\n\n"          # blank context line stripped to ""
+            "\\ No newline at end of file\n"
+            "--- a/b.py\n+++ b/b.py\n@@ -1 +1 @@\n-b = 1\n+b = 2\n")
+        prompt, _ = self._review(diff_file=str(patch))
+        self.assertIn("### a.py", prompt); self.assertIn("### b.py", prompt)
+        self.assertNotIn("### secret.txt", prompt); self.assertNotIn("TOP SECRET", prompt)
+        _, names = orchestrate.read_diff_file(str(patch))
+        self.assertEqual(names, ["a.py", "b.py"])
+
+    def test_changed_submodule_directory_is_skipped(self):
+        # a changed submodule pointer lists the submodule *directory* in --name-only; reading it
+        # would raise IsADirectoryError and abort the review before the model is called
+        (self.repo / "vendor").mkdir(); (self.repo / "vendor" / "x.py").write_text("x\n")
+        self.assertEqual(orchestrate._file_contents(str(self.repo), ["vendor", "a.py"]), {"a.py": "a = 2"})
 
     def test_range_and_file_errors_are_clean(self):
         self._fails("must be A..B or A...B", diff_range=self.c3)

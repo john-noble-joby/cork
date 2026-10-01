@@ -1217,20 +1217,33 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
     except (OSError, UnicodeError, RuntimeError) as e:
         fail(f"Cannot read diff file {p}: {e}")
     # Headers are either `+++ b/<path>` or, for names git C-quotes (non-ASCII, tabs, quotes,
-    # backslashes), `+++ "b/<escaped>"` — both are what `git diff` writes by default. Only a
-    # `+++` line in a file's header (after its `diff --git` line, before its first hunk) counts:
-    # an added source line reading `++ b/foo` shows up in a hunk as `+++ b/foo` and must not
-    # pull an unrelated working-tree file into the review.
-    header_re = re.compile(r'^\+\+\+ (?:"b/((?:[^"\\]|\\.)*)"|b/(.+))$')
+    # backslashes), `+++ "b/<escaped>"` — both are what `git diff` writes by default. A plain
+    # `diff -u` patch has no `diff --git` line, so the file header is recognised structurally:
+    # a `+++` line directly after a `---` line, outside any hunk. Hunk extent comes from the
+    # `@@ -a,b +c,d @@` counts, so an added source line reading `++ b/foo` (which shows up in a
+    # hunk as `+++ b/foo`) can never pull an unrelated working-tree file into the review.
+    # `diff -u` appends a tab + timestamp to the path; git C-quotes any path containing a tab,
+    # so an unquoted name always ends at the first tab.
+    header_re = re.compile(r'^\+\+\+ (?:"b/((?:[^"\\]|\\.)*)"|b/([^\t]+))(?:\t.*)?$')
+    hunk_re = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
     names: list[str] = []
-    in_header = False
+    old_left = new_left = 0   # hunk lines still to consume on each side
+    prev = ""
     for line in text.splitlines():
-        if line.startswith("diff --git "):
-            in_header = True
-        elif line.startswith("@@"):
-            in_header = False
-        elif in_header and (m := header_re.match(line)):
+        if old_left > 0 or new_left > 0:
+            if line.startswith("\\"):           # `\ No newline at end of file` is not counted
+                pass
+            elif line.startswith("-"):
+                old_left -= 1
+            elif line.startswith("+"):
+                new_left -= 1
+            else:                               # context (a stripped blank context line is "")
+                old_left -= 1; new_left -= 1
+        elif (h := hunk_re.match(line)):
+            old_left = int(h.group(1) or 1); new_left = int(h.group(2) or 1)
+        elif prev.startswith("--- ") and (m := header_re.match(line)):
             names.append(_unquote_git_path(m.group(1)) if m.group(1) is not None else m.group(2))
+        prev = line
     # A patch is caller-supplied input: its paths must stay inside the repo, or the reviewer
     # prompt would carry the contents of arbitrary files (`+++ b/../../etc/passwd`).
     for name in names:
@@ -1248,6 +1261,8 @@ def _file_contents(cwd: str, names: list[str]) -> dict[str, str]:
             continue
         if not path.resolve().is_relative_to(root):  # symlink or `..` pointing outside the tree
             fail(f"changed file {name!r} resolves outside the repository")
+        if not path.is_file():  # a changed submodule is listed as a directory; its pointer change is in the diff
+            continue
         lines = path.read_text(errors="replace").splitlines()
         if len(lines) <= MAX_FILE_LINES:
             contents[name] = "\n".join(lines)
