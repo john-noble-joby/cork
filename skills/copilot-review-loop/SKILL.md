@@ -77,8 +77,8 @@ one call. Two things gate a clean pass, and `totalCount == 0` alone is **not** o
   approve` verdict with findings under a `### Suppressed comments (N)` section in the body.
   The current `ccr-overview-v2` body uses different verdict headings — `### 🟢 Approval
   recommended`, `### 🟡 Changes recommended`, `### 🔵 Needs a closer look` — and lists
-  body-level findings in code that did not change since the last pass under
-  `### Previously missed (N)` (its `Open (N)` items are the inline threads `totalCount`
+  body-level findings in code that did not change since the last pass in a collapsed
+  **Previously missed (N)** block (its **Open (N)** items are the inline threads `totalCount`
   already counts). Gating on `totalCount`/threads alone misses all of these and declares a
   false clean pass. **Clean = the verdict approves AND `totalCount == 0` AND zero suppressed
   comments AND zero previously-missed findings.**
@@ -99,7 +99,7 @@ approve`, or a line-anchored `Changes recommended`); `approve` comes from `state
 a line-anchored `Ready to approve` / `Approval recommended` (so `not quite ready to approve` or
 prose mentioning the phrase can't false-positive); `Needs a closer look` is `none` — not a
 block, but never a clean pass either. `suppressed` counts `### Suppressed comments (N)`,
-`missed` counts `### Previously missed (N)`. The logic is unit-tested against real captured
+`missed` counts the **Previously missed (N)** block. The logic is unit-tested against real captured
 bodies in `tests/test_review_classify.py`, so a wording tweak can't silently restore the
 false-clean bug (issue #18 is what happened when Copilot changed its headings).
 
@@ -148,9 +148,18 @@ inline comments, but don't let the cap masquerade as "settled".
 `suppressed > 0` or `missed > 0` means Copilot put findings in the review **body**, not as
 inline threads — there is nothing for step 3 to fetch and nothing to `resolveReviewThread`.
 Fetch the body with the **same null-safe, `last: 50` GraphQL** as step 2 (the REST `reviews`
-endpoint is paginated and can return a stale review on a busy PR), and extract the
-`### Suppressed comments (N)` and/or `### Previously missed (N)` sections (each item there is a
-collapsed `<details>` with a `path:line` and a description):
+endpoint is paginated and can return a stale review on a busy PR). The two body channels have
+different markup:
+
+- **Suppressed (Lite effort, older layout):** a `### Suppressed comments (N)` heading, then one
+  item per finding — a `**path:line**` header, a description bullet and a code snippet.
+- **Previously missed (`ccr-overview-v2`):** a collapsed block whose marker is
+  `<summary><strong>Previously missed (N)</strong></summary>` (an HTML `<details>`, **not** a
+  `###` heading), introduced by "In code that hasn't changed since last review". Each finding is
+  a nested `<details>` whose `<summary>` is the title (after a severity `<picture>` badge),
+  followed by a `` `path:line` `` code span and a description paragraph.
+
+The snippet below prints the body with the badge markup stripped; read both sections from it:
 
 ```bash
 gh api graphql -f query='
@@ -161,7 +170,9 @@ gh api graphql -f query='
 import json, sys
 revs = json.load(sys.stdin)['data']['repository']['pullRequest']['reviews']['nodes']
 cop = [r for r in revs if ((r.get('author') or {}).get('login') or '').startswith('copilot-pull-request-reviewer')]
-print((cop[-1].get('body') or '') if cop else '')
+import re
+body = (cop[-1].get('body') or '') if cop else ''
+print(re.sub(r'<picture>.*?</picture>', '', body, flags=re.S))
 "
 ```
 
@@ -169,22 +180,24 @@ print((cop[-1].get('body') or '') if cop else '')
 `reviewThreads` index — so 2c needs **no** settle wait of its own; 2b exists only for the
 lagging thread index.)
 
-Each suppressed item is a `**path:line**` header + a description bullet + a code snippet. For
-each: **fix it (run tests, commit, push) or push back with reasoning** — same judgement as any
-comment. **Honor `interactive_review` here too** (step 3b): when it's on, present the suppressed
-findings + your recommendation and **wait** for the user before editing — the 3b pause covers
-inline threads, and suppressed findings must not slip past it. If the user chooses **Proceed
-(no changes)**, make **zero** edits/comments, keep the **same iteration**, and reschedule
-**without** re-requesting (there's no thread to leave "unresolved") until they later choose fix
-or push back. There is no thread to reply to/resolve, so acknowledge what you *did* fix via
-**one PR comment** (`gh pr comment {pr} --body "…"`) with the SHA and any push-backs.
+For each body-level finding of either kind: **fix it (run tests, commit, push) or push back
+with reasoning** — same judgement as any inline comment. **Honor `interactive_review` here too**
+(step 3b): when it's on, present the body findings + your recommendation and **wait** for the
+user before editing — the 3b pause covers inline threads, and body findings must not slip past
+it. If the user chooses **Proceed (no changes)**, make **zero** edits/comments, keep the **same
+iteration**, and reschedule **without** re-requesting (there's no thread to leave "unresolved")
+until they later choose fix or push back. There is no thread to reply to/resolve, so acknowledge
+what you *did* fix via **one PR comment** (`gh pr comment {pr} --body "…"`) naming the section
+each item came from, with the SHA and any push-backs.
 
 Do **not** re-request from here — return to step 5. Re-requesting is step 6/7's job, only
-after **every** active channel (inline threads *and* suppressed findings) is processed and the
-max-pass condition is evaluated.
+after **every** active channel (inline threads, suppressed *and* previously-missed findings) is
+processed and the max-pass condition is evaluated.
 
-Also compare against the prior pass: a suppressed note you already addressed in an earlier
-commit is done — acknowledge it as already-fixed rather than re-doing it.
+Also compare against the prior pass: a body note you already addressed in an earlier commit is
+done — acknowledge it as already-fixed rather than re-doing it. Expect the previously-missed
+block to keep surfacing new items in unchanged code for several passes; each is a real finding,
+not a repeat, until it names something you already fixed.
 
 ### 3. Get unresolved Copilot threads
 
