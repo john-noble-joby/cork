@@ -1252,10 +1252,12 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
     # A patch is caller-supplied input: its paths must stay inside the repo, or the reviewer
     # prompt would carry the contents of arbitrary files (`+++ b/../../etc/passwd`). Git
     # metadata is inside the repo but is not working-tree content: `.git/config` can hold
-    # remote URLs with embedded credentials, so no path component may be `.git`.
+    # remote URLs with embedded credentials, so no path component may be `.git`. Separator
+    # semantics are the platform's (a backslash is an ordinary filename byte on POSIX); the
+    # resolved containment check in _file_contents is the authoritative guard either way.
     for name in names:
         parts = Path(name).parts
-        if Path(name).is_absolute() or ".." in parts or "\\" in name:
+        if Path(name).is_absolute() or ".." in parts:
             fail(f"--diff-file {p}: path {name!r} escapes the repository")
         if any(part.lower() == ".git" for part in parts):
             fail(f"--diff-file {p}: path {name!r} names git metadata")

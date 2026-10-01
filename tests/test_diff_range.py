@@ -76,6 +76,18 @@ class ReviewDiffSourceTest(unittest.TestCase):
         prompt, _ = self._review(diff_file=str(quoted))
         self.assertIn("### café.py", prompt); self.assertIn("### b.py", prompt)
 
+    @unittest.skipIf(sys.platform == "win32", "backslash is a separator on Windows")
+    def test_backslash_in_posix_filename_is_a_valid_patch_path(self):
+        # git C-quotes the name (`+++ "b/a\\\\b.py"`); the restored backslash is an ordinary byte
+        (self.repo / "a\\b.py").write_text("bs = 1\n"); _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "c4")
+        patch = Path(self.tmp.name) / "backslash.patch"
+        text = _git(self.repo, "diff", f"{self.c3}..HEAD") + "\n"
+        self.assertIn('+++ "b/a\\\\b.py"', text)
+        patch.write_text(text)
+        self.assertEqual(orchestrate.read_diff_file(str(patch))[1], ["a\\b.py"])
+        prompt, _ = self._review(diff_file=str(patch))
+        self.assertIn("### a\\b.py", prompt); self.assertIn("bs = 1", prompt)
+
     def test_unquote_git_path(self):
         self.assertEqual(orchestrate._unquote_git_path("caf\\303\\251.py"), "café.py")
         self.assertEqual(orchestrate._unquote_git_path("a\\tb\\\"c\\\\d"), 'a\tb"c\\d')
