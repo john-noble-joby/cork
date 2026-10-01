@@ -63,6 +63,12 @@ python3 orchestrate.py ENG-123 ~/dev/target-repo
 No third-party dependencies — Python 3.10+ stdlib only (Copilot API calls go
 through `urllib`).
 
+## Versioning
+
+- **Never bump `VERSION` or a skill's `**Version:**` stamp in a feature/fix PR.** Add the PR's notes under `## [Unreleased]` in `CHANGELOG.md` and leave the stamps alone.
+- Releases happen once per batch with `./release.sh X.Y.Z`, which is the only place `VERSION`, all skill stamps and the changelog heading change (issue #20 explains the six-file-conflict history).
+- Resolving a conflict in `skills/*/SKILL.md` with `checkout --theirs`/`--ours` is forbidden — three-way merge and hand-pick the stamp hunk (README → *Versioning*).
+
 ## What NOT to Do
 
 - Don't add a `--dry-run` flag, config file loading, retry logic, or plugin system until there's a real need

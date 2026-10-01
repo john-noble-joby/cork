@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# release.sh X.Y.Z — the ONE place cork's version changes.
+#
+# Feature PRs never touch VERSION or the skills' **Version:** stamps; they add their notes
+# under `## [Unreleased]` in CHANGELOG.md. This script turns that accumulated section into a
+# release: it stamps VERSION, every skills/*/SKILL.md, and the changelog heading in one
+# change, so stacked PRs stop conflicting on six files and install.sh's drift check keeps
+# holding (stamps only ever move here).
+set -euo pipefail
+
+REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+NEW="${1:-}"
+[[ "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "usage: release.sh X.Y.Z" >&2; exit 2; }
+
+OLD="$(tr -d '[:space:]' < "$REPO/VERSION")"
+[ "$NEW" != "$OLD" ] || { echo "✗ VERSION is already $OLD" >&2; exit 1; }
+CHANGELOG="$REPO/CHANGELOG.md"
+grep -q "^## \[$NEW\]" "$CHANGELOG" && { echo "✗ CHANGELOG.md already has a [$NEW] section" >&2; exit 1; }
+grep -q '^## \[Unreleased\]' "$CHANGELOG" || { echo "✗ CHANGELOG.md has no '## [Unreleased]' heading" >&2; exit 1; }
+
+# The Unreleased section must hold something: a release with no notes is a mistake.
+unreleased_body="$(awk '/^## \[Unreleased\]/{f=1; next} /^## \[/{f=0} f' "$CHANGELOG" | grep -v '^[[:space:]]*$' || true)"
+[ -n "$unreleased_body" ] || { echo "✗ '## [Unreleased]' is empty — nothing to release" >&2; exit 1; }
+
+# Every skill must carry exactly one stamp, and it must equal the current VERSION.
+mapfile -t skills < <(ls "$REPO"/skills/*/SKILL.md)
+for f in "${skills[@]}"; do
+  n="$(grep -c '^\*\*Version:\*\* ' "$f" || true)"
+  [ "$n" = "1" ] || { echo "✗ $f: expected exactly one '**Version:**' line, found $n" >&2; exit 1; }
+  grep -q "^\*\*Version:\*\* $OLD " "$f" || { echo "✗ $f: stamp is not $OLD — fix drift before releasing" >&2; exit 1; }
+done
+
+DATE="$(date -u +%Y-%m-%d)"
+printf '%s\n' "$NEW" > "$REPO/VERSION"
+for f in "${skills[@]}"; do
+  python3 - "$f" "$OLD" "$NEW" <<'PY'
+import sys; p, old, new = sys.argv[1:]
+s = open(p, encoding="utf-8").read()
+open(p, "w", encoding="utf-8").write(s.replace(f"**Version:** {old} ", f"**Version:** {new} ", 1))
+PY
+done
+python3 - "$CHANGELOG" "$NEW" "$DATE" <<'PY'
+import sys; p, new, date = sys.argv[1:]
+s = open(p, encoding="utf-8").read()
+s = s.replace("## [Unreleased]\n", f"## [Unreleased]\n\n## [{new}] — {date}\n", 1)
+open(p, "w", encoding="utf-8").write(s)
+PY
+
+echo "✓ $OLD → $NEW: VERSION, ${#skills[@]} skill stamps, CHANGELOG '## [$NEW] — $DATE'"
+echo "  review:  git -C \"$REPO\" diff --stat"
+echo "  commit:  git -C \"$REPO\" commit -am \"Release $NEW\""

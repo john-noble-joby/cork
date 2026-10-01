@@ -16,10 +16,26 @@ cork uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) —
 
 The **single source of truth is the `VERSION` file**. Every skill's
 `**Version:**` stamp and `orchestrate.py --version` must match it — `install.sh`
-warns on drift. Bump `VERSION` and every skill stamp together in the same
-change, and add a section here.
+warns on drift.
+
+**Versions change in exactly one place: a release commit made with `./release.sh X.Y.Z`.**
+A feature or fix PR adds its bullets under `## [Unreleased]` below and leaves `VERSION` and
+the skill stamps untouched. When a batch of PRs has landed, `release.sh` stamps `VERSION`,
+every `skills/*/SKILL.md`, and turns `## [Unreleased]` into `## [X.Y.Z] — date` in one
+change. Per-PR bumps used to guarantee a six-file conflict on every stacked merge and invited
+`checkout --theirs` resolutions that silently dropped other PRs' changes to the skill files
+(issue #20). If you do hit a stamp conflict on an in-flight branch, follow the rebase
+procedure in the README's *Versioning* section.
 
 ## [Unreleased]
+
+### Changed
+- **Versions are bumped once per release, not per PR.** New `release.sh X.Y.Z` is the only
+  place `VERSION`, the six skill stamps and the changelog heading move; it refuses to run with
+  an empty `## [Unreleased]`, an existing section for the target version, or drifted stamps.
+  PRs now add notes under *Unreleased* and leave the stamps alone, so stacked PRs stop
+  conflicting on six files. The README documents how to resolve a stamp conflict on an
+  in-flight branch without dropping another PR's changes. Closes #20.
 
 ## [0.17.2] — 2026-10-01
 

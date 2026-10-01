@@ -568,4 +568,31 @@ errors/5xx; 429s wait 5× longer.
 
 cork follows [Semantic Versioning](https://semver.org/); the `VERSION` file is the source of
 truth and every skill stamp + `orchestrate.py --version` tracks it (`install.sh` warns on
-drift). See [`CHANGELOG.md`](CHANGELOG.md) for the release history and the bump policy.
+drift). See [`CHANGELOG.md`](CHANGELOG.md) for the release history.
+
+**In a PR:** add your bullets under `## [Unreleased]` in `CHANGELOG.md`. Do **not** touch
+`VERSION` or any skill's `**Version:**` line.
+
+**To release** (after a batch of PRs has landed on `main`):
+
+```bash
+./release.sh 0.18.0          # stamps VERSION + six skills, turns Unreleased into "## [0.18.0] — <date>"
+git diff --stat && git commit -am "Release 0.18.0" && git push
+```
+
+The script refuses to run when *Unreleased* is empty, when a section for that version already
+exists, or when a skill stamp has drifted from `VERSION`.
+
+**If an in-flight branch hits a stamp conflict anyway** (it was cut before this policy, or a
+release landed under it): never resolve a `skills/*/SKILL.md` conflict with
+`git checkout --theirs` / `--ours` — that takes one side's *whole file* and silently drops every
+change the other side made to it (this happened on cork #11 and was only caught two review
+passes later). Do a real three-way merge and hand-pick only the stamp hunk:
+
+```bash
+f=skills/cork/SKILL.md
+git show origin/main:$f > /tmp/ours; git show "$(git merge-base origin/main HEAD)":$f > /tmp/base; git show HEAD:$f > /tmp/theirs
+git merge-file -p /tmp/ours /tmp/base /tmp/theirs > $f      # leaves <<<< markers only where both sides changed the same lines
+# resolve the **Version:** hunk by hand (keep main's stamp), then prove nothing else moved:
+git diff origin/main -- skills/ | grep '^[-+]' | grep -v '^[-+][-+]'   # must show only your branch's intended edits
+```
