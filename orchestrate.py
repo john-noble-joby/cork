@@ -1217,13 +1217,15 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
     except (OSError, UnicodeError, RuntimeError) as e:
         fail(f"Cannot read diff file {p}: {e}")
     # Headers are either `+++ b/<path>` or, for names git C-quotes (non-ASCII, tabs, quotes,
-    # backslashes), `+++ "b/<escaped>"` — both are what `git diff` writes by default. A plain
-    # `diff -u` patch has no `diff --git` line, so the file header is recognised structurally:
-    # a `+++` line directly after a `---` line, outside any hunk. Hunk extent comes from the
-    # `@@ -a,b +c,d @@` counts, so an added source line reading `++ b/foo` (which shows up in a
-    # hunk as `+++ b/foo`) can never pull an unrelated working-tree file into the review.
+    # backslashes), `+++ "b/<escaped>"` — both are what `git diff` writes by default. The
+    # `diff --git` line is optional (`diff -urN a b` has none), so the file header is recognised
+    # structurally: a `+++` line directly after a `---` line, outside any hunk. Hunk extent comes
+    # from the `@@ -a,b +c,d @@` counts, so an added source line reading `++ b/foo` (which shows
+    # up in a hunk as `+++ b/foo`) can never pull an unrelated working-tree file into the review.
     # `diff -u` appends a tab + timestamp to the path; git C-quotes any path containing a tab,
-    # so an unquoted name always ends at the first tab.
+    # so an unquoted name always ends at the first tab. The `b/` prefix is required: a header
+    # like `+++ new.py` (`diff -u old.py new.py`, `git diff --no-prefix`) has no knowable strip
+    # level, so it is refused rather than silently yielding no changed files.
     header_re = re.compile(r'^\+\+\+ (?:"b/((?:[^"\\]|\\.)*)"|b/([^\t]+))(?:\t.*)?$')
     hunk_re = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
     names: list[str] = []
@@ -1241,8 +1243,11 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
                 old_left -= 1; new_left -= 1
         elif (h := hunk_re.match(line)):
             old_left = int(h.group(1) or 1); new_left = int(h.group(2) or 1)
-        elif prev.startswith("--- ") and (m := header_re.match(line)):
-            names.append(_unquote_git_path(m.group(1)) if m.group(1) is not None else m.group(2))
+        elif prev.startswith("--- ") and line.startswith("+++ "):
+            if (m := header_re.match(line)):
+                names.append(_unquote_git_path(m.group(1)) if m.group(1) is not None else m.group(2))
+            elif not line.startswith("+++ /dev/null"):  # a deletion has no new path
+                fail(f"--diff-file {p}: header {line!r} lacks the b/ prefix — cork needs git-style a/ b/ paths")
         prev = line
     # A patch is caller-supplied input: its paths must stay inside the repo, or the reviewer
     # prompt would carry the contents of arbitrary files (`+++ b/../../etc/passwd`). Git

@@ -96,7 +96,7 @@ class ReviewDiffSourceTest(unittest.TestCase):
         self.assertIn("### a.py", prompt); self.assertIn("### b.py", prompt); self.assertNotIn("### secret.txt", prompt)
 
     def test_plain_unified_diff_without_git_headers(self):
-        # `diff -u` output has no `diff --git` line: files are found from the `---`/`+++` pair.
+        # `diff -urN a b` output has no `diff --git` line: files are found from the `---`/`+++` pair.
         # Hunk extent comes from the @@ counts, so a removed `-- x` + added `++ b/secret.txt`
         # pair inside a hunk (rendered `--- x` / `+++ b/secret.txt`) is content, not a header.
         (self.repo / "secret.txt").write_text("TOP SECRET\n")
@@ -111,6 +111,12 @@ class ReviewDiffSourceTest(unittest.TestCase):
         self.assertNotIn("### secret.txt", prompt); self.assertNotIn("TOP SECRET", prompt)
         _, names = orchestrate.read_diff_file(str(patch))
         self.assertEqual(names, ["a.py", "b.py"])
+        # a deletion header is fine; an unprefixed path (`diff -u old new`, `--no-prefix`) is refused
+        # loudly instead of silently yielding no changed files
+        patch.write_text("--- a/a.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-a = 1\n")
+        self.assertEqual(orchestrate.read_diff_file(str(patch))[1], [])
+        patch.write_text("--- a.py\n+++ a.py\n@@ -1 +1 @@\n-a = 1\n+a = 2\n")
+        self._fails("lacks the b/ prefix", diff_file=str(patch))
 
     def test_changed_submodule_directory_is_skipped(self):
         # a changed submodule pointer lists the submodule *directory* in --name-only; reading it
