@@ -79,8 +79,21 @@ class ReviewDiffSourceTest(unittest.TestCase):
     def test_unquote_git_path(self):
         self.assertEqual(orchestrate._unquote_git_path("caf\\303\\251.py"), "café.py")
         self.assertEqual(orchestrate._unquote_git_path("a\\tb\\\"c\\\\d"), 'a\tb"c\\d')
-        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            orchestrate._unquote_git_path("bad\\q")
+        for bad in ("bad\\q", "x\\999", "x\\777", "x\\000", "x\\12", "x\\8"):   # unknown, non-octal, > 255, NUL, short, bad digit
+            with self.subTest(bad=bad), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                orchestrate._unquote_git_path(bad)
+
+    def test_hunk_content_is_not_a_file_header(self):
+        # an added source line `++ b/secret.txt` appears in the hunk as `+++ b/secret.txt`
+        (self.repo / "secret.txt").write_text("TOP SECRET\n")
+        patch = Path(self.tmp.name) / "tricky.patch"
+        patch.write_text("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n a = 1\n+++ b/secret.txt\n")
+        prompt, _ = self._review(diff_file=str(patch))
+        self.assertIn("### a.py", prompt); self.assertNotIn("### secret.txt", prompt); self.assertNotIn("TOP SECRET", prompt)
+        # a second file after a hunk is still picked up (header state resumes at its diff --git line)
+        patch.write_text(patch.read_text() + "diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n@@ -1 +1 @@\n-b = 1\n+b = 2\n")
+        prompt, _ = self._review(diff_file=str(patch))
+        self.assertIn("### a.py", prompt); self.assertIn("### b.py", prompt); self.assertNotIn("### secret.txt", prompt)
 
     def test_range_and_file_errors_are_clean(self):
         self._fails("must be A..B or A...B", diff_range=self.c3)

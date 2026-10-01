@@ -1191,8 +1191,14 @@ def _unquote_git_path(quoted: str) -> str:
         if ch != b"\\":
             out += ch; i += 1; continue
         nxt = raw[i + 1:i + 2]
-        if nxt.isdigit() and raw[i + 1:i + 4].isdigit() and len(raw[i + 1:i + 4]) == 3:
-            out.append(int(raw[i + 1:i + 4], 8)); i += 4
+        octal = raw[i + 1:i + 4]
+        if len(octal) == 3 and all(c in b"01234567" for c in octal):
+            value = int(octal, 8)
+            if not 1 <= value <= 255:  # \000 is not a path byte; \400+ is not a byte at all
+                fail(f"octal escape \\{octal.decode()} out of range in quoted git path {quoted!r}")
+            out.append(value); i += 4
+        elif nxt.isdigit():
+            fail(f"invalid octal escape in quoted git path {quoted!r}")
         elif nxt in _GIT_ESCAPES:
             out += _GIT_ESCAPES[nxt]; i += 2
         else:
@@ -1211,10 +1217,20 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
     except (OSError, UnicodeError, RuntimeError) as e:
         fail(f"Cannot read diff file {p}: {e}")
     # Headers are either `+++ b/<path>` or, for names git C-quotes (non-ASCII, tabs, quotes,
-    # backslashes), `+++ "b/<escaped>"` — both are what `git diff` writes by default.
-    names = [_unquote_git_path(q) if q is not None else plain
-             for q, plain in re.findall(r'(?m)^\+\+\+ (?:"b/((?:[^"\\]|\\.)*)"|b/(.+))$', text)
-             for q in [q or None]]
+    # backslashes), `+++ "b/<escaped>"` — both are what `git diff` writes by default. Only a
+    # `+++` line in a file's header (after its `diff --git` line, before its first hunk) counts:
+    # an added source line reading `++ b/foo` shows up in a hunk as `+++ b/foo` and must not
+    # pull an unrelated working-tree file into the review.
+    header_re = re.compile(r'^\+\+\+ (?:"b/((?:[^"\\]|\\.)*)"|b/(.+))$')
+    names: list[str] = []
+    in_header = False
+    for line in text.splitlines():
+        if line.startswith("diff --git "):
+            in_header = True
+        elif line.startswith("@@"):
+            in_header = False
+        elif in_header and (m := header_re.match(line)):
+            names.append(_unquote_git_path(m.group(1)) if m.group(1) is not None else m.group(2))
     # A patch is caller-supplied input: its paths must stay inside the repo, or the reviewer
     # prompt would carry the contents of arbitrary files (`+++ b/../../etc/passwd`).
     for name in names:
