@@ -1213,7 +1213,7 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
     p = Path(path)
     try:
         p = p.expanduser()
-        text = p.read_text(encoding="utf-8")
+        text = p.read_bytes().decode("utf-8")   # raw: universal-newline mode would turn a lone CR into a line break
     except (OSError, UnicodeError, RuntimeError) as e:
         fail(f"Cannot read diff file {p}: {e}")
     # Headers are either `+++ b/<path>` or, for names git C-quotes (non-ASCII, tabs, quotes,
@@ -1225,13 +1225,17 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
     # `diff -u` appends a tab + timestamp to the path; git C-quotes any path containing a tab,
     # so an unquoted name always ends at the first tab. The `b/` prefix is required: a header
     # like `+++ new.py` (`diff -u old.py new.py`, `git diff --no-prefix`) has no knowable strip
-    # level, so it is refused rather than silently yielding no changed files.
+    # level, so it is refused rather than silently yielding no changed files. Lines are split
+    # on LF only (CR trimmed as the CRLF terminator): splitlines() would also break on VT, FF
+    # and NEL, which are ordinary bytes inside a source line, letting one crafted added line
+    # exhaust the hunk count and leave `--- a/x` / `+++ b/secret` looking like a header.
     header_re = re.compile(r'^\+\+\+ (?:"b/((?:[^"\\]|\\.)*)"|b/([^\t]+))(?:\t.*)?$')
     hunk_re = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
     names: list[str] = []
     old_left = new_left = 0   # hunk lines still to consume on each side
     prev = ""
-    for line in text.splitlines():
+    for line in text.split("\n"):
+        line = line.removesuffix("\r")
         if old_left > 0 or new_left > 0:
             if line.startswith("\\"):           # `\ No newline at end of file` is not counted
                 pass

@@ -16,7 +16,7 @@ def _git(repo, *args):
 
 class ReviewDiffSourceTest(unittest.TestCase):
     # A real repository with three commits: c1 adds a.py; c2 edits a.py and adds b.py;
-    # c3 edits b.py. The "delta round" is c2..c3 and must contain b.py only.
+    # c3 edits b.py and adds café.py. The "delta round" is c2..c3: b.py and café.py, not a.py.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.repo = Path(self.tmp.name) / "repo"; self.repo.mkdir()
         _git(self.repo, "init", "-q", "-b", "main")
@@ -106,6 +106,17 @@ class ReviewDiffSourceTest(unittest.TestCase):
         patch.write_text(patch.read_text() + "diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n@@ -1 +1 @@\n-b = 1\n+b = 2\n")
         prompt, _ = self._review(diff_file=str(patch))
         self.assertIn("### a.py", prompt); self.assertIn("### b.py", prompt); self.assertNotIn("### secret.txt", prompt)
+        # VT / FF / NEL and a lone CR are ordinary bytes inside a source line, not line breaks:
+        # one added line must not exhaust the hunk count and leave a fake header behind it
+        decoys = ("+p\x0b--- a/x\x0b+++ b/secret.txt", "+p\x0c--- a/x\x0c+++ b/secret.txt",
+                  "+p\x85--- a/x\x85+++ b/secret.txt", "+p\r--- a/x\r+++ b/secret.txt")
+        for decoy in decoys:
+            with self.subTest(decoy=decoy):
+                patch.write_bytes(f"--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-a = 1\n{decoy}\n".encode())
+                self.assertEqual(orchestrate.read_diff_file(str(patch))[1], ["a.py"])
+        # CRLF patches are accepted, with CR trimmed only as the line terminator
+        patch.write_bytes(b"--- a/a.py\r\n+++ b/a.py\r\n@@ -1 +1 @@\r\n-a = 1\r\n+a = 2\r\n")
+        self.assertEqual(orchestrate.read_diff_file(str(patch))[1], ["a.py"])
 
     def test_plain_unified_diff_without_git_headers(self):
         # `diff -urN a b` output has no `diff --git` line: files are found from the `---`/`+++` pair.
