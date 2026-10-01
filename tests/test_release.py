@@ -87,11 +87,13 @@ class ReleaseScriptTest(unittest.TestCase):
         self.assertEqual(self._snapshot(), before)          # VERSION and CHANGELOG untouched
 
     def test_refuses_stamp_drift_before_releasing(self):
-        (self.repo / "skills" / "beta" / "SKILL.md").write_text("# beta\n\n**Version:** 1.2.2 — stale\n")
-        before = self._snapshot()
-        r = self._run("1.3.0")
-        self.assertEqual(r.returncode, 1); self.assertIn("not 1.2.3", r.stderr)
-        self.assertEqual(self._snapshot(), before)
+        for stale in ("1.2.2", "1x2y3", "1.2.3.4"):     # 1x2y3 would pass a regex built from "1.2.3"
+            with self.subTest(stamp=stale):
+                (self.repo / "skills" / "beta" / "SKILL.md").write_text(f"# beta\n\n**Version:** {stale} — stale\n")
+                before = self._snapshot()
+                r = self._run("1.3.0")
+                self.assertEqual(r.returncode, 1); self.assertIn(f"stamp is '{stale}', not 1.2.3", r.stderr)
+                self.assertEqual(self._snapshot(), before)
 
     def test_real_repo_is_release_ready_shape(self):
         # the real tree: one stamp per skill, all equal to VERSION, an Unreleased heading present

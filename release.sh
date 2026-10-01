@@ -35,7 +35,9 @@ shopt -s nullglob; skills=("$REPO"/skills/*/SKILL.md); shopt -u nullglob
 for f in "${skills[@]}"; do
   n="$(grep -c '^\*\*Version:\*\* ' "$f" || true)"
   [ "$n" = "1" ] || { echo "✗ $f: expected exactly one '**Version:**' line, found $n" >&2; exit 1; }
-  grep -q "^\*\*Version:\*\* $OLD " "$f" || { echo "✗ $f: stamp is not $OLD — fix drift before releasing" >&2; exit 1; }
+  # Compare the stamp token literally (no regex: a "1.2.3" pattern would also accept "1x2y3").
+  stamp="$(grep -m1 '^\*\*Version:\*\* ' "$f" | awk '{print $2}')"
+  [ "$stamp" = "$OLD" ] || { echo "✗ $f: stamp is '$stamp', not $OLD — fix drift before releasing" >&2; exit 1; }
 done
 
 DATE="$(date -u +%Y-%m-%d)"

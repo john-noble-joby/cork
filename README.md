@@ -590,9 +590,15 @@ change the other side made to it (this happened on cork #11 and was only caught 
 passes later). Do a real three-way merge and hand-pick only the stamp hunk:
 
 ```bash
+# While the rebase is stopped on the conflict, the index holds the three real sides — use them.
+# (Do NOT recompute them from HEAD/merge-base: mid-rebase HEAD is the side being rebased ONTO,
+# so that would hand you main twice and drop your branch's edits.)
 f=skills/cork/SKILL.md
-git show origin/main:$f > /tmp/ours; git show "$(git merge-base origin/main HEAD)":$f > /tmp/base; git show HEAD:$f > /tmp/theirs
+git show :1:$f > /tmp/base      # common ancestor
+git show :2:$f > /tmp/ours      # during a rebase: the upstream side (main)
+git show :3:$f > /tmp/theirs    # during a rebase: your commit being replayed
 git merge-file -p /tmp/ours /tmp/base /tmp/theirs > $f      # leaves <<<< markers only where both sides changed the same lines
-# resolve the **Version:** hunk by hand (keep main's stamp), then prove nothing else moved:
+# resolve the **Version:** hunk by hand (keep main's stamp), `git add $f`, continue the rebase,
+# then prove nothing else moved:
 git diff origin/main -- skills/ | grep '^[-+]' | grep -v '^[-+][-+]'   # must show only your branch's intended edits
 ```
