@@ -9,15 +9,20 @@
 set -euo pipefail
 
 REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-NEW="${1:-}"
+# Exactly one argument: this rewrites every version surface, so surplus arguments are a
+# malformed command, not something to ignore.
+[ "$#" -eq 1 ] || { echo "usage: release.sh X.Y.Z  (exactly one argument)" >&2; exit 2; }
+NEW="$1"
 # SemVer core: numeric identifiers without leading zeroes (01.2.3 is not a version).
 SEMVER='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
 [[ "$NEW" =~ $SEMVER ]] || { echo "usage: release.sh X.Y.Z  (SemVer, no leading zeroes)" >&2; exit 2; }
 
-# Validate what the file actually stores: only the trailing newline is dropped, so "1 . 2 . 3"
-# or a second line is rejected rather than normalised into a version.
-OLD="$(<"$REPO/VERSION")"
-[[ "$OLD" =~ $SEMVER ]] || { echo "✗ VERSION file holds '$OLD', not a SemVer version" >&2; exit 1; }
+# Validate what the file actually stores, byte for byte: the file must be exactly one SemVer
+# version followed by one newline — "1 . 2 . 3", surrounding blanks, a second line, a missing
+# or doubled trailing newline are all rejected rather than normalised.
+raw="$(cat "$REPO/VERSION"; printf x)"; raw="${raw%x}"      # keep trailing newlines ($(…) would drop them)
+OLD="${raw%$'\n'}"
+{ [ "$raw" = "${OLD}"$'\n' ] && [[ "$OLD" =~ $SEMVER ]]; } || { echo "✗ VERSION file must be exactly one SemVer version plus a newline; holds $(printf '%q' "$raw"), not a SemVer version" >&2; exit 1; }
 # The new version must have higher precedence: a release never moves the source of truth backwards.
 newer="$(python3 -c 'import sys; o, n = (tuple(map(int, v.split("."))) for v in sys.argv[1:]); print("yes" if n > o else "no")' "$OLD" "$NEW")"
 [ "$newer" = "yes" ] || { echo "✗ $NEW does not exceed the current VERSION $OLD" >&2; exit 1; }

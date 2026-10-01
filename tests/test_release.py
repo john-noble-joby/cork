@@ -54,6 +54,13 @@ class ReleaseScriptTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1); self.assertIn("no release notes", r.stderr)
         self.assertEqual(self._snapshot(), before)
 
+    def test_refuses_surplus_arguments(self):
+        before = self._snapshot()
+        for args in (("1.3.0", "1.4.0"), ("1.3.0", ""), ()):
+            with self.subTest(args=args):
+                r = self._run(*args); self.assertEqual(r.returncode, 2); self.assertIn("exactly one argument", r.stderr)
+        self.assertEqual(self._snapshot(), before)
+
     def test_refuses_bad_or_same_version_and_existing_section(self):
         before = self._snapshot()
         for args, code, needle in ((("1.3",), 2, "usage"), (("1.2.3",), 1, "does not exceed"), (("v1.3.0",), 2, "usage"),
@@ -109,7 +116,7 @@ class ReleaseScriptTest(unittest.TestCase):
         self.assertIn("**Version:** 1.3.0 — keep in sync.", (self.repo / "skills" / "alpha" / "SKILL.md").read_text())
 
     def test_version_file_is_validated_as_stored(self):
-        for stored in ("1 . 2 . 3\n", "1.2.3\n1.2.4\n", " 1.2.3\n", "1.2.3 \n", ""):
+        for stored in ("1 . 2 . 3\n", "1.2.3\n1.2.4\n", " 1.2.3\n", "1.2.3 \n", "", "1.2.3\n\n", "1.2.3", "1.2.3\r\n"):
             with self.subTest(stored=repr(stored)):
                 (self.repo / "VERSION").write_text(stored)
                 before = self._snapshot()
