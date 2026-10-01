@@ -21,6 +21,14 @@ change, and add a section here.
 
 ## [Unreleased]
 
+## [0.17.2] — 2026-10-01
+
+### Fixed
+- copilot-review-loop's "did the review request stick?" check uses GraphQL `reviewRequests`
+  instead of REST `requested_reviewers`, which omits Bot accounts and therefore reported
+  `NOT REQUESTED` after a successful `201 Created` for `copilot-pull-request-reviewer[bot]` —
+  a faithful agent stalled or re-requested on every run. Closes #19.
+
 ## [0.17.1] — 2026-10-01
 
 ### Fixed
