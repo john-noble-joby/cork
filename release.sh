@@ -27,7 +27,8 @@ OLD="${raw%$'\n'}"
 newer="$(python3 -c 'import sys; o, n = (tuple(map(int, v.split("."))) for v in sys.argv[1:]); print("yes" if n > o else "no")' "$OLD" "$NEW")"
 [ "$newer" = "yes" ] || { echo "✗ $NEW does not exceed the current VERSION $OLD" >&2; exit 1; }
 CHANGELOG="$REPO/CHANGELOG.md"
-grep -q "^## \[$NEW\]" "$CHANGELOG" && { echo "✗ CHANGELOG.md already has a [$NEW] section" >&2; exit 1; }
+# Literal prefix match (no regex: "1.3.0" as a pattern would also match a malformed "## [1x3y0]").
+awk -v h="## [$NEW]" 'index($0, h) == 1 {found=1} END {exit !found}' "$CHANGELOG" && { echo "✗ CHANGELOG.md already has a [$NEW] section" >&2; exit 1; }
 # The heading must be exactly `## [Unreleased]` (the same form the rewrite below replaces), so a
 # variant such as a trailing space cannot pass validation and then be left un-rewritten.
 [ "$(grep -cx '## \[Unreleased\]' "$CHANGELOG")" = "1" ] || { echo "✗ CHANGELOG.md needs exactly one line reading '## [Unreleased]'" >&2; exit 1; }
@@ -43,7 +44,8 @@ unreleased_body="$(awk '$0 == "## [Unreleased]"{f=1; next} /^## /{f=0} f' "$CHAN
 # stamp to update".
 manifest_line="$(grep -m1 '^SKILLS=(' "$REPO/install.sh" || true)"
 [ -n "$manifest_line" ] || { echo "✗ $REPO/install.sh has no 'SKILLS=(…)' manifest line" >&2; exit 1; }
-read -r -a required <<< "${manifest_line#SKILLS=(}"; required[-1]="${required[-1]%)}"
+manifest_list="${manifest_line#SKILLS=(}"; manifest_list="${manifest_list%)}"   # strip "SKILLS=(" and ")" before splitting
+read -r -a required <<< "$manifest_list"                                         # no negative subscripts: macOS ships Bash 3.2
 skills=()
 for name in "${required[@]}"; do
   f="$REPO/skills/$name/SKILL.md"

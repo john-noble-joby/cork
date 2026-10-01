@@ -76,6 +76,23 @@ class ReleaseScriptTest(unittest.TestCase):
         (self.repo / "CHANGELOG.md").write_text(before[Path("CHANGELOG.md")])
         self.assertEqual(self._snapshot(), before)
 
+    def test_existing_section_check_is_literal_not_regex(self):
+        # a malformed "## [1x3y0]" heading must not be mistaken for an existing 1.3.0 section
+        log = (self.repo / "CHANGELOG.md").read_text()
+        (self.repo / "CHANGELOG.md").write_text(log.replace("## [1.2.3]", "## [1x3y0] — junk\n\n## [1.2.3]"))
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("## [1.3.0] — ", (self.repo / "CHANGELOG.md").read_text())
+
+    def test_script_avoids_bash_4_only_constructs(self):
+        # the documented release command must run under macOS's stock Bash 3.2
+        src = (ROOT / "release.sh").read_text()
+        for construct in ("mapfile", "readarray", "[-1]", "declare -A", "${", ):
+            if construct == "${":
+                continue
+            self.assertNotIn(construct, src, construct)
+        self.assertNotRegex(src, r"\$\{[A-Za-z_]+,,\}|\$\{[A-Za-z_]+\^\^\}")   # no ${var,,} / ${var^^}
+
     def test_numeric_precedence_not_lexical(self):
         # "1.10.0" sorts before "1.2.3" as a string but is the newer version
         r = self._run("1.10.0")
