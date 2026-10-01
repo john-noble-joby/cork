@@ -142,7 +142,8 @@ for s in "${SKILLS[@]}"; do
   if [ ! -f "$src" ]; then echo "  ✗ $s: missing $src"; rc=1; continue; fi
 
   # The skill body carries a version stamp so an agent (and you) can tell which
-  # prompt is loaded. Warn if it drifted from VERSION — bump them together.
+  # prompt is loaded. Warn if it drifted from VERSION — stamps and VERSION only
+  # ever move together, in a release commit made by ./release.sh.
   stamp="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' <(grep -m1 'Version:' "$src") || true)"
   if [ "$stamp" != "$VERSION" ]; then
     echo "  ⚠ $s: skill stamp '${stamp:-none}' != VERSION '$VERSION' — update the **Version:** line in $src"

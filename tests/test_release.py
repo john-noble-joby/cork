@@ -1,0 +1,195 @@
+import datetime
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class ReleaseScriptTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name) / "repo"
+        (self.repo / "skills").mkdir(parents=True)
+        shutil.copy(ROOT / "release.sh", self.repo / "release.sh")
+        (self.repo / "install.sh").write_text("#!/usr/bin/env bash\nSKILLS=(alpha beta)\n: install\n")
+        (self.repo / "VERSION").write_text("1.2.3\n")
+        for name in ("alpha", "beta"):
+            d = self.repo / "skills" / name; d.mkdir()
+            (d / "SKILL.md").write_text(f"---\nname: {name}\n---\n\n# {name}\n\n**Version:** 1.2.3 — keep in sync.\n\nbody mentions 1.2.3 too\n")
+        (self.repo / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## Versioning\n\ntext\n\n## [Unreleased]\n\n### Fixed\n- something\n\n## [1.2.3] — 2026-01-01\n\n### Added\n- old\n")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, *args):
+        return subprocess.run(["bash", str(self.repo / "release.sh"), *args], capture_output=True, text=True,
+                              env={"REPO": str(self.repo), "PATH": "/usr/bin:/bin:/usr/local/bin"})
+
+    def _snapshot(self):
+        return {p.relative_to(self.repo): p.read_text() for p in self.repo.rglob("*") if p.is_file()}
+
+    def test_release_stamps_everything_once(self):
+        before = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        r = self._run("1.3.0")
+        after = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.repo / "VERSION").read_text(), "1.3.0\n")
+        for name in ("alpha", "beta"):
+            text = (self.repo / "skills" / name / "SKILL.md").read_text()
+            self.assertIn("**Version:** 1.3.0 — keep in sync.", text)
+            self.assertIn("body mentions 1.2.3 too", text)          # only the stamp line changes
+        log = (self.repo / "CHANGELOG.md").read_text()
+        # the run may straddle UTC midnight: either date sampled around it is correct
+        self.assertTrue(any(f"## [Unreleased]\n\n## [1.3.0] — {d}\n\n### Fixed\n- something\n" in log for d in {before, after}), log[:200])
+        self.assertIn("## [1.2.3] — 2026-01-01", log)
+        self.assertIn("1.2.3 → 1.3.0", r.stdout); self.assertIn("2 skill stamps", r.stdout)
+
+    def test_refuses_without_unreleased_notes_and_changes_nothing(self):
+        (self.repo / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n\n## [1.2.3] — 2026-01-01\n- old\n")
+        before = self._snapshot()
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 1); self.assertIn("no release notes", r.stderr)
+        self.assertEqual(self._snapshot(), before)
+
+    def test_refuses_surplus_arguments(self):
+        before = self._snapshot()
+        for args in (("1.3.0", "1.4.0"), ("1.3.0", ""), ()):
+            with self.subTest(args=args):
+                r = self._run(*args); self.assertEqual(r.returncode, 2); self.assertIn("exactly one argument", r.stderr)
+        self.assertEqual(self._snapshot(), before)
+
+    def test_refuses_bad_or_same_version_and_existing_section(self):
+        before = self._snapshot()
+        for args, code, needle in ((("1.3",), 2, "usage"), (("1.2.3",), 1, "does not exceed"), (("v1.3.0",), 2, "usage"),
+                                   (("01.3.0",), 2, "usage"), (("1.03.0",), 2, "usage"), (("1.3.00",), 2, "usage"),
+                                   (("1.2.2",), 1, "does not exceed"), (("0.9.9",), 1, "does not exceed"), (("1.10.0",), 0, "")):
+            if code == 0:
+                continue  # 1.10.0 > 1.2.3 numerically (not lexically) — exercised in the happy-path test below
+            with self.subTest(args=args):
+                r = self._run(*args); self.assertEqual(r.returncode, code); self.assertIn(needle, r.stderr)
+        (self.repo / "CHANGELOG.md").write_text((self.repo / "CHANGELOG.md").read_text().replace("## [1.2.3]", "## [1.3.0] — x\n\n## [1.2.3]"))
+        r = self._run("1.3.0"); self.assertEqual(r.returncode, 1); self.assertIn("already has a [1.3.0]", r.stderr)
+        (self.repo / "CHANGELOG.md").write_text(before[Path("CHANGELOG.md")])
+        self.assertEqual(self._snapshot(), before)
+
+    def test_existing_section_check_is_literal_not_regex(self):
+        # a malformed "## [1x3y0]" heading must not be mistaken for an existing 1.3.0 section
+        log = (self.repo / "CHANGELOG.md").read_text()
+        (self.repo / "CHANGELOG.md").write_text(log.replace("## [1.2.3]", "## [1x3y0] — junk\n\n## [1.2.3]"))
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("## [1.3.0] — ", (self.repo / "CHANGELOG.md").read_text())
+
+    def test_script_avoids_bash_4_only_constructs(self):
+        # the documented release command must run under macOS's stock Bash 3.2
+        src = (ROOT / "release.sh").read_text()
+        for construct in ("mapfile", "readarray", "[-1]", "declare -A", "${", ):
+            if construct == "${":
+                continue
+            self.assertNotIn(construct, src, construct)
+        self.assertNotRegex(src, r"\$\{[A-Za-z_]+,,\}|\$\{[A-Za-z_]+\^\^\}")   # no ${var,,} / ${var^^}
+
+    def test_numeric_precedence_not_lexical(self):
+        # "1.10.0" sorts before "1.2.3" as a string but is the newer version
+        r = self._run("1.10.0")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.repo / "VERSION").read_text(), "1.10.0\n")
+
+    def test_headings_only_unreleased_is_not_release_notes(self):
+        (self.repo / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n\n### Added\n\n### Fixed\n\n## [1.2.3] — 2026-01-01\n- old\n")
+        before = self._snapshot()
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 1); self.assertIn("headings alone do not count", r.stderr)
+        self.assertEqual(self._snapshot(), before)
+
+    def test_refuses_when_a_manifest_skill_is_missing(self):
+        shutil.rmtree(self.repo / "skills" / "beta")             # one of the two required skills gone
+        before = self._snapshot()
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 1); self.assertIn("skills/beta/SKILL.md is missing", r.stderr)
+        self.assertEqual(self._snapshot(), before)          # VERSION and CHANGELOG untouched
+        shutil.rmtree(self.repo / "skills"); (self.repo / "skills").mkdir()   # all gone
+        before = self._snapshot()
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 1); self.assertIn("is missing", r.stderr)
+        self.assertEqual(self._snapshot(), before)
+
+    def test_refuses_a_skill_the_installer_does_not_ship(self):
+        (self.repo / "skills" / "gamma").mkdir(); (self.repo / "skills" / "gamma" / "SKILL.md").write_text("**Version:** 1.2.3\n")
+        before = self._snapshot()
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 1); self.assertIn("holds 3 SKILL.md files but install.sh lists 2", r.stderr)
+        self.assertEqual(self._snapshot(), before)
+
+    def test_refuses_without_install_manifest(self):
+        (self.repo / "install.sh").write_text("#!/usr/bin/env bash\n: no manifest here\n")
+        before = self._snapshot()
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 1); self.assertIn("no 'SKILLS=(", r.stderr)
+        self.assertEqual(self._snapshot(), before)
+
+    def test_unreleased_scan_stops_at_any_level_two_heading(self):
+        (self.repo / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n\n## Notes\n\nsome prose that is not a release note\n\n## [1.2.3] — 2026-01-01\n- old\n")
+        before = self._snapshot()
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 1); self.assertIn("no release notes", r.stderr)
+        self.assertEqual(self._snapshot(), before)
+
+    def test_unreleased_heading_must_be_exact(self):
+        log = (self.repo / "CHANGELOG.md").read_text()
+        # zero exact headings (variants) or two of them (doubled) — both refused before any write
+        for variant in ("## [Unreleased] ", "##  [Unreleased]", "## [unreleased]", "## [Unreleased]\n\n## [Unreleased]"):
+            with self.subTest(variant=repr(variant)):
+                (self.repo / "CHANGELOG.md").write_text(log.replace("## [Unreleased]", variant, 1))
+                before = self._snapshot()
+                r = self._run("1.3.0")
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr); self.assertIn("exactly one line reading", r.stderr)
+                self.assertEqual(self._snapshot(), before)         # nothing written before the refusal
+        (self.repo / "CHANGELOG.md").write_text(log)
+
+    def test_bare_stamp_line_is_rewritten_too(self):
+        # preflight accepts `**Version:** 1.2.3` with nothing after it; the rewrite must as well
+        (self.repo / "skills" / "beta" / "SKILL.md").write_text("# beta\n\n**Version:** 1.2.3\n")
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.repo / "skills" / "beta" / "SKILL.md").read_text(), "# beta\n\n**Version:** 1.3.0\n")
+        self.assertIn("**Version:** 1.3.0 — keep in sync.", (self.repo / "skills" / "alpha" / "SKILL.md").read_text())
+
+    def test_version_file_is_validated_as_stored(self):
+        for stored in ("1 . 2 . 3\n", "1.2.3\n1.2.4\n", " 1.2.3\n", "1.2.3 \n", "", "1.2.3\n\n", "1.2.3", "1.2.3\r\n"):
+            with self.subTest(stored=repr(stored)):
+                (self.repo / "VERSION").write_text(stored)
+                before = self._snapshot()
+                r = self._run("1.3.0")
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr); self.assertIn("not a SemVer version", r.stderr)
+                self.assertEqual(self._snapshot(), before)
+        (self.repo / "VERSION").write_text("1.2.3\n")
+
+    def test_refuses_stamp_drift_before_releasing(self):
+        for stale in ("1.2.2", "1x2y3", "1.2.3.4"):     # 1x2y3 would pass a regex built from "1.2.3"
+            with self.subTest(stamp=stale):
+                (self.repo / "skills" / "beta" / "SKILL.md").write_text(f"# beta\n\n**Version:** {stale} — stale\n")
+                before = self._snapshot()
+                r = self._run("1.3.0")
+                self.assertEqual(r.returncode, 1); self.assertIn(f"stamp is '{stale}', not 1.2.3", r.stderr)
+                self.assertEqual(self._snapshot(), before)
+
+    def test_real_repo_is_release_ready_shape(self):
+        # the real tree: the installer manifest matches skills/, one stamp per skill, all equal
+        # to VERSION, an Unreleased heading present
+        version = (ROOT / "VERSION").read_text().strip()
+        manifest = next(l for l in (ROOT / "install.sh").read_text().splitlines() if l.startswith("SKILLS=("))
+        listed = sorted(manifest.removeprefix("SKILLS=(").removesuffix(")").split())
+        self.assertEqual(listed, sorted(p.parent.name for p in ROOT.glob("skills/*/SKILL.md")))
+        for f in ROOT.glob("skills/*/SKILL.md"):
+            lines = [l for l in f.read_text().splitlines() if l.startswith("**Version:** ")]
+            self.assertEqual(len(lines), 1, f); self.assertTrue(lines[0].startswith(f"**Version:** {version} "), f)
+        self.assertIn("## [Unreleased]", (ROOT / "CHANGELOG.md").read_text())
+
+
+if __name__ == "__main__":
+    unittest.main()
