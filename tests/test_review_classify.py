@@ -103,14 +103,20 @@ class CcrOverviewV2Test(unittest.TestCase):
             orchestrate._classify_reviews([_cop(body=_fixture("copilot-body-approval-recommended.md"), tc=0)]),
             "state=COMMENTED tc=0 verdict=approve suppressed=0 missed=0")
 
-    def test_new_verdicts_are_line_anchored(self):
-        # prose mentioning the phrases mid-line must not flip the verdict
-        self.assertEqual(
-            orchestrate._classify_reviews([_cop(body="Earlier passes said approval recommended; this one does not.")]),
-            "state=COMMENTED tc=0 verdict=none suppressed=0 missed=0")
-        self.assertEqual(
-            orchestrate._classify_reviews([_cop(body="No changes recommended here, but see the notes.")]),
-            "state=COMMENTED tc=0 verdict=none suppressed=0 missed=0")
+    def test_new_verdicts_are_heading_anchored(self):
+        # prose mentioning the phrases — mid-line OR at the start of a line — must not flip
+        # the verdict; only a Markdown heading carries it
+        for prose in ("Earlier passes said approval recommended; this one does not.",
+                      "No changes recommended here, but see the notes.",
+                      "Changes recommended earlier were applied; nothing new.\n### 🟢 Approval recommended",
+                      "Approval recommended by a human is still required.\n### 🟡 Changes recommended"):
+            with self.subTest(prose=prose[:40]):
+                out = orchestrate._classify_reviews([_cop(body=prose)])
+                expected = "approve" if "### 🟢" in prose else ("block" if "### 🟡" in prose else "none")
+                self.assertEqual(out, f"state=COMMENTED tc=0 verdict={expected} suppressed=0 missed=0")
+        for heading in ("### 🟢 Approval recommended", "## Approval recommended", "#### 🟢 Approval recommended\nmore"):
+            self.assertEqual(orchestrate._classify_reviews([_cop(body=heading)]),
+                             "state=COMMENTED tc=0 verdict=approve suppressed=0 missed=0")
         self.assertEqual(
             orchestrate._classify_reviews([_cop(body="### 🟡 Changes recommended\n\n### Previously missed (2)")]),
             "state=COMMENTED tc=0 verdict=block suppressed=0 missed=2")

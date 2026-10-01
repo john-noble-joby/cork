@@ -2182,8 +2182,8 @@ def cmd_preflight() -> None:
 def _classify_reviews(reviews: list) -> str:
     # Latest Copilot review → "state=… tc=… verdict=… suppressed=… missed=…" for the
     # copilot-review-loop skill. `block` is checked first; `approve` comes from
-    # state==APPROVED or a LINE-ANCHORED verdict heading, so a phrase like 'not quite ready
-    # to approve' can't false-positive into a clean stop. Two body dialects are recognised:
+    # state==APPROVED or a HEADING-ANCHORED verdict, so a phrase like 'not quite ready to
+    # approve' or prose that opens a line with the words can't false-positive. Two body dialects are recognised:
     # the older 'Ready to approve' / 'Not ready to approve', and the ccr-overview-v2
     # 'Approval recommended' / 'Changes recommended' (a 'Needs a closer look' verdict is
     # neither — it still needs a human and its body notes still need processing).
@@ -2196,10 +2196,14 @@ def _classify_reviews(reviews: list) -> str:
         return "state=NONE tc=0 verdict=none suppressed=0 missed=0"
     r = cop[-1]
     low = (r.get("body") or "").lower()
-    if "not ready to approve" in low or re.search(r"(?m)^\W*changes recommended", low):
+    # Verdict phrases must be Markdown HEADINGS (`### 🟢 Approval recommended`): a line of
+    # prose that merely starts with the words ("Changes recommended earlier were applied.")
+    # must not override the real verdict.
+    heading = r"(?m)^#{1,6}[^\w\n]*"
+    if "not ready to approve" in low or re.search(heading + "changes recommended", low):
         verdict = "block"
-    elif (r.get("state") == "APPROVED" or re.search(r"(?m)^\W*ready to approve", low)
-          or re.search(r"(?m)^\W*approval recommended", low)):
+    elif (r.get("state") == "APPROVED" or re.search(heading + "ready to approve", low)
+          or re.search(heading + "approval recommended", low)):
         verdict = "approve"
     else:
         verdict = "none"

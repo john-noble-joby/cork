@@ -95,8 +95,8 @@ gh api graphql -f query='
 
 `review-classify` picks the latest Copilot review (`last: 50`, null-author-safe) and prints
 `state=… tc=… verdict=… suppressed=… missed=…`. `block` is checked first (`Not ready to
-approve`, or a line-anchored `Changes recommended`); `approve` comes from `state==APPROVED` or
-a line-anchored `Ready to approve` / `Approval recommended` (so `not quite ready to approve` or
+approve`, or a heading-anchored `Changes recommended`); `approve` comes from `state==APPROVED` or
+a heading-anchored `Ready to approve` / `Approval recommended` (so `not quite ready to approve` or
 prose mentioning the phrase can't false-positive); `Needs a closer look` is `none` — not a
 block, but never a clean pass either. `suppressed` counts `### Suppressed comments (N)`,
 `missed` counts the **Previously missed (N)** block. The logic is unit-tested against real captured

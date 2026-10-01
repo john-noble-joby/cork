@@ -25,7 +25,7 @@ change, and add a section here.
 
 ### Fixed
 - `review-classify` understands Copilot's current `ccr-overview-v2` review bodies: the
-  line-anchored `Approval recommended` / `Changes recommended` headings now map to
+  heading-anchored `Approval recommended` / `Changes recommended` headings now map to
   `approve` / `block` (they used to classify as `none`, so three consecutive passes on one PR
   reported no verdict), `Needs a closer look` stays `none`, and findings listed under
   the collapsed **Previously missed (N)** block are reported in a new `missed=N` field alongside `suppressed`.
