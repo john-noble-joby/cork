@@ -117,8 +117,22 @@ class CcrOverviewV2Test(unittest.TestCase):
         for heading in ("### 🟢 Approval recommended", "## Approval recommended", "#### 🟢 Approval recommended\nmore"):
             self.assertEqual(orchestrate._classify_reviews([_cop(body=heading)]),
                              "state=COMMENTED tc=0 verdict=approve suppressed=0 missed=0")
+
+    def test_counts_come_from_section_markers_not_prose(self):
+        # v2 marker is the collapsed block's <summary>; a sentence mentioning
+        # 'Previously missed (0)' earlier in the body must not win the search
+        body = ("### 🟢 Approval recommended\n\nThe earlier Previously missed (0) note was addressed.\n\n"
+                "<details>\n<summary><strong>Previously missed (2)</strong></summary>\n\n<details>\n<summary> x</summary>\n`a.py:1`\n</details>\n</details>")
+        self.assertEqual(orchestrate._classify_reviews([_cop(body=body)]),
+                         "state=COMMENTED tc=0 verdict=approve suppressed=0 missed=2")
+        # the legacy count is a heading too; prose with the words does not count
+        self.assertEqual(orchestrate._classify_reviews([_cop(body="### 🟢 Approval recommended\nNo suppressed comments (4) remain.")]),
+                         "state=COMMENTED tc=0 verdict=approve suppressed=0 missed=0")
+        # prose-only mention of the v2 phrase: zero
+        self.assertEqual(orchestrate._classify_reviews([_cop(body="### 🟢 Approval recommended\nPreviously missed (3) items were fixed.")]),
+                         "state=COMMENTED tc=0 verdict=approve suppressed=0 missed=0")
         self.assertEqual(
-            orchestrate._classify_reviews([_cop(body="### 🟡 Changes recommended\n\n### Previously missed (2)")]),
+            orchestrate._classify_reviews([_cop(body="### 🟡 Changes recommended\n\n<details>\n<summary><strong>Previously missed (2)</strong></summary>")]),
             "state=COMMENTED tc=0 verdict=block suppressed=0 missed=2")
 
 

@@ -2207,8 +2207,11 @@ def _classify_reviews(reviews: list) -> str:
         verdict = "approve"
     else:
         verdict = "none"
-    suppressed = re.search(r"suppressed comments \((\d+)\)", low)
-    missed = re.search(r"previously missed \((\d+)\)", low)
+    # Counts come from the sections' own markers, never from prose that mentions them: the
+    # legacy `### Suppressed comments (N)` heading, and v2's collapsed-block summary
+    # `<summary><strong>Previously missed (N)</strong></summary>`.
+    suppressed = re.search(heading + r"suppressed comments \((\d+)\)", low)
+    missed = re.search(r"(?m)^<summary><strong>previously missed \((\d+)\)</strong></summary>", low)
     tc = (r.get("comments") or {}).get("totalCount", 0)
     return (f"state={r.get('state')} tc={tc} verdict={verdict} "
             f"suppressed={suppressed.group(1) if suppressed else 0} missed={missed.group(1) if missed else 0}")
