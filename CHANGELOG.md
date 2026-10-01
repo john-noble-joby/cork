@@ -21,6 +21,34 @@ change, and add a section here.
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-09-30
+
+### Added
+- `responses_effort` config field (`low`/`medium`/`high`, default `medium`) for Responses
+  API reviews and probes. Document a hybrid high-effort Copilot + Claude Enterprise setup,
+  including a Pi lane on `pi/openai-codex/gpt-6-sol` with `--thinking high` via `extra_args`.
+
+### Changed
+- Setup chooses review providers before requesting credentials, so subscription-backed
+  harness lanes do not require unused API credentials.
+- The Pi lane's prompt travels on stdin (`--print`) instead of as an argument after `--`, so
+  only its `--system-prompt` standards argument is subject to the 128 KiB per-argument limit;
+  the argv byte-budget repack now applies to OpenCode alone. The lane keeps 0.13.0's live
+  `pi auth check … --no-refresh` preflight probe and `<provider>/<model>` ref validation.
+
+### Fixed
+- Preserve Responses API non-completion diagnostics: skip explicitly incomplete, failed,
+  cancelled, pending, or unknown-state reviews without repeating the same request or
+  accepting partial findings as complete. Missing or malformed diagnostic containers use
+  the unknown-reason fallback. Only missing/null/empty-string statuses retain compatibility
+  handling; other falsy values cannot bypass the completion guard. HTTP-status-based
+  availability probes retain their existing handling.
+- Correct remaining auth-probe diagnostics: preserve scratch-directory failures and avoid
+  presenting the Pi provider as the reason for malformed or contradictory auth output.
+- Quote skill descriptions so YAML frontmatter parsers accept embedded colons.
+- Route GPT-6 models, including Sol and Astra, through `/responses` rather than unsupported
+  chat completions; share the same response extraction as GPT-5 and Codex.
+
 ## [0.15.0] — 2026-09-30
 
 ### Added
@@ -70,9 +98,11 @@ change, and add a section here.
   beyond OpenCode's own install artifacts (`bin/`, `node_modules/`, `package.json`, lockfiles,
   `.gitignore`), naming the entries and pointing at `~/.config/opencode/`.
   Because OpenCode still executes a project's `.opencode/{plugin,plugins}/*.{ts,js}` despite
-  those switches (anomalyco/opencode#49836), the lane — and its auth probe — refuse to run when
-  either directory exists in the tree under review or any directory above it, and it is reported
-  as a skipped reviewer.
+  those switches (anomalyco/opencode#49836), the lane refuses to run when either directory
+  exists in the tree under review or any directory above it, and it is reported as a skipped
+  reviewer. The auth probe never sees the target repo — it runs from cork's own state dir — so
+  it applies the same scan to that directory's ancestors (and the legacy `~/.opencode/` check)
+  before launching the CLI.
   Pi runs prompt-only — `--no-tools` (its `read`/`find` accept absolute paths, so a read
   allowlist cannot confine it to the repo), no extensions/skills/templates/themes/context files,
   ambient `APPEND_SYSTEM.md` suppressed — and ignores project-local `.pi/` resources with

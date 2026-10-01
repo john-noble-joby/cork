@@ -45,13 +45,17 @@ steps below are manual.
    run it straight from `$CORK_HOME`, so `git pull` updates the engine.) `install.sh` can also
    write `CORK_HOME` into `~/.claude/settings.json` if you clone to a non-default path.
 
-3. **Get a Copilot token** (required — this is what unlocks the review models):
+3. **Choose providers, then authenticate.** Copilot is the default, but Claude-only reviews
+   need only Claude Code's login. Run `config init`, configure your intended rotation (see
+   *Harness reviewers* below), then get a Copilot token **only if using Copilot lanes**:
    ```bash
    python3 ~/dev/cork/orchestrate.py login
    ```
    GitHub device flow → writes `~/.config/cork/auth.json` (chmod 600). cork **refreshes this
    token automatically** (it persists the refresh token, good ~6 months), so you rarely need
    to re-run `login` — only if the refresh token expires or is revoked.
+   For Claude-only use, enable `claude`, disable `copilot`, and replace the default rotation
+   with your chosen `claude/<model>` entries; skip the Copilot login above entirely.
 
 4. **Connect Linear + mem0 in Claude Code** (MCP): `devit` fetches the story from Linear
    (and files split sub-stories there); cork pulls codebase context from mem0. Configure
@@ -194,8 +198,25 @@ Cork picks reviewers at runtime. The ranked candidate list and desired count liv
 `count` survivors (errors only if none survive). Before probing, preflight names the active
 Copilot credential source. Environment overrides are informational; warnings are reserved for
 a non-refreshable cork file or the opencode fallback. Auth failures (401/403) are fatal and name
-the rejected source plus the `login` recovery command. `gpt-5.x`/codex are reached via
-Copilot's `/responses` endpoint automatically; everything else uses `/chat/completions`.
+the rejected source plus the `login` recovery command. `gpt-5.x`/`gpt-6.x`/codex models are
+routed to the `/responses` endpoint automatically on both the Copilot and the native OpenAI API
+lanes (the same model-family gate applies to each); other OpenAI-compatible models use
+`/chat/completions`.
+
+`responses_effort` controls reasoning for Responses API calls (both reviews and probes):
+`"low"`, `"medium"` (the backward-compatible default), or `"high"`. Edit this field in
+`config.json`; chat-completions, native Anthropic, and harness lanes are unaffected.
+For Claude Code, set `providers.claude.extra_args` to `["--effort", "high"]` instead.
+
+Reasoning and findings share a 32,000-token output budget. A Responses API review with an
+explicit non-completed status (`incomplete`, `failed`, cancelled, pending, or an unknown state)
+is skipped without retrying, even if partial text exists. The skip includes the state and
+incomplete reason or error message/code, falling back to `unknown reason` for missing or malformed
+diagnostic containers. For token exhaustion, reduce the diff size or effort before rerunning.
+Only missing, null, or empty-string statuses retain status-less compatibility handling; other
+non-completed values, including malformed falsy values, are skipped. Availability probes still
+classify by HTTP status only: HTTP 200 is available even
+when the body reports a failed or incomplete response; that does not prove a review completed.
 
 **Providers:** Copilot is the default and recommended path (one flat-rate seat). `openai`
 and `anthropic` are supported but disabled by default; enable a provider in `config.json`
@@ -224,7 +245,7 @@ same rotation/preflight/consolidation. Harnesses are disabled by default; enable
 ```
 
 Invocations (flags verified against `claude --help` 2.1.x, `codex exec --help` 0.146.x,
-`opencode run --help` 1.17.x, and `pi --help` 0.85.x):
+`opencode run --help` 1.17.x, and `pi --help` 0.85–0.87):
 
 ```bash
 claude -p --no-session-persistence --output-format text --model <m> --system-prompt <standards> \
@@ -233,9 +254,9 @@ codex exec -m <m> --ephemeral --skip-git-repo-check -C <repo> --color never - -s
        --ignore-user-config --disable shell_tool --disable unified_exec \
        --disable code_mode_host --disable apps                                          # prompt on stdin
 opencode run -m <provider/model> --agent plan --format default --dir <repo> --pure -- <prompt>
-pi -p --model <provider/model> --system-prompt <standards> --no-tools --no-extensions --no-skills \
+pi --print --model <provider/model> --system-prompt <standards> --no-tools --no-extensions --no-skills \
    --no-prompt-templates --no-themes --no-context-files --no-approve --no-session \
-   --append-system-prompt "" -- <prompt> </dev/null
+   --append-system-prompt ""                                                            # prompt on stdin
 ```
 
 **Read-only guarantees and their limits.** `claude` runs with `--safe-mode` (no CLAUDE.md,
@@ -295,21 +316,22 @@ branch-controlled code executing outside the permission layer, so cork refuses t
 OpenCode lane at all when either directory exists in the tree under review or in any
 directory above it (OpenCode walks every ancestor of its cwd), and reports it as a skipped
 reviewer — the message says whether the hit is the branch's or your own environment's. The
-auth probe applies the same refusal before it launches the CLI. Pi runs with **no tools at all**: its `read` and `find` accept
+auth probe runs from cork's own state directory, never the repo, so preflight cannot see
+branch-local plugins; it applies the same scan to that directory's ancestors (and the legacy
+`~/.opencode/` check) before it launches the CLI. Pi runs with **no tools at all**: its `read` and `find` accept
 absolute paths, so a read allowlist would still let a prompt-injected review reach other
 reviewers' `/tmp/cork-review-*` files. Its extensions, skills, prompt templates, themes,
 context files and ambient `APPEND_SYSTEM.md` are disabled too; it keeps no session, ignores
-project-local `.pi/` resources with `--no-approve`, and reads stdin from
-`/dev/null` so `-p` cannot wait forever for EOF on a held-open pipe. None can modify the repo (the manual checks in the
+project-local `.pi/` resources with `--no-approve`, and reads the prompt from stdin. None can modify the repo (the manual checks in the
 release PRs show `git status --porcelain` identical before and after). Codex and OpenCode have
 no system-prompt flag, so the standards are prepended to the prompt body under a
-`=== END OF REVIEW STANDARDS ===` separator. Claude and Pi receive the standards through
-`--system-prompt`; for Claude this is one
+`=== END OF REVIEW STANDARDS ===` separator. Claude and Pi receive the standards as one
 `--system-prompt` argument. Linux caps a single argument at 128 KiB, so a standards layer
-that large — or an OpenCode/Pi prompt that large, since those lanes pass the prompt as an
+that large — or an OpenCode prompt that large, since that lane passes the prompt as an
 argument — is refused by cork before the CLI runs and the lane is skipped with an explicit
-size message. Codex and claude take the prompt itself on stdin, so for them only the
-`--system-prompt` standards argument (claude's) is subject to the limit. **Trust boundary:** the
+size message. Codex, Claude and Pi take the prompt itself on stdin. Only Claude and Pi
+have a `--system-prompt` standards argument subject to that limit; Codex sends both the
+standards and task on stdin. **Trust boundary:** the
 reviewer follows instructions from the branch under review (`code-review/AGENTS.md`, file
 contents) with your local login, so a hostile branch could steer it into reading and quoting
 files it can reach (`--restricted` limits claude to the repo; codex has no file access,
@@ -348,6 +370,57 @@ iff its binary is found (on `PATH`, or at the configured absolute `bin` path) an
 succeeds — no model spend. A
 harness that exits non-zero, times out, or prints nothing is reported and skipped
 (`[codex/<m> returned no usable content — skipped]`); there is no retry.
+
+### High-effort Copilot + Claude Enterprise rotation
+
+The `claude/…` harness runs Claude Code directly as a subprocess using its existing login,
+not Cork's Copilot or Anthropic API credentials. No terminal manager or extra pane is needed.
+Before reviewing, confirm the intended account with the configured Claude binary's
+`--safe-mode --restricted auth status` and check for API/provider environment overrides
+without displaying secret values. Enterprise usage limits/pricing still apply. Never copy
+Claude OAuth tokens into Cork's API token store. Model IDs are passed through unchanged:
+Opus 5.5 is `claude-opus-5-5` in Claude Code, versus `claude-opus-5.5` on Copilot.
+
+Example hybrid rotation (merge these fields into your config):
+
+```json
+{
+  "count": 3,
+  "responses_effort": "high",
+  "providers": {
+    "copilot": {"enabled": true},
+    "claude": {"enabled": true, "extra_args": ["--effort", "high"]}
+  },
+  "rotation": [
+    {"provider": "copilot", "model": "gpt-6-sol"},
+    {"provider": "claude", "model": "claude-opus-5-5"},
+    {"provider": "copilot", "model": "gpt-6-astra"}
+  ]
+}
+```
+
+### GPT reviewers through an existing Pi login
+
+Enable `providers.pi` with `{"enabled": true, "extra_args": ["--thinking", "high"]}`.
+To switch the GPT lanes in the example above, disable `copilot` and replace its rotation
+entries with `{"provider": "pi", "model": "openai-codex/gpt-6-sol"}` and
+`{"provider": "pi", "model": "openai-codex/gpt-6-astra"}`. Leave the Claude entry unchanged.
+The full CLI reference is `--review-model pi/openai-codex/gpt-6-sol`.
+
+Pi 0.87.1 was verified with `--print --model <provider/model> --no-session` and
+`--system-prompt <standards>`, with the task on stdin. Cork disables tools, discovered
+extensions, skills, templates, themes, context files and project trust using Pi's
+`--no-*` flags, plus `--append-system-prompt ""` to suppress ambient `APPEND_SYSTEM.md`.
+The reviewer sees only the supplied prompt, not other reviewers' files.
+Pi retains its user-level provider configuration and login; explicit `extra_args` are
+trusted and must not re-enable resources/tools. Cork does not copy or export credentials.
+`openai-codex` uses Pi's ChatGPT OAuth login, distinct from OpenAI API-key billing; account
+limits still apply. Check `pi auth check --provider openai-codex --json --no-refresh` (no credentials
+flag), then smoke-test each model. Harness preflight runs that same login probe live
+(`pi: live (openai-codex)` / `logged-out — run …`), but it does not validate model access —
+a model the account cannot use still surfaces only at review time, so the smoke test stays.
+No Codex CLI login is required, and `responses_effort` does not control Pi: use `--thinking`
+as above.
 
 ### Interactive review (`interactive_review`, default on)
 

@@ -1,11 +1,11 @@
 ---
 name: cork-cross-review
-description: Use when the user says "cross review PR <n>", "cork cross-review", "cross-vendor review", or "multi-agent review of this PR/branch". The active Claude Code session acts as tech lead — it never reviews the code itself. It fans the PR's diff out to INDEPENDENT reviewers from vendors other than the author's (agentic harness lanes — claude/codex/opencode/pi — run read-only against a scratch worktree at the PR head, plus Copilot API models), consolidates their findings into one verdict, turns blocking issues into fix tasks, and re-reviews after each fix round until clean. The human merges.
+description: "Use when the user says \"cross review PR <n>\", \"cork cross-review\", \"cross-vendor review\", or \"multi-agent review of this PR/branch\". The active Claude Code session acts as tech lead — it never reviews the code itself. It fans the PR's diff out to INDEPENDENT reviewers from vendors other than the author's (agentic harness lanes — claude/codex/opencode/pi — run read-only against a scratch worktree at the PR head, plus Copilot API models), consolidates their findings into one verdict, turns blocking issues into fix tasks, and re-reviews after each fix round until clean. The human merges."
 ---
 
 # cork-cross-review — independent, cross-vendor PR verification
 
-**Version:** 0.15.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.16.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 **You are the tech lead, not the reviewer.** The author never signs off on their own work, and
 neither do you — a *different vendor's* model does. Your job is to gather the diff and its

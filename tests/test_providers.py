@@ -1,5 +1,6 @@
 import json, os, unittest, tempfile
 from pathlib import Path
+from unittest.mock import patch
 import orchestrate
 
 
@@ -46,6 +47,56 @@ class AnthropicExtractTest(unittest.TestCase):
 
     def test_empty_content(self):
         self.assertEqual(orchestrate._extract_anthropic_text({"content": []}), "")
+
+
+class CopilotRoutingTest(unittest.TestCase):
+    def test_routes_and_extracts_each_model_family(self):
+        cases = [
+            ("gpt-6-sol", True),
+            ("gpt-6-astra", True),
+            ("gpt-5.6-sol", True),
+            ("gpt-5.5", True),
+            ("codex-mini", True),
+            ("claude-opus-5.5", False),
+            ("gpt-4.1", False),
+        ]
+        for model, responses in cases:
+            with self.subTest(model=model):
+                body = ({"output": [{"type": "message", "content": [
+                    {"type": "output_text", "text": "review findings"}]}]}
+                    if responses else {"choices": [
+                        {"message": {"content": "review findings"}}]})
+                with patch.object(orchestrate, "load_config", return_value={"responses_effort": "high"}), \
+                     patch.object(orchestrate, "_provider_headers", return_value={}), \
+                     patch.object(orchestrate, "_http_post_json",
+                                  return_value=(200, body)) as post:
+                    result = orchestrate._call_and_extract(
+                        "copilot", model, "standards", "diff", max_out=16)
+                self.assertEqual(result, (200, "review findings", None))
+                url, _, payload, _ = post.call_args.args
+                endpoint = "/responses" if responses else "/chat/completions"
+                self.assertEqual(url, orchestrate.COPILOT_BASE + endpoint)
+                self.assertEqual(payload["model"], model)
+                if responses:
+                    self.assertEqual(payload["input"], "diff")
+                    self.assertEqual(payload["max_output_tokens"], 16)
+                    self.assertEqual(payload["reasoning"], {"effort": "high"})
+                else:
+                    self.assertEqual(payload["messages"][-1]["content"], "diff")
+                    self.assertEqual(payload["max_tokens"], 16)
+                    self.assertNotIn("reasoning_effort", payload)
+
+    def test_review_effort_uses_config_or_legacy_default(self):
+        for provider in ("copilot", "openai"):
+            for configured in (None, "low", "medium", "high"):
+                cfg = {} if configured is None else {"responses_effort": configured}
+                with self.subTest(provider=provider, configured=configured), \
+                     patch.object(orchestrate, "load_config", return_value=cfg), \
+                     patch.object(orchestrate, "_provider_headers", return_value={}), \
+                     patch.object(orchestrate, "_http_post_json", return_value=(200, {})) as post:
+                    orchestrate._openai_compatible_call(provider, "gpt-6-sol", "standards", "diff")
+                    self.assertEqual(post.call_args.args[2]["reasoning"],
+                                     {"effort": configured or "medium"})
 
 
 if __name__ == "__main__":

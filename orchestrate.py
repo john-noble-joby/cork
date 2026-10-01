@@ -69,6 +69,9 @@ _CORK_AUTH     = Path(os.environ.get("CORK_AUTH_FILE",
 # use). Overridable in case GitHub rotates it.
 _COPILOT_CLIENT_ID = os.environ.get("CORK_COPILOT_CLIENT_ID", "Iv1.b507a08c87ecfe98")
 _DEFAULT_CHAR_BUDGET = 192_000  # fallback if /models fetch fails
+_RESPONSES_MAX_OUTPUT = 32_000  # reasoning + findings share this ceiling
+_RESPONSES_EFFORTS = ("low", "medium", "high")
+_DEFAULT_RESPONSES_EFFORT = "medium"
 
 CONFIG_PATH = Path(os.environ.get("CORK_CONFIG_FILE",
                    str(Path.home() / ".config/cork/config.json")))
@@ -192,6 +195,18 @@ def _pi_auth_logged_out(result: subprocess.CompletedProcess, _model: str) -> boo
     payload = _pi_auth_payload(result)
     return (result.returncode == 1 and payload.get("status") == "not_ready"
             and payload.get("reason") != "provider_not_found")
+
+
+def _pi_auth_detail(result: subprocess.CompletedProcess, model: str) -> str:
+    # Pi speaks JSON: a structured reason wins; a ready probe names its provider; anything
+    # else (malformed or non-object output, even at exit 0) has no cause to report, and the
+    # model's provider must not be presented as one.
+    payload = _pi_auth_payload(result)
+    if payload.get("reason"):
+        return str(payload["reason"])
+    if _pi_auth_ready(result, model):
+        return str(payload.get("provider") or model.split("/", 1)[0])
+    return ""
 
 
 def _auth_detail(result: subprocess.CompletedProcess, model: str) -> str:
@@ -319,22 +334,24 @@ HARNESSES: dict[str, dict] = {
                        "logged_out": _opencode_auth_logged_out,
                        "detail": _auth_detail, "login": "opencode auth login"},
     },
-    "pi": {  # pi 0.85.x — verified against `pi --help`
+    "pi": {  # pi 0.85–0.87 — prompt-only blind review using Pi's own login; prompt on stdin
         "bin": "pi", "bin_env": "CORK_PI_BIN",
-        "argv": ["-p", "--model", "{model}"],
+        "argv": ["--print", "--model", "{model}"],
         # Prompt-only: pi's `read`/`find` take absolute paths, so a read allowlist cannot
         # confine it to the repo (it could read other reviewers' /tmp/cork-review-* files).
         # Ambient extensions/skills/templates/themes/context files and APPEND_SYSTEM.md
         # (via an empty --append-system-prompt) are all disabled.
         "read_only": ["--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates",
                       "--no-themes", "--no-context-files", "--no-approve", "--no-session",
-                      "--append-system-prompt", "", "--"],
-        "system_flag": "--system-prompt", "prompt_via": "arg", "timeout": 900,
+                      "--append-system-prompt", ""],
+        # stdin transport: only the --system-prompt standards argument is subject to the
+        # 128 KiB per-argument limit, not the prompt itself.
+        "system_flag": "--system-prompt", "prompt_via": "stdin", "timeout": 900,
         "model_ref_parts": 2,
         "auth_probe": {"argv": ["auth", "check", "--provider", "{model_provider}",
                                 "--json", "--no-refresh"],
                        "success": _pi_auth_ready, "logged_out": _pi_auth_logged_out,
-                       "detail": _auth_detail,
+                       "detail": _pi_auth_detail,
                        "login": "pi, then /login"},
     },
 }
@@ -349,6 +366,7 @@ DEFAULT_CONFIG = {
     "count": 3,
     "interactive_review": True,
     "default_standards": True,
+    "responses_effort": _DEFAULT_RESPONSES_EFFORT,
     "providers": {
         "copilot":   {"enabled": True},
         "openai":    {"enabled": False},
@@ -820,14 +838,10 @@ def _copilot_chat(payload: dict, timeout: int = 300) -> tuple[int, object]:
                            _copilot_headers(), payload, timeout)
 
 
-_RESPONSES_MAX_OUTPUT = 32_000      # ceiling, not a target — reasoning + findings share it
-_RESPONSES_EFFORT     = "medium"    # reasoning effort for gpt-5.x review calls
-
-
 def _uses_responses_api(model: str) -> bool:
-    # gpt-5.x and codex models are gated to the Responses endpoint on Copilot —
-    # /chat/completions returns 400 unsupported_api_for_model for them.
-    return model.startswith("gpt-5") or "codex" in model
+    # GPT-5, GPT-6, and codex models require the Responses endpoint on Copilot —
+    # /chat/completions is not supported for them.
+    return model.startswith(("gpt-5", "gpt-6")) or "codex" in model
 
 
 def _copilot_responses(payload: dict, timeout: int = 300) -> tuple[int, object]:
@@ -894,6 +908,8 @@ def _validate_config(cfg: dict) -> None:
         fail("config.interactive_review must be true or false (a JSON boolean)")
     if not isinstance(cfg.get("default_standards", True), bool):
         fail("config.default_standards must be true or false (a JSON boolean)")
+    if cfg.get("responses_effort", _DEFAULT_RESPONSES_EFFORT) not in _RESPONSES_EFFORTS:
+        fail("config.responses_effort must be low, medium, or high")
 
 
 def _validate_model_ref(provider: str, model: object) -> None:
@@ -915,7 +931,7 @@ def _validate_harness_cfg(name: str, hc: dict) -> None:
     unknown = sorted(set(hc) - {"enabled", *_HARNESS_CONFIG_KEYS})
     if unknown:  # stderr: stdout of `auth status --json` / `config show` must stay parseable
         print(f"  ⚠ config.providers.{name}: ignoring unknown keys: {', '.join(unknown)} "
-              f"(only {', '.join(_HARNESS_CONFIG_KEYS)} are configurable; env/unset_env/"
+              f"(only enabled, {', '.join(_HARNESS_CONFIG_KEYS)} are configurable; env/unset_env/"
               f"refuse_paths are cork-enforced)", file=sys.stderr)
     if "bin" in hc and (not isinstance(hc["bin"], str) or not hc["bin"].strip()):
         fail(f"config.providers.{name}.bin must be a non-empty string")
@@ -1212,16 +1228,17 @@ def _budget_files(files: dict[str, str], budget: int,
     # Pack as many file contents as fit within `budget`, measured by `size` (characters
     # for API lanes, encoded bytes for arg-transported lanes — ordering and stopping must
     # use the same unit as the limit, or a small-in-chars multibyte file that is big in
-    # bytes would block an ASCII file behind it that fits). Smallest first, so small files
-    # always get in. Returns (file_block, included_count).
-    sorted_files = sorted(files.items(), key=lambda x: size(x[1]))
+    # bytes would block an ASCII file behind it that fits). Whole entries (path + fence)
+    # are what get emitted, so they are what gets sorted and charged, joins included:
+    # smallest entry first, so small files always get in. Returns (file_block, included_count).
+    entries = sorted((f"### {name}\n```\n{content}\n```" for name, content in files.items()), key=size)
     included, used = [], 0
-    for name, content in sorted_files:
-        entry = f"### {name}\n```\n{content}\n```"
-        if used + size(entry) > budget:
+    for entry in entries:
+        cost = size(entry) + (size("\n\n") if included else 0)
+        if used + cost > budget:
             break
         included.append(entry)
-        used += size(entry)
+        used += cost
     if not included:
         return "(files omitted — diff too large; see diff section)", 0
     block = "\n\n".join(included)
@@ -1240,7 +1257,7 @@ def _openai_compatible_call(provider: str, model: str, system: str,
         return _http_post_json(f"{base}/responses", headers, {
             "model": model, "instructions": system, "input": user_msg,
             "max_output_tokens": max_out or _RESPONSES_MAX_OUTPUT,
-            "reasoning": {"effort": _RESPONSES_EFFORT},
+            "reasoning": {"effort": load_config(quiet=True).get("responses_effort", _DEFAULT_RESPONSES_EFFORT)},
         }, timeout)
     payload = {
         "model": model,
@@ -1422,22 +1439,35 @@ def _harness_call(provider: str, model: str, system: str, user_msg: str,
 
 def _call_and_extract(provider: str, model: str, system: str,
                       user_msg: str, max_out: int | None = None,
-                      repo: str = "") -> tuple[int, str]:
-    # Returns (status, extracted_text) on 200, or (status, raw_body) on non-200.
+                      repo: str = "") -> tuple[int, str, str | None]:
+    # HTTP status, extracted text (raw body on error), optional Responses failure diagnostic.
+    # Preserve HTTP status so token-capped availability probes still accept HTTP 200.
     if provider in HARNESSES:
-        return _harness_call(provider, model, system, user_msg, repo)
+        status, text = _harness_call(provider, model, system, user_msg, repo)
+        return status, text, None
     if provider == "anthropic":
         status, body = _anthropic_call(model, system, user_msg, max_tokens=max_out or 8000)
         if status == 200:
             text = _extract_anthropic_text(body)
-            return status, text
-        return status, str(body)
+            return status, text, None
+        return status, str(body), None
     status, body = _openai_compatible_call(provider, model, system, user_msg, max_out=max_out)
     if status != 200:
-        return status, str(body)
-    text = (_extract_responses_text(body) if _uses_responses_api(model)
-            else _extract_chat_text(body))
-    return status, text
+        return status, str(body), None
+    if _uses_responses_api(model):
+        response_status = body.get("status")
+        # Only missing/null/empty-string statuses are compatibility responses. Other
+        # non-completed values, including falsy malformed statuses, are never findings.
+        if response_status not in (None, "", "completed"):
+            if response_status == "incomplete":
+                details = body.get("incomplete_details")
+                reason = details.get("reason") if isinstance(details, dict) else None
+            else:
+                error = body.get("error")
+                reason = (error.get("message") or error.get("code")) if isinstance(error, dict) else None
+            return status, "", f"{response_status} ({reason or 'unknown reason'})"
+        return status, _extract_responses_text(body), None
+    return status, _extract_chat_text(body), None
 
 
 # ── Preflight ────────────────────────────────────────────────────────────────
@@ -1490,7 +1520,8 @@ def _harness_auth_probe(provider: str, model: str) -> dict:
     except FileNotFoundError:
         result["status"] = "missing_binary"
         return result
-    except (OSError, ValueError):  # ValueError: a NUL byte in a config-supplied model string
+    except (OSError, ValueError) as e:  # ValueError: a NUL byte in a config-supplied model string
+        result["detail"] = str(e)  # e.g. an existing but unwritable state dir failing the scratch mkdtemp
         return result
     result["detail"] = spec["auth_probe"]["detail"](completed, model)
     if spec["auth_probe"]["success"](completed, model):
@@ -1509,7 +1540,7 @@ def _probe(provider: str, model: str, details: dict | None = None) -> str:
     # A cheap availability probe — cap output hard so it can't burn review-sized
     # quota (the classification only needs the HTTP status, not the content).
     try:
-        status, text = _call_and_extract(provider, model, "", "ok", max_out=16)
+        status, text, _ = _call_and_extract(provider, model, "", "ok", max_out=16)
     except (TimeoutError, socket.timeout):
         return "timeout"
     except urllib.error.URLError as e:
@@ -1680,7 +1711,7 @@ def review(provider: str, model: str, instructions: str, story: str,
               f"(diff-only for the rest)")
 
     if provider in HARNESSES:  # one shot; a dead harness is a skipped reviewer, never a traceback
-        status, text = _call_and_extract(provider, model, system, user_msg, repo=repo)
+        status, text, _ = _call_and_extract(provider, model, system, user_msg, repo=repo)
         if status == 200 and text:
             return text
         print(f"  → {provider}/{model}: {text or 'empty output'}"[:600], flush=True)
@@ -1688,12 +1719,16 @@ def review(provider: str, model: str, instructions: str, story: str,
 
     for attempt in range(max_attempts):
         try:
-            status, text = _call_and_extract(provider, model, system, user_msg)
+            status, text, response_failure = _call_and_extract(provider, model, system, user_msg)
         except TimeoutError:
             _retry_wait(attempt, max_attempts, "timeout"); continue
         except urllib.error.URLError as e:
             _retry_wait(attempt, max_attempts, f"connection error: {e.reason}"); continue
 
+        # A non-completed response is not a review, even with partial text. Do not retry
+        # these unchanged requests; retain the state and diagnostic in the skip instead.
+        if response_failure is not None:
+            return f"[{provider}/{model} review {response_failure} — skipped]"
         if status == 200 and text:
             return text
         if status == 200:  # empty content — retry then skip

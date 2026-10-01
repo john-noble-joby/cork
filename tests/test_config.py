@@ -43,6 +43,16 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             orchestrate.load_config()
 
+    def test_responses_effort_validation(self):
+        for effort in ("low", "medium", "high"):
+            with self.subTest(effort=effort):
+                cfg = {**orchestrate.DEFAULT_CONFIG, "responses_effort": effort}
+                self.path.write_text(json.dumps(cfg))
+                self.assertEqual(orchestrate.load_config()["responses_effort"], effort)
+        for effort in (None, True, 1, [], {}, "", "HIGH", " high", "max"):
+            with self.subTest(invalid=effort), self.assertRaises(SystemExit):
+                orchestrate._validate_config({**orchestrate.DEFAULT_CONFIG, "responses_effort": effort})
+
     def test_duplicate_rotation_fails(self):
         self.path.write_text(json.dumps({
             "rotation": [
@@ -64,6 +74,21 @@ class ConfigGetSetTest(unittest.TestCase):
     def tearDown(self):
         orchestrate.CONFIG_PATH = self._orig
         self.tmp.cleanup()
+
+    def test_get_responses_effort_default_legacy_and_override(self):
+        cases = (
+            (None, "medium"),
+            ({"rotation": [{"provider": "copilot", "model": "gpt-6-sol"}]}, "medium"),
+            ({**orchestrate.DEFAULT_CONFIG, "responses_effort": "high"}, "high"),
+        )
+        for config, expected in cases:
+            with self.subTest(config=config):
+                if config is not None:
+                    self.path.write_text(json.dumps(config))
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    orchestrate.cmd_config_get("responses_effort")
+                self.assertEqual(json.loads(buf.getvalue()), expected)
 
     def test_get_interactive_review_defaults_true_when_no_file(self):
         buf = io.StringIO()

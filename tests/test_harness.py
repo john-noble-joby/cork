@@ -1,4 +1,4 @@
-import inspect, io, json, os, shutil, subprocess, tempfile, unittest
+import ast, inspect, io, json, os, shutil, subprocess, tempfile, unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 import orchestrate
@@ -41,6 +41,19 @@ class HarnessBase(unittest.TestCase):
         self.tmp.cleanup()
 
 
+class HarnessRegistryTest(unittest.TestCase):
+    def test_harness_source_has_unique_literal_keys(self) -> None:
+        # Inspect source: constructing the dict has already discarded duplicate keys.
+        tree = ast.parse(Path(orchestrate.__file__).read_text(encoding="utf-8"))
+        table = next(node.value for node in tree.body
+                     if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+                     and node.target.id == "HARNESSES")
+        self.assertIsInstance(table, ast.Dict)
+        keys = [ast.literal_eval(key) for key in table.keys]
+        self.assertEqual(len(keys), len(set(keys)), f"Duplicate HARNESSES keys: {keys}")
+        self.assertEqual(keys.count("pi"), 1)
+
+
 class ArgvTest(HarnessBase):
     def test_codex_argv_read_only_stdin_cwd(self):
         fake = _FakeRun(); orchestrate.subprocess.run = fake
@@ -72,6 +85,30 @@ class ArgvTest(HarnessBase):
         self.assertNotIn("--bare", argv)       # --bare refuses OAuth logins; --safe-mode keeps auth
         self.assertNotIn("Bash", ",".join(argv))
 
+    def test_claude_high_effort_preserves_read_only_flags(self):
+        orchestrate.CONFIG_PATH.write_text('{"rotation":[{"provider":"claude","model":"opus"}],'
+                                           '"providers":{"claude":{"enabled":true,'
+                                           '"extra_args":["--effort","high"]}}}')
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        orchestrate._harness_call("claude", "opus", "SYS", "USER", "/repo")
+        argv = fake.calls[0][0]
+        ro = orchestrate.HARNESSES["claude"]["read_only"]
+        self.assertEqual(argv[-len(ro) - 2:], ["--effort", "high", *ro])
+
+    def test_pi_argv_uses_existing_login_high_effort_and_prompt_only(self) -> None:
+        orchestrate.CONFIG_PATH.write_text('{"rotation":[{"provider":"pi","model":"openai-codex/gpt-6-sol"}],'
+                                           '"providers":{"pi":{"enabled":true,"extra_args":["--thinking","high"]}}}')
+        os.environ["CORK_PI_BIN"] = "/opt/pi"
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        result = orchestrate._call_and_extract("pi", "openai-codex/gpt-6-sol", "SYS", "USER", repo="/repo")
+        argv, kw = fake.calls[0]
+        self.assertEqual(argv, ["/opt/pi", "--print", "--model", "openai-codex/gpt-6-sol",
+                                "--system-prompt", "SYS", "--thinking", "high", "--no-tools", "--no-extensions",
+                                "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files",
+                                "--no-approve", "--no-session", "--append-system-prompt", ""])
+        self.assertEqual((kw["cwd"], kw["input"], kw["timeout"]), ("/repo", "USER", 900))
+        self.assertEqual(result, (200, fake.out, None))
+
     def test_opencode_argv_read_only_prompt_arg_cwd(self):
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         orchestrate._harness_call("opencode", "github-copilot/gpt-5.5", "SYS", "USER", "/repo")
@@ -84,21 +121,32 @@ class ArgvTest(HarnessBase):
         self.assertNotIn("input", kw)
         self.assertIs(kw["stdin"], subprocess.DEVNULL)
 
-    def test_pi_argv_read_only_prompt_arg_devnull(self):
+    def test_pi_argv_read_only_prompt_on_stdin(self):
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         orchestrate._harness_call("pi", "glm-internal/glm-5.3-onprem", "SYS", "USER", "/repo")
         argv, kw = fake.calls[0]
         # Spelled out literally (not read from HARNESSES): pi must have NO tools — its
-        # read/find accept absolute paths — and no ambient resources.
-        self.assertEqual(argv, ["pi", "-p", "--model", "glm-internal/glm-5.3-onprem",
+        # read/find accept absolute paths — and no ambient resources. The prompt travels on
+        # stdin, so no `--` terminator and no prompt argv element.
+        self.assertEqual(argv, ["pi", "--print", "--model", "glm-internal/glm-5.3-onprem",
                                 "--system-prompt", "SYS",
                                 "--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates",
                                 "--no-themes", "--no-context-files", "--no-approve", "--no-session",
-                                "--append-system-prompt", "", "--", "USER"])
-        self.assertNotIn("--tools", argv)
-        self.assertEqual(kw["cwd"], "/repo")
-        self.assertNotIn("input", kw)
-        self.assertIs(kw["stdin"], subprocess.DEVNULL)
+                                "--append-system-prompt", ""])
+        self.assertNotIn("--tools", argv); self.assertNotIn("--", argv)
+        self.assertEqual((kw["cwd"], kw["input"]), ("/repo", "USER"))
+        self.assertNotIn("stdin", kw)
+
+    def test_pi_task_exceeding_argument_limit_is_sent_intact_on_stdin(self) -> None:
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        prompt = "x" * (orchestrate._MAX_ARG_BYTES + 1)
+        result = orchestrate._harness_call("pi", "openai-codex/gpt-6-sol", "SYS", prompt, "/repo")
+        self.assertEqual(result, (200, fake.out))
+        self.assertEqual(len(fake.calls), 1)
+        argv, kw = fake.calls[0]
+        self.assertEqual(kw["input"], prompt)
+        self.assertNotIn(prompt, argv)
+        self.assertEqual(argv[argv.index("--system-prompt") + 1], "SYS")
 
     def _isolated_state_dir(self):
         return orchestrate.STATE_DIR  # patched per test in HarnessBase.setUp
@@ -151,6 +199,20 @@ class ArgvTest(HarnessBase):
             self.assertEqual(orchestrate._harness_call(lane, "p/m", "S", "U", str(repo))[0], 200)
         shutil.rmtree(legacy)
         self.assertEqual(orchestrate._harness_call("opencode", "p/m", "S", "U", str(repo))[0], 200)  # no legacy dir at all
+
+    def test_probe_keeps_the_cause_when_scratch_setup_fails_after_state_dir_exists(self):
+        # STATE_DIR exists (mkdir exist_ok passes) but mkdtemp inside it fails: the probe must
+        # still say why, not just `unavailable (error)`.
+        state = self._isolated_state_dir(); state.mkdir(parents=True)
+        orig = orchestrate.tempfile.TemporaryDirectory
+        def boom(**kw): raise PermissionError(13, "Permission denied", str(state))
+        orchestrate.tempfile.TemporaryDirectory = boom
+        self.addCleanup(setattr, orchestrate.tempfile, "TemporaryDirectory", orig)
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        details = {}
+        self.assertEqual(orchestrate._probe("opencode", "gh/m", details), "error")
+        self.assertIn("Permission denied", details["detail"]); self.assertIn(str(state), details["detail"])
+        self.assertEqual(fake.calls, [])
 
     def test_unwritable_state_dir_makes_the_probe_error_not_crash(self):
         blocker = Path(self.tmp.name) / "blocker"; blocker.write_text("not a dir")
@@ -296,13 +358,26 @@ class ArgvTest(HarnessBase):
         self.assertLess(len(fake.calls[0][0][-1].encode()), orchestrate._MAX_ARG_BYTES)
         self.assertLess(len(calls), 25)  # binary search, not a proportional crawl (was >10k)
 
+    def test_budget_files_sorts_and_charges_whole_entries(self):
+        # A long-named empty file has a tiny *content* but a large *entry*; sorting by
+        # content put it first and its miss ended packing before a.py that fits.
+        long = "é" * 60
+        block, n = orchestrate._budget_files({long: "", "a.py": "xxxxx"}, 40)
+        self.assertEqual(n, 1); self.assertIn("### a.py", block)
+        # joins are charged: two 22-char entries need 46, not 44
+        two = {"a.py": "xxxxx", "b.py": "yyyyy"}
+        self.assertEqual(orchestrate._budget_files(two, 44)[1], 1)
+        self.assertEqual(orchestrate._budget_files(two, 46)[1], 2)
+        block, _ = orchestrate._budget_files(two, 46)
+        self.assertEqual(len(block), 46)                              # exactly the budget, joins included
+
     def test_arg_lane_packs_files_by_encoded_size_not_characters(self):
         # 70k chars of é are 140 KB — over the argv limit alone — while 80k ASCII chars fit.
         # Ordering/stopping by characters put the é file first and stopped there, so no
         # budget included the ASCII file; packing by encoded size does.
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         files = {"multibyte.md": "é" * 70_000, "ascii.py": "x" * 80_000}
-        orchestrate.review("pi", "p/m", "", "story", "diff", files, repo="/repo")
+        orchestrate.review("opencode", "p/m", "", "story", "diff", files, repo="/repo")  # arg-transported lane
         prompt = fake.calls[0][0][-1]
         self.assertIn("### ascii.py", prompt); self.assertNotIn("### multibyte.md", prompt)
         self.assertLess(len(prompt.encode("utf-8")), orchestrate._MAX_ARG_BYTES)
@@ -424,12 +499,12 @@ class ArgvTest(HarnessBase):
 
     def test_argv_limit_boundary_counts_the_nul_terminator(self):
         # Linux MAX_ARG_STRLEN (131072) includes the NUL: 131071 usable bytes pass, 131072 do not.
-        # Pi carries the standards via --system-prompt, so its prompt argv element is exactly
-        # user_msg (opencode prepends the standards to the prompt, which would skew the boundary).
+        # Pi's prompt is on stdin; its --system-prompt standards are exactly one argv element,
+        # so the boundary is measured there (opencode's prompt element also carries the standards).
         fake = _FakeRun(); orchestrate.subprocess.run = fake
-        status, _ = orchestrate._harness_call("pi", "p/m", "S", "x" * (orchestrate._MAX_ARG_BYTES - 1), "/repo")
+        status, _ = orchestrate._harness_call("pi", "p/m", "x" * (orchestrate._MAX_ARG_BYTES - 1), "U", "/repo")
         self.assertEqual((status, len(fake.calls)), (200, 1))
-        status, _ = orchestrate._harness_call("pi", "p/m", "S", "x" * orchestrate._MAX_ARG_BYTES, "/repo")
+        status, _ = orchestrate._harness_call("pi", "p/m", "x" * orchestrate._MAX_ARG_BYTES, "U", "/repo")
         self.assertEqual((status, len(fake.calls)), (413, 1))  # refused, no second exec
 
     def test_oversized_argv_element_is_refused_before_exec(self):
@@ -450,7 +525,8 @@ class ArgvTest(HarnessBase):
 
     def test_arg_transported_lanes_budget_files_to_fit_one_argument(self):
         # 192k-char default budget > 128 KiB argv cap: without a harness-aware budget the
-        # opencode/pi lanes would skip on ordinary diffs. Files are trimmed to fit instead.
+        # opencode lane (the only one whose prompt travels as an argument) would skip on
+        # ordinary diffs. Files are trimmed to fit instead.
         files = {f"f{i}.py": "x" * 40_000 for i in range(8)}        # 320k chars of file content
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         import io, contextlib
@@ -516,6 +592,13 @@ class FailurePathTest(HarnessBase):
         self.assertEqual(status, 404)
         self.assertIn("null", text.lower())
 
+    def test_pi_failed_or_empty_review_skips_once(self) -> None:
+        for rc, out in ((1, "partial output"), (0, "")):
+            with self.subTest(rc=rc):
+                fake = _FakeRun(rc=rc, out=out); orchestrate.subprocess.run = fake
+                self.assertEqual(self._review("pi"), "[pi/m returned no usable content — skipped]")
+                self.assertEqual(len(fake.calls), 1)
+
     def test_success_returns_stdout_once(self):
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         self.assertEqual(self._review(), fake.out)
@@ -544,14 +627,14 @@ class ApiRoutingUnaffectedTest(HarnessBase):
         orchestrate._anthropic_call = lambda *a, **k: (
             200, {"content": [{"type": "text", "text": "anth-ok"}]})
         self.assertEqual(orchestrate._call_and_extract("copilot", "gpt-4.1", "S", "U"),
-                         (200, "chat-ok"))
+                         (200, "chat-ok", None))
         self.assertEqual(orchestrate._call_and_extract("anthropic", "claude-x", "S", "U"),
-                         (200, "anth-ok"))
+                         (200, "anth-ok", None))
 
     def test_probe_api_provider_uses_http_probe(self):
         seen = []
         orchestrate._call_and_extract = lambda p, m, s, u, max_out=None, repo="": (
-            seen.append((p, m, max_out)) or (200, "ok"))
+            seen.append((p, m, max_out)) or (200, "ok", None))
         self.assertEqual(orchestrate._probe("copilot", "gpt-4.1"), "ok")
         self.assertEqual(seen, [("copilot", "gpt-4.1", 16)])
 
@@ -657,7 +740,7 @@ class ConfigAndProbeTest(HarnessBase):
         import contextlib
         base = {"rotation": [{"provider": "opencode", "model": "p/m"}]}
         for extra, expected in (({"env": {}},
-                                 "  ⚠ config.providers.opencode: ignoring unknown keys: env (only bin, extra_args, "
+                                 "  ⚠ config.providers.opencode: ignoring unknown keys: env (only enabled, bin, extra_args, "
                                  "timeout are configurable; env/unset_env/refuse_paths are cork-enforced)\n"),
                                 ({}, "")):
             with self.subTest(extra=extra):
@@ -903,19 +986,29 @@ class AuthProbeTest(HarnessBase):
         self.assertEqual(details["detail"], "provider_not_found")
 
     def test_pi_logged_out_requires_rc1_not_ready_json(self):
+        # (fake, label, expected detail): an error verdict never presents the model's provider
+        # as its cause — only a structured reason survives, else the detail is empty.
         cases = (
-            (_FakeRun(rc=1, out="", err="provider failed"), "non-JSON rc1"),
-            (_FakeRun(rc=0, out="", err="provider failed"), "non-JSON rc0"),
-            (_FakeRun(rc=1, out="[]"), "non-object JSON rc1"),
+            (_FakeRun(rc=1, out="", err="provider failed"), "non-JSON rc1", ""),
+            (_FakeRun(rc=0, out="", err="provider failed"), "non-JSON rc0", ""),
+            (_FakeRun(rc=0, out="garbage"), "malformed JSON rc0", ""),
+            (_FakeRun(rc=1, out="[]"), "non-object JSON rc1", ""),
+            (_FakeRun(rc=0, out="[]"), "non-object JSON rc0", ""),
             (_FakeRun(rc=0, out='{"status":"not_ready","reason":"missing_credentials"}'),
-             "not_ready rc0"),
+             "not_ready rc0", "missing_credentials"),
             (_FakeRun(rc=1, out='{"status":"ready","provider":"glm-internal"}'),
-             "ready rc1"),
+             "ready rc1", ""),
         )
-        for fake, label in cases:
+        for fake, label, detail in cases:
             with self.subTest(case=label):
                 orchestrate.subprocess.run = fake
-                self.assertEqual(orchestrate._probe("pi", "glm-internal/model"), "error")
+                details = {}
+                self.assertEqual(orchestrate._probe("pi", "glm-internal/model", details), "error")
+                self.assertEqual(details["detail"], detail)
+        orchestrate.subprocess.run = _FakeRun(rc=0, out='{"status":"ready","provider":"glm-internal"}')
+        details = {}
+        self.assertEqual(orchestrate._probe("pi", "glm-internal/model", details), "ok")
+        self.assertEqual(details["detail"], "glm-internal")      # a ready probe still names its provider
 
     def test_each_lane_logged_out_and_not_installed(self):
         for lane in orchestrate.HARNESSES:
@@ -978,7 +1071,7 @@ class AuthProbeTest(HarnessBase):
 
     def test_preflight_reports_harness_after_selection_count_is_full(self):
         original = orchestrate._call_and_extract
-        orchestrate._call_and_extract = lambda *a, **k: (200, "ok")
+        orchestrate._call_and_extract = lambda *a, **k: (200, "ok", None)
         orchestrate.subprocess.run = _FakeRun(out="Logged in using ChatGPT")
         try:
             buf = io.StringIO()
