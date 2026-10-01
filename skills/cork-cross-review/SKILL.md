@@ -177,8 +177,9 @@ scratch trees are yours and are discarded at the end.
 
 ## Step 3 — Slice large PRs
 
-A "slice" here is a **focus area**, not a smaller prompt: review-only mode has no pathspec or
-diff-range input, so **every lane always receives the full `<base>...HEAD` diff** (see issue #22).
+A "slice" here is a **focus area**, not a smaller prompt: review-only mode has no pathspec
+input, so **every lane receives the whole diff of the round** (the full `<base>...HEAD` diff on
+the first round; the `--diff-range <old>..<new>` delta on fix rounds, Step 7).
 Under ~1,500 diff lines: one slice, the whole diff. Above that, define slices by **concern** as
 disjoint pathspecs (e.g. `Server/**` vs `WebClient/**`, or migration vs handler vs tests), each
 with a contract excerpt and an "in-scope paths — ignore the rest" instruction in its story, plus
@@ -332,13 +333,12 @@ missed, run another lane on it.
 - **You are the author's session** (the PR is yours): apply the fixes yourself, run the gates,
   commit, push (never force-push), then **run the Step 8 cleanup block for this round** (its
   worktrees) and loop to Step 1, which allocates the next round's `$OUT`, `$WT` and
-  `$TID`. Review-only mode has no diff-range input: every
-  `--review-model` call receives the full `<base>...HEAD` diff, so each round is a full re-review.
-  Focus it on the delta through the story instead — write a new story file with the previous
-  round's blockers and the delta (`git diff --stat <old-head>..<new-head>`, plus the hunks if
-  small) and pass it with `--story-file`, asking each lane to confirm its own blockers are closed and to look for
-  regressions there first. Run the *same* lanes. A `--diff-range` input that makes rounds
-  delta-only is a registered follow-on.
+  `$TID`. Fix rounds review **only the delta**: add
+  `--diff-range "$OLD_HEAD..$NEW_HEAD"` to every lane's Step 4 command (the trees are checked
+  out at `$NEW_HEAD`, so changed-file contents are current), and write a new story file with the
+  previous round's blockers, asking each lane to confirm its own blockers are closed and to look
+  for regressions in the delta. Run the *same* lanes. Keep `--base-branch` off those commands —
+  the two are mutually exclusive.
 - **Someone else's PR**: post `$OUT/consolidated.md` as a PR comment (`gh pr comment $N
   --body-file …`) or hand it to the author as they prefer. Never push to their branch.
 - After **three** loops without reaching zero blockers, stop and escalate to the human with the
