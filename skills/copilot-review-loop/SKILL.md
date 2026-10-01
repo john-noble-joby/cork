@@ -44,18 +44,19 @@ returns `200 OK` and silently assigns nobody — no error, and Copilot never rev
 bot *is* assigned (a false "not requested" that stalls the loop; issue #19):
 
 ```bash
-gh api graphql -f query='{ repository(owner:"{owner}", name:"{repo}") { pullRequest(number:{pr}) {
-  reviewRequests(first:100) { nodes { requestedReviewer { ... on Bot { login } ... on User { login } ... on Team { slug } } } } } } }' \
+gh api graphql --paginate -f query='query($endCursor: String) { repository(owner:"{owner}", name:"{repo}") { pullRequest(number:{pr}) {
+  reviewRequests(first:100, after:$endCursor) { pageInfo { hasNextPage endCursor } nodes { requestedReviewer { ... on Bot { login } ... on User { login } ... on Team { slug } } } } } } }' \
   --jq '.data.repository.pullRequest.reviewRequests.nodes[].requestedReviewer | .login // .slug' \
-  | grep -qx 'copilot-pull-request-reviewer' && echo OK || echo "NOT REQUESTED — re-check login"
+  | grep -qxE 'copilot-pull-request-reviewer(\[bot\])?' && echo OK || echo "NOT REQUESTED — re-check login"
 ```
 
-`first:100` is GitHub's page maximum and far above any real reviewer list (if a PR somehow has
-more than 100 pending requests, page with `pageInfo { hasNextPage endCursor }` before trusting a
-miss). `grep -x` matches the whole line: GraphQL reports the bot's login as
-`copilot-pull-request-reviewer` (no `[bot]` suffix), and a prefix match would also accept an
-unrelated account that merely starts with those words. Team requests surface as a `slug`, so the
-`// .slug` fallback keeps the list complete without a `null` line.
+`--paginate` with the `$endCursor` variable and `pageInfo` walks every page, so a bot queued
+behind any number of other reviewers is still found (a bare `first:N` would miss it past the
+first page). `grep -xE` matches the **whole** line against the bot's login — GraphQL reports it
+as `copilot-pull-request-reviewer`, and the `(\[bot\])?` alternative accepts the suffixed form
+should it ever appear — so an unrelated account that merely starts with those words cannot pass.
+Team requests surface as a `slug`; the `// .slug` fallback keeps the list complete without a
+`null` line.
 
 If it didn't stick, you almost certainly used the display name instead of the bot login — re-run
 with `copilot-pull-request-reviewer[bot]`. Don't start the loop until this prints `OK`. (The same
