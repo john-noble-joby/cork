@@ -32,7 +32,7 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 
 - Fix steps run with full context (worktree state, prior decisions, the whole conversation) — a cold `claude --print` had none of that.
 - The user sees the work happen live and can interject.
-- Blind-review property is preserved: each `--review-model` call is stateless — the reviewer sees only the story + diff + changed files + AGENTS.md, never prior review text.
+- Blind-review property is preserved: each `--review-model` call is stateless — the prompt carries the story + diff + changed files + AGENTS.md and never prior review text. API and prompt-only lanes see nothing else; tree-capable harnesses (`claude`, `opencode`) can additionally read the repo from their working directory, still read-only.
 
 ## When invoked, do this
 
@@ -151,12 +151,17 @@ Dispatch concurrently, then collect when all return:
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
+# The story every reviewer judges against: the PR body's acceptance section, the Linear story the
+# branch names, or one the user gives you. Write it once; without it the lanes only get the generic
+# "Review the branch changes for <ticket>." fallback (or a stale checkpoint if <ticket> has one).
+OUTDIR=$(mktemp -d /tmp/cork-review.XXXXXX)   # per-run dir: concurrent runs never share story or report files
+STORY="$OUTDIR/story.md"                      # <- fill from the PR body / ticket / user before fanning out
 # PREFLIGHT_MODELS is the space-separated list of "provider/model" lines from Step 0 preflight
 for M in $PREFLIGHT_MODELS; do
   safe="${M//\//-}"
   python3 "$CORK_HOME/orchestrate.py" "${TICKET:-REVIEW}" {WORKTREE} \
-    --review-model "$M" --base-branch {BASE} --skip-validation \
-    > "/tmp/cork-review-${safe}.txt" 2>&1 &
+    --review-model "$M" --story-file "$STORY" --base-branch {BASE} --skip-validation \
+    > "$OUTDIR/review-${safe}.txt" 2>&1 &
 done
 wait
 ```

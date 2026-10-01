@@ -28,7 +28,7 @@ class ReviewStoryTest(unittest.TestCase):
             "done": {"summary": "done checkpoint story"},
             "summary": "legacy checkpoint story",
         }
-        orchestrate._call_and_extract = lambda *a, **k: (200, "review ok")
+        orchestrate._call_and_extract = lambda *a, **k: (200, "review ok", None)
         orchestrate._probe = lambda *a, **k: self.fail("probe called before story validation")
 
     def tearDown(self):
@@ -81,7 +81,7 @@ class ReviewStoryTest(unittest.TestCase):
 
         def fake_http(provider, model, system, user_msg, max_out=None, repo=""):
             seen["prompt"] = user_msg
-            return 200, "review ok"
+            return 200, "review ok", None
 
         orchestrate._call_and_extract = fake_http
         output = io.StringIO()
