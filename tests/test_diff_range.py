@@ -24,7 +24,8 @@ class ReviewDiffSourceTest(unittest.TestCase):
         self.c1 = _git(self.repo, "rev-parse", "HEAD")
         (self.repo / "a.py").write_text("a = 2\n"); (self.repo / "b.py").write_text("b = 1\n")
         _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "c2"); self.c2 = _git(self.repo, "rev-parse", "HEAD")
-        (self.repo / "b.py").write_text("b = 2\n"); _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "c3")
+        (self.repo / "b.py").write_text("b = 2\n"); (self.repo / "café.py").write_text("c = 1\n")
+        _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "c3")
         self.c3 = _git(self.repo, "rev-parse", "HEAD")
         self._originals = {n: getattr(orchestrate, n) for n in ("CONFIG_PATH", "load_agent_instructions", "_call_and_extract", "_probe")}
         orchestrate.CONFIG_PATH = Path(self.tmp.name) / "config.json"
@@ -55,6 +56,7 @@ class ReviewDiffSourceTest(unittest.TestCase):
         prompt, out = self._review(diff_range=f"{self.c2}..{self.c3}")
         self.assertIn("+b = 2", prompt); self.assertNotIn("+a = 2", prompt)          # delta only
         self.assertIn("### b.py", prompt); self.assertNotIn("### a.py", prompt)       # changed-files set follows the range
+        self.assertIn("### café.py", prompt)        # git C-quotes this name in plain --name-only output
         self.assertIn(f"vs {self.c2}..{self.c3}", out)
         prompt, _ = self._review(diff_range=f"{self.c1}...{self.c3}")                # three-dot form accepted
         self.assertIn("+a = 2", prompt); self.assertIn("### a.py", prompt)
@@ -66,6 +68,19 @@ class ReviewDiffSourceTest(unittest.TestCase):
         self.assertIn("+a = 2", prompt); self.assertIn("### a.py", prompt); self.assertIn("### b.py", prompt)
         self.assertNotIn("+b = 2", prompt)
         self.assertIn(f"vs diff file {patch}", out)
+        # git's default output C-quotes non-ASCII headers: +++ "b/caf\303\251.py"
+        quoted = Path(self.tmp.name) / "quoted.patch"
+        text = _git(self.repo, "diff", f"{self.c2}..{self.c3}") + "\n"
+        self.assertIn('+++ "b/caf\\303\\251.py"', text)      # confirm git really quotes it
+        quoted.write_text(text)
+        prompt, _ = self._review(diff_file=str(quoted))
+        self.assertIn("### café.py", prompt); self.assertIn("### b.py", prompt)
+
+    def test_unquote_git_path(self):
+        self.assertEqual(orchestrate._unquote_git_path("caf\\303\\251.py"), "café.py")
+        self.assertEqual(orchestrate._unquote_git_path("a\\tb\\\"c\\\\d"), 'a\tb"c\\d')
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            orchestrate._unquote_git_path("bad\\q")
 
     def test_range_and_file_errors_are_clean(self):
         self._fails("must be A..B or A...B", diff_range=self.c3)

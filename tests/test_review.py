@@ -26,13 +26,13 @@ class ReviewDiffTest(unittest.TestCase):
         )
 
     def test_changed_files_branch_uses_merge_base(self):
-        with patch.object(orchestrate.subprocess, "check_output", return_value="") as check:
+        with patch.object(orchestrate.subprocess, "check_output", return_value=b"") as check:
             self.assertEqual(orchestrate.changed_files_branch("/repo", "origin/main"), {})
 
+        # merge-base diff, NUL-delimited bytes (git C-quotes non-ASCII names otherwise)
         check.assert_called_once_with(
-            ["git", "diff", "origin/main...HEAD", "--name-only"],
+            ["git", "diff", "origin/main...HEAD", "--name-only", "-z"],
             cwd="/repo",
-            text=True,
         )
 
     def test_cmd_review_rejects_unresolved_base_before_diff(self):

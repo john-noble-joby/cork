@@ -1136,11 +1136,15 @@ def git_diff_branch(cwd: str, base: str) -> str:
     )
 
 
+def _git_changed_names(cwd: str, *diff_args: str) -> list[str]:
+    # NUL-delimited and decoded as filesystem paths: with the default core.quotePath, plain
+    # `--name-only` C-quotes a name like café.py into "caf\303\251.py", which no file matches.
+    raw = subprocess.check_output(["git", "diff", *diff_args, "--name-only", "-z"], cwd=cwd)
+    return [os.fsdecode(part) for part in raw.split(b"\0") if part]
+
+
 def changed_files_branch(cwd: str, base: str) -> dict[str, str]:
-    names = subprocess.check_output(
-        ["git", "diff", f"{base}...HEAD", "--name-only"], cwd=cwd, text=True
-    ).strip().splitlines()
-    return _file_contents(cwd, names)
+    return _file_contents(cwd, _git_changed_names(cwd, f"{base}...HEAD"))
 
 
 def _split_range(rng: str) -> tuple[str, str]:
@@ -1170,10 +1174,30 @@ def git_diff_range(cwd: str, rng: str) -> str:
 
 
 def changed_files_range(cwd: str, rng: str) -> dict[str, str]:
-    names = subprocess.check_output(
-        ["git", "diff", rng, "--name-only"], cwd=cwd, text=True
-    ).strip().splitlines()
-    return _file_contents(cwd, names)
+    return _file_contents(cwd, _git_changed_names(cwd, rng))
+
+
+_GIT_ESCAPES = {b"n": b"\n", b"t": b"\t", b"r": b"\r", b"a": b"\a", b"b": b"\b", b"f": b"\f",
+                b"v": b"\v", b'"': b'"', b"\\": b"\\"}
+
+
+def _unquote_git_path(quoted: str) -> str:
+    # Reverse git's C-style quoting of a path ("caf\303\251.py", "a\tb", "say \"hi\""):
+    # \ooo is an octal byte, the usual \n \t \" \\ escapes apply, the result is bytes
+    # decoded as a filesystem path.
+    out = bytearray(); i = 0; raw = quoted.encode("utf-8", "surrogateescape")
+    while i < len(raw):
+        ch = raw[i:i + 1]
+        if ch != b"\\":
+            out += ch; i += 1; continue
+        nxt = raw[i + 1:i + 2]
+        if nxt.isdigit() and raw[i + 1:i + 4].isdigit() and len(raw[i + 1:i + 4]) == 3:
+            out.append(int(raw[i + 1:i + 4], 8)); i += 4
+        elif nxt in _GIT_ESCAPES:
+            out += _GIT_ESCAPES[nxt]; i += 2
+        else:
+            fail(f"unrecognised escape in quoted git path {quoted!r}")
+    return os.fsdecode(bytes(out))
 
 
 def read_diff_file(path: str) -> tuple[str, list[str]]:
@@ -1186,7 +1210,11 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
         text = p.read_text(encoding="utf-8")
     except (OSError, UnicodeError, RuntimeError) as e:
         fail(f"Cannot read diff file {p}: {e}")
-    names = [m.group(1) for m in re.finditer(r"(?m)^\+\+\+ b/(.+)$", text)]
+    # Headers are either `+++ b/<path>` or, for names git C-quotes (non-ASCII, tabs, quotes,
+    # backslashes), `+++ "b/<escaped>"` — both are what `git diff` writes by default.
+    names = [_unquote_git_path(q) if q is not None else plain
+             for q, plain in re.findall(r'(?m)^\+\+\+ (?:"b/((?:[^"\\]|\\.)*)"|b/(.+))$', text)
+             for q in [q or None]]
     # A patch is caller-supplied input: its paths must stay inside the repo, or the reviewer
     # prompt would carry the contents of arbitrary files (`+++ b/../../etc/passwd`).
     for name in names:

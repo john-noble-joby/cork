@@ -204,10 +204,10 @@ is for. Prefer API and prompt-only lanes for breadth.
 
 ```bash
 BASE=$(jq -r .baseRefName "$OUT/pr.json")
-# What each lane diffs. First round: the whole PR vs its base. Fix rounds (Step 7): only the
-# delta between the previous and the new head — the two are mutually exclusive flags.
-DIFF_ARGS=(--base-branch "origin/$BASE")                      # round 1
-# DIFF_ARGS=(--diff-range "$OLD_HEAD..$NEW_HEAD")             # fix rounds, set in Step 7
+# What each lane diffs. First round: the whole PR vs its base. Fix rounds: only the delta
+# between the previous and the new head — Step 7 sets DIFF_ARGS to that range BEFORE looping
+# back here, so the default is only applied when nothing has set it yet.
+[ -n "${DIFF_ARGS+x}" ] || DIFF_ARGS=(--base-branch "origin/$BASE")   # round 1 default
 SLICE=whole                     # or the slice's name: every report file carries it, so a reviewer
                                 # reused on another slice never overwrites its earlier report
 # The story every lane receives (--story-file): contract + scope + the verbatim rule below.
