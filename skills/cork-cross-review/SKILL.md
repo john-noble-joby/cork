@@ -185,11 +185,15 @@ disjoint pathspecs (e.g. `Server/**` vs `WebClient/**`, or migration vs handler 
 with a contract excerpt and an "in-scope paths — ignore the rest" instruction in its story, plus
 one **seams** slice whose story says "review only the interactions between the parts; ignore tests
 and docs". The per-slice patch below is for *your* reading when you consolidate and attribute
-findings — no lane consumes it. Above ~5,000 lines the prompt budget will truncate file contents
-regardless of slicing, so tell the user the PR should be split before review.
+findings — no lane consumes it. It must cover the **same round diff the lanes see**: the whole
+PR on round 1, only the `OLD_HEAD..NEW_HEAD` delta on a fix round (Step 7 sets `ROUND_RANGE`
+alongside `DIFF_ARGS`), otherwise you would be attributing delta-only lane reports against a
+full-PR patch. Above ~5,000 lines the prompt budget will truncate file contents regardless of
+slicing, so tell the user the PR should be split before review.
 
 ```bash
-git -C "$WT" diff "origin/$(jq -r .baseRefName "$OUT/pr.json")...HEAD" -- <pathspec…> > "$OUT/slice-<name>.patch"
+[ -n "${ROUND_RANGE+x}" ] || ROUND_RANGE="origin/$(jq -r .baseRefName "$OUT/pr.json")...HEAD"   # round 1 default
+git -C "$WT" diff "$ROUND_RANGE" -- <pathspec…> > "$OUT/slice-<name>.patch"
 ```
 
 ## Step 4 — Fan out (all lanes in parallel, one attempt each)
@@ -345,7 +349,8 @@ missed, run another lane on it.
   OLD_HEAD=$HEAD                                     # the head this round reviewed (Step 2)
   # … Step 8 cleanup, then Step 1 (new $OUT/$WT/$TID, fetches the pushed head into pr.json) …
   NEW_HEAD=$(jq -r .headRefOid "$OUT/pr.json")
-  DIFF_ARGS=(--diff-range "$OLD_HEAD..$NEW_HEAD")    # replaces --base-branch for this round
+  ROUND_RANGE="$OLD_HEAD..$NEW_HEAD"                 # Step 3 slice patches cover the same delta
+  DIFF_ARGS=(--diff-range "$ROUND_RANGE")            # replaces --base-branch for this round
   ```
 
   Step 2 checks the trees out at `$NEW_HEAD`, so changed-file contents are current. Write a new

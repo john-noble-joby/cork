@@ -157,6 +157,14 @@ class ReviewDiffSourceTest(unittest.TestCase):
         self._fails("Cannot read diff file", diff_file=str(bad))
         empty = Path(self.tmp.name) / "empty.patch"; empty.write_text("\n")
         self._fails("No diff for", diff_file=str(empty))
+        # non-blank content with no diff structure must not reach the model as "the diff"
+        prose = Path(self.tmp.name) / "prose.patch"; prose.write_text("ordinary text\nmore text\n")
+        self._fails("no unified diff found", diff_file=str(prose))
+        self.assertNotIn("ordinary text", self.seen.get("prompt", ""))
+        # a binary or mode-only section has a `diff --git` line but no `+++`; that still counts as a diff
+        binary = Path(self.tmp.name) / "binary.patch"
+        binary.write_text("diff --git a/x.bin b/x.bin\nindex 0000000..1111111 100644\nBinary files a/x.bin and b/x.bin differ\n")
+        self.assertEqual(orchestrate.read_diff_file(str(binary))[1], [])
         # three-dot range with no merge base: a clean failure, not a CalledProcessError traceback
         _git(self.repo, "checkout", "-q", "--orphan", "island"); _git(self.repo, "rm", "-rfq", "."); (self.repo / "z.py").write_text("z\n")
         _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "island"); island = _git(self.repo, "rev-parse", "HEAD")

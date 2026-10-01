@@ -1233,9 +1233,12 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
     hunk_re = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
     names: list[str] = []
     old_left = new_left = 0   # hunk lines still to consume on each side
+    saw_section = False       # a `---`/`+++` pair, or a `diff --git` line (binary / mode-only sections have no `+++`)
     prev = ""
     for line in text.split("\n"):
         line = line.removesuffix("\r")
+        if line.startswith("diff --git ") and not (old_left > 0 or new_left > 0):
+            saw_section = True
         if old_left > 0 or new_left > 0:
             if line.startswith("\\"):           # `\ No newline at end of file` is not counted
                 pass
@@ -1248,11 +1251,14 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
         elif (h := hunk_re.match(line)):
             old_left = int(h.group(1) or 1); new_left = int(h.group(2) or 1)
         elif prev.startswith("--- ") and line.startswith("+++ "):
+            saw_section = True
             if (m := header_re.match(line)):
                 names.append(_unquote_git_path(m.group(1)) if m.group(1) is not None else m.group(2))
             elif not line.startswith("+++ /dev/null"):  # a deletion has no new path
                 fail(f"--diff-file {p}: header {line!r} lacks the b/ prefix — cork needs git-style a/ b/ paths")
         prev = line
+    if text.strip() and not saw_section:  # a blank file falls through to the shared empty-diff guard
+        fail(f"--diff-file {p}: no unified diff found (expected `---`/`+++` file headers or `diff --git` sections)")
     # A patch is caller-supplied input: its paths must stay inside the repo, or the reviewer
     # prompt would carry the contents of arbitrary files (`+++ b/../../etc/passwd`). Git
     # metadata is inside the repo but is not working-tree content: `.git/config` can hold
