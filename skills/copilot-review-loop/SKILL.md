@@ -45,10 +45,17 @@ bot *is* assigned (a false "not requested" that stalls the loop; issue #19):
 
 ```bash
 gh api graphql -f query='{ repository(owner:"{owner}", name:"{repo}") { pullRequest(number:{pr}) {
-  reviewRequests(first:10) { nodes { requestedReviewer { ... on Bot { login } ... on User { login } } } } } } }' \
-  --jq '.data.repository.pullRequest.reviewRequests.nodes[].requestedReviewer.login' \
-  | grep -q copilot-pull-request-reviewer && echo OK || echo "NOT REQUESTED — re-check login"
+  reviewRequests(first:100) { nodes { requestedReviewer { ... on Bot { login } ... on User { login } ... on Team { slug } } } } } } }' \
+  --jq '.data.repository.pullRequest.reviewRequests.nodes[].requestedReviewer | .login // .slug' \
+  | grep -qx 'copilot-pull-request-reviewer' && echo OK || echo "NOT REQUESTED — re-check login"
 ```
+
+`first:100` is GitHub's page maximum and far above any real reviewer list (if a PR somehow has
+more than 100 pending requests, page with `pageInfo { hasNextPage endCursor }` before trusting a
+miss). `grep -x` matches the whole line: GraphQL reports the bot's login as
+`copilot-pull-request-reviewer` (no `[bot]` suffix), and a prefix match would also accept an
+unrelated account that merely starts with those words. Team requests surface as a `slug`, so the
+`// .slug` fallback keeps the list complete without a `null` line.
 
 If it didn't stick, you almost certainly used the display name instead of the bot login — re-run
 with `copilot-pull-request-reviewer[bot]`. Don't start the loop until this prints `OK`. (The same
