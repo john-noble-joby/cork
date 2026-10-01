@@ -118,6 +118,18 @@ class CcrOverviewV2Test(unittest.TestCase):
             self.assertEqual(orchestrate._classify_reviews([_cop(body=heading)]),
                              "state=COMMENTED tc=0 verdict=approve suppressed=0 missed=0")
 
+    def test_legacy_block_phrase_is_heading_anchored_too(self):
+        # 'not ready to approve' in prose (quoting an earlier pass) must not flip an approval
+        self.assertEqual(
+            orchestrate._classify_reviews([_cop(body="### 🟢 Approval recommended\nThe earlier 'Not ready to approve' note is resolved.")]),
+            "state=COMMENTED tc=0 verdict=approve suppressed=0 missed=0")
+        self.assertEqual(
+            orchestrate._classify_reviews([_cop(body="Still not ready to approve, per the author.\n### 🔵 Needs a closer look")]),
+            "state=COMMENTED tc=0 verdict=none suppressed=0 missed=0")
+        self.assertEqual(
+            orchestrate._classify_reviews([_cop(body="### 🟡 Not ready to approve\nprose")]),
+            "state=COMMENTED tc=0 verdict=block suppressed=0 missed=0")
+
     def test_counts_come_from_section_markers_not_prose(self):
         # v2 marker is the collapsed block's <summary>; a sentence mentioning
         # 'Previously missed (0)' earlier in the body must not win the search

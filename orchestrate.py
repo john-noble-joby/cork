@@ -2196,11 +2196,12 @@ def _classify_reviews(reviews: list) -> str:
         return "state=NONE tc=0 verdict=none suppressed=0 missed=0"
     r = cop[-1]
     low = (r.get("body") or "").lower()
-    # Verdict phrases must be Markdown HEADINGS (`### 🟢 Approval recommended`): a line of
+    # Verdict phrases (all four, legacy and v2) must be Markdown HEADINGS
+    # (`### 🟢 Approval recommended`): a line of
     # prose that merely starts with the words ("Changes recommended earlier were applied.")
     # must not override the real verdict.
     heading = r"(?m)^#{1,6}[^\w\n]*"
-    if "not ready to approve" in low or re.search(heading + "changes recommended", low):
+    if re.search(heading + "not ready to approve", low) or re.search(heading + "changes recommended", low):
         verdict = "block"
     elif (r.get("state") == "APPROVED" or re.search(heading + "ready to approve", low)
           or re.search(heading + "approval recommended", low)):
