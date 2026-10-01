@@ -1264,11 +1264,14 @@ def _file_contents(cwd: str, names: list[str]) -> dict[str, str]:
         path = Path(cwd) / name
         if not path.exists():
             continue
-        if not path.resolve().is_relative_to(root):  # symlink or `..` pointing outside the tree
+        resolved = path.resolve()
+        if not resolved.is_relative_to(root):  # symlink or `..` pointing outside the tree
             fail(f"changed file {name!r} resolves outside the repository")
-        if not path.is_file():  # a changed submodule is listed as a directory; its pointer change is in the diff
+        if any(part.lower() == ".git" for part in resolved.relative_to(root).parts):  # `alias -> .git/config`
+            fail(f"changed file {name!r} resolves into git metadata")
+        if not resolved.is_file():  # a changed submodule is listed as a directory; its pointer change is in the diff
             continue
-        lines = path.read_text(errors="replace").splitlines()
+        lines = resolved.read_text(errors="replace").splitlines()
         if len(lines) <= MAX_FILE_LINES:
             contents[name] = "\n".join(lines)
         elif Path(name).suffix.lower() in {

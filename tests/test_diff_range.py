@@ -154,6 +154,12 @@ class ReviewDiffSourceTest(unittest.TestCase):
         with redirect_stderr(err), self.assertRaises(SystemExit):
             orchestrate._file_contents(str(self.repo), ["link.txt"])
         self.assertIn("resolves outside the repository", err.getvalue())
+        # ...and so is a symlink whose target stays inside the tree but lands in .git
+        (self.repo / "alias").symlink_to(self.repo / ".git" / "config")
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit):
+            orchestrate._file_contents(str(self.repo), ["alias"])
+        self.assertIn("resolves into git metadata", err.getvalue())
 
     def test_default_path_still_uses_base_branch(self):
         _git(self.repo, "branch", "base", self.c1)
