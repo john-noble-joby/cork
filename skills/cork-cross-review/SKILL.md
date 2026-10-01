@@ -83,7 +83,13 @@ Confirm before running:
 Stop here — do not proceed — if fewer than two vendor families remain after excluding the author's.
 
 Once confirmed, record the kept refs for the fan-out exactly as preflight printed them:
-`LANES="codex/gpt-5.6-sol claude/claude-opus-4.7 …"` (space-separated `provider/model`).
+`LANES="codex/gpt-5.6-sol claude/claude-opus-4.7 …"` (space-separated `provider/model`), and
+start the round state clean — a previous cross-review in the same shell may have left a fix-round
+range behind, which would make this PR's first round review the wrong commits:
+
+```bash
+unset DIFF_ARGS ROUND_RANGE     # Step 0 only: fix rounds loop back to Step 1, which must keep them
+```
 
 ## Step 1 — Diff and contract
 
@@ -210,7 +216,8 @@ is for. Prefer API and prompt-only lanes for breadth.
 BASE=$(jq -r .baseRefName "$OUT/pr.json")
 # What each lane diffs. First round: the whole PR vs its base. Fix rounds: only the delta
 # between the previous and the new head — Step 7 sets DIFF_ARGS to that range BEFORE looping
-# back here, so the default is only applied when nothing has set it yet.
+# back here, so the default is only applied when nothing has set it yet (Step 0 unsets both
+# for a fresh invocation, so a stale range never survives from an earlier PR).
 [ -n "${DIFF_ARGS+x}" ] || DIFF_ARGS=(--base-branch "origin/$BASE")   # round 1 default
 SLICE=whole                     # or the slice's name: every report file carries it, so a reviewer
                                 # reused on another slice never overwrites its earlier report
