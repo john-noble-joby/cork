@@ -14,6 +14,7 @@ class ReleaseScriptTest(unittest.TestCase):
         self.repo = Path(self.tmp.name) / "repo"
         (self.repo / "skills").mkdir(parents=True)
         shutil.copy(ROOT / "release.sh", self.repo / "release.sh")
+        (self.repo / "install.sh").write_text("#!/usr/bin/env bash\nSKILLS=(alpha beta)\n: install\n")
         (self.repo / "VERSION").write_text("1.2.3\n")
         for name in ("alpha", "beta"):
             d = self.repo / "skills" / name; d.mkdir()
@@ -88,12 +89,38 @@ class ReleaseScriptTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1); self.assertIn("headings alone do not count", r.stderr)
         self.assertEqual(self._snapshot(), before)
 
-    def test_refuses_when_no_skill_files_exist(self):
-        shutil.rmtree(self.repo / "skills"); (self.repo / "skills").mkdir()
+    def test_refuses_when_a_manifest_skill_is_missing(self):
+        shutil.rmtree(self.repo / "skills" / "beta")             # one of the two required skills gone
         before = self._snapshot()
         r = self._run("1.3.0")
-        self.assertEqual(r.returncode, 1); self.assertIn("no skills/*/SKILL.md", r.stderr)
+        self.assertEqual(r.returncode, 1); self.assertIn("skills/beta/SKILL.md is missing", r.stderr)
         self.assertEqual(self._snapshot(), before)          # VERSION and CHANGELOG untouched
+        shutil.rmtree(self.repo / "skills"); (self.repo / "skills").mkdir()   # all gone
+        before = self._snapshot()
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 1); self.assertIn("is missing", r.stderr)
+        self.assertEqual(self._snapshot(), before)
+
+    def test_refuses_a_skill_the_installer_does_not_ship(self):
+        (self.repo / "skills" / "gamma").mkdir(); (self.repo / "skills" / "gamma" / "SKILL.md").write_text("**Version:** 1.2.3\n")
+        before = self._snapshot()
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 1); self.assertIn("holds 3 SKILL.md files but install.sh lists 2", r.stderr)
+        self.assertEqual(self._snapshot(), before)
+
+    def test_refuses_without_install_manifest(self):
+        (self.repo / "install.sh").write_text("#!/usr/bin/env bash\n: no manifest here\n")
+        before = self._snapshot()
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 1); self.assertIn("no 'SKILLS=(", r.stderr)
+        self.assertEqual(self._snapshot(), before)
+
+    def test_unreleased_scan_stops_at_any_level_two_heading(self):
+        (self.repo / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n\n## Notes\n\nsome prose that is not a release note\n\n## [1.2.3] — 2026-01-01\n- old\n")
+        before = self._snapshot()
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 1); self.assertIn("no release notes", r.stderr)
+        self.assertEqual(self._snapshot(), before)
 
     def test_unreleased_heading_must_be_exact(self):
         log = (self.repo / "CHANGELOG.md").read_text()
@@ -135,8 +162,12 @@ class ReleaseScriptTest(unittest.TestCase):
                 self.assertEqual(self._snapshot(), before)
 
     def test_real_repo_is_release_ready_shape(self):
-        # the real tree: one stamp per skill, all equal to VERSION, an Unreleased heading present
+        # the real tree: the installer manifest matches skills/, one stamp per skill, all equal
+        # to VERSION, an Unreleased heading present
         version = (ROOT / "VERSION").read_text().strip()
+        manifest = next(l for l in (ROOT / "install.sh").read_text().splitlines() if l.startswith("SKILLS=("))
+        listed = sorted(manifest.removeprefix("SKILLS=(").removesuffix(")").split())
+        self.assertEqual(listed, sorted(p.parent.name for p in ROOT.glob("skills/*/SKILL.md")))
         for f in ROOT.glob("skills/*/SKILL.md"):
             lines = [l for l in f.read_text().splitlines() if l.startswith("**Version:** ")]
             self.assertEqual(len(lines), 1, f); self.assertTrue(lines[0].startswith(f"**Version:** {version} "), f)

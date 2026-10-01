@@ -34,13 +34,24 @@ grep -q "^## \[$NEW\]" "$CHANGELOG" && { echo "✗ CHANGELOG.md already has a [$
 
 # The Unreleased section must hold real notes: blank lines and bare `### Added`/`### Fixed`
 # headings do not count, so a note-free release is refused.
-unreleased_body="$(awk '$0 == "## [Unreleased]"{f=1; next} /^## \[/{f=0} f' "$CHANGELOG" | grep -v '^[[:space:]]*$' | grep -v '^[[:space:]]*#' || true)"
+unreleased_body="$(awk '$0 == "## [Unreleased]"{f=1; next} /^## /{f=0} f' "$CHANGELOG" | grep -v '^[[:space:]]*$' | grep -v '^[[:space:]]*#' || true)"
 [ -n "$unreleased_body" ] || { echo "✗ '## [Unreleased]' has no release notes (headings alone do not count) — nothing to release" >&2; exit 1; }
 
-# Every skill must carry exactly one stamp, and it must equal the current VERSION. A checkout
-# with no skills at all is damaged, not "zero stamps to update".
-shopt -s nullglob; skills=("$REPO"/skills/*/SKILL.md); shopt -u nullglob
-[ "${#skills[@]}" -gt 0 ] || { echo "✗ no skills/*/SKILL.md under $REPO — refusing to release from a damaged checkout" >&2; exit 1; }
+# The set of skills is the installer's manifest (SKILLS=(…) in install.sh): every listed skill
+# must be present with exactly one stamp equal to the current VERSION, and nothing is stamped
+# that the installer does not ship. A missing skill means a damaged checkout, not "one fewer
+# stamp to update".
+manifest_line="$(grep -m1 '^SKILLS=(' "$REPO/install.sh" || true)"
+[ -n "$manifest_line" ] || { echo "✗ $REPO/install.sh has no 'SKILLS=(…)' manifest line" >&2; exit 1; }
+read -r -a required <<< "${manifest_line#SKILLS=(}"; required[-1]="${required[-1]%)}"
+skills=()
+for name in "${required[@]}"; do
+  f="$REPO/skills/$name/SKILL.md"
+  [ -f "$f" ] || { echo "✗ skills/$name/SKILL.md is missing but install.sh lists '$name' — refusing to release from a damaged checkout" >&2; exit 1; }
+  skills+=("$f")
+done
+shopt -s nullglob; present=("$REPO"/skills/*/SKILL.md); shopt -u nullglob
+[ "${#present[@]}" -eq "${#skills[@]}" ] || { echo "✗ skills/ holds ${#present[@]} SKILL.md files but install.sh lists ${#skills[@]} — add the skill to install.sh or remove it" >&2; exit 1; }
 for f in "${skills[@]}"; do
   n="$(grep -c '^\*\*Version:\*\* ' "$f" || true)"
   [ "$n" = "1" ] || { echo "✗ $f: expected exactly one '**Version:**' line, found $n" >&2; exit 1; }
