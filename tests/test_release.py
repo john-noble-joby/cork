@@ -49,18 +49,42 @@ class ReleaseScriptTest(unittest.TestCase):
         (self.repo / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n\n## [1.2.3] — 2026-01-01\n- old\n")
         before = self._snapshot()
         r = self._run("1.3.0")
-        self.assertEqual(r.returncode, 1); self.assertIn("empty", r.stderr)
+        self.assertEqual(r.returncode, 1); self.assertIn("no release notes", r.stderr)
         self.assertEqual(self._snapshot(), before)
 
     def test_refuses_bad_or_same_version_and_existing_section(self):
         before = self._snapshot()
-        for args, code, needle in ((("1.3",), 2, "usage"), (("1.2.3",), 1, "already 1.2.3"), (("v1.3.0",), 2, "usage")):
+        for args, code, needle in ((("1.3",), 2, "usage"), (("1.2.3",), 1, "does not exceed"), (("v1.3.0",), 2, "usage"),
+                                   (("01.3.0",), 2, "usage"), (("1.03.0",), 2, "usage"), (("1.3.00",), 2, "usage"),
+                                   (("1.2.2",), 1, "does not exceed"), (("0.9.9",), 1, "does not exceed"), (("1.10.0",), 0, "")):
+            if code == 0:
+                continue  # 1.10.0 > 1.2.3 numerically (not lexically) — exercised in the happy-path test below
             with self.subTest(args=args):
                 r = self._run(*args); self.assertEqual(r.returncode, code); self.assertIn(needle, r.stderr)
         (self.repo / "CHANGELOG.md").write_text((self.repo / "CHANGELOG.md").read_text().replace("## [1.2.3]", "## [1.3.0] — x\n\n## [1.2.3]"))
         r = self._run("1.3.0"); self.assertEqual(r.returncode, 1); self.assertIn("already has a [1.3.0]", r.stderr)
         (self.repo / "CHANGELOG.md").write_text(before[Path("CHANGELOG.md")])
         self.assertEqual(self._snapshot(), before)
+
+    def test_numeric_precedence_not_lexical(self):
+        # "1.10.0" sorts before "1.2.3" as a string but is the newer version
+        r = self._run("1.10.0")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.repo / "VERSION").read_text(), "1.10.0\n")
+
+    def test_headings_only_unreleased_is_not_release_notes(self):
+        (self.repo / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n\n### Added\n\n### Fixed\n\n## [1.2.3] — 2026-01-01\n- old\n")
+        before = self._snapshot()
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 1); self.assertIn("headings alone do not count", r.stderr)
+        self.assertEqual(self._snapshot(), before)
+
+    def test_refuses_when_no_skill_files_exist(self):
+        shutil.rmtree(self.repo / "skills"); (self.repo / "skills").mkdir()
+        before = self._snapshot()
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 1); self.assertIn("no skills/*/SKILL.md", r.stderr)
+        self.assertEqual(self._snapshot(), before)          # VERSION and CHANGELOG untouched
 
     def test_refuses_stamp_drift_before_releasing(self):
         (self.repo / "skills" / "beta" / "SKILL.md").write_text("# beta\n\n**Version:** 1.2.2 — stale\n")

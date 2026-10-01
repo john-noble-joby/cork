@@ -10,20 +10,28 @@ set -euo pipefail
 
 REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 NEW="${1:-}"
-[[ "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "usage: release.sh X.Y.Z" >&2; exit 2; }
+# SemVer core: numeric identifiers without leading zeroes (01.2.3 is not a version).
+SEMVER='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+[[ "$NEW" =~ $SEMVER ]] || { echo "usage: release.sh X.Y.Z  (SemVer, no leading zeroes)" >&2; exit 2; }
 
 OLD="$(tr -d '[:space:]' < "$REPO/VERSION")"
-[ "$NEW" != "$OLD" ] || { echo "✗ VERSION is already $OLD" >&2; exit 1; }
+[[ "$OLD" =~ $SEMVER ]] || { echo "✗ VERSION file holds '$OLD', not a SemVer version" >&2; exit 1; }
+# The new version must have higher precedence: a release never moves the source of truth backwards.
+newer="$(python3 -c 'import sys; o, n = (tuple(map(int, v.split("."))) for v in sys.argv[1:]); print("yes" if n > o else "no")' "$OLD" "$NEW")"
+[ "$newer" = "yes" ] || { echo "✗ $NEW does not exceed the current VERSION $OLD" >&2; exit 1; }
 CHANGELOG="$REPO/CHANGELOG.md"
 grep -q "^## \[$NEW\]" "$CHANGELOG" && { echo "✗ CHANGELOG.md already has a [$NEW] section" >&2; exit 1; }
 grep -q '^## \[Unreleased\]' "$CHANGELOG" || { echo "✗ CHANGELOG.md has no '## [Unreleased]' heading" >&2; exit 1; }
 
-# The Unreleased section must hold something: a release with no notes is a mistake.
-unreleased_body="$(awk '/^## \[Unreleased\]/{f=1; next} /^## \[/{f=0} f' "$CHANGELOG" | grep -v '^[[:space:]]*$' || true)"
-[ -n "$unreleased_body" ] || { echo "✗ '## [Unreleased]' is empty — nothing to release" >&2; exit 1; }
+# The Unreleased section must hold real notes: blank lines and bare `### Added`/`### Fixed`
+# headings do not count, so a note-free release is refused.
+unreleased_body="$(awk '/^## \[Unreleased\]/{f=1; next} /^## \[/{f=0} f' "$CHANGELOG" | grep -v '^[[:space:]]*$' | grep -v '^[[:space:]]*#' || true)"
+[ -n "$unreleased_body" ] || { echo "✗ '## [Unreleased]' has no release notes (headings alone do not count) — nothing to release" >&2; exit 1; }
 
-# Every skill must carry exactly one stamp, and it must equal the current VERSION.
-mapfile -t skills < <(ls "$REPO"/skills/*/SKILL.md)
+# Every skill must carry exactly one stamp, and it must equal the current VERSION. A checkout
+# with no skills at all is damaged, not "zero stamps to update".
+shopt -s nullglob; skills=("$REPO"/skills/*/SKILL.md); shopt -u nullglob
+[ "${#skills[@]}" -gt 0 ] || { echo "✗ no skills/*/SKILL.md under $REPO — refusing to release from a damaged checkout" >&2; exit 1; }
 for f in "${skills[@]}"; do
   n="$(grep -c '^\*\*Version:\*\* ' "$f" || true)"
   [ "$n" = "1" ] || { echo "✗ $f: expected exactly one '**Version:**' line, found $n" >&2; exit 1; }
