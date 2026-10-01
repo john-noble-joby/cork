@@ -5,7 +5,7 @@ description: "Use when the user says to run the Copilot review loop on a branch 
 
 # Copilot Review Loop
 
-**Version:** 0.17.1 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.17.2 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 ## Overview
 
@@ -38,16 +38,22 @@ gh api repos/{owner}/{repo}/pulls/{pr}/requested_reviewers \
 ```
 
 **Verify the request stuck before polling.** A wrong login (e.g. the display name `Copilot`)
-returns `200 OK` and silently assigns nobody — no error, but `requested_reviewers` stays empty
-and Copilot never reviews. Confirm `201 Created` above, then check Copilot is actually assigned:
+returns `200 OK` and silently assigns nobody — no error, and Copilot never reviews. Confirm
+`201 Created` above, then check Copilot is actually assigned **via GraphQL** — the REST
+`requested_reviewers` endpoint omits Bot accounts from `.users`, so it reports `[]` even when the
+bot *is* assigned (a false "not requested" that stalls the loop; issue #19):
 
 ```bash
-gh api repos/{owner}/{repo}/pulls/{pr}/requested_reviewers \
-  --jq '.users[].login' | grep -qi copilot && echo OK || echo "NOT REQUESTED — re-check login"
+gh api graphql -f query='{ repository(owner:"{owner}", name:"{repo}") { pullRequest(number:{pr}) {
+  reviewRequests(first:10) { nodes { requestedReviewer { ... on Bot { login } ... on User { login } } } } } } }' \
+  --jq '.data.repository.pullRequest.reviewRequests.nodes[].requestedReviewer.login' \
+  | grep -q copilot-pull-request-reviewer && echo OK || echo "NOT REQUESTED — re-check login"
 ```
 
 If it didn't stick, you almost certainly used the display name instead of the bot login — re-run
-with `copilot-pull-request-reviewer[bot]`. Don't start the loop until this prints `OK`.
+with `copilot-pull-request-reviewer[bot]`. Don't start the loop until this prints `OK`. (The same
+query is how each loop tick tells a *pending* request — the bot still listed — from a submitted
+review: once Copilot submits, it drops out of `reviewRequests`.)
 
 Start the loop:
 
@@ -316,7 +322,7 @@ Update loop prompt with `iteration={N+1}` and reschedule.
 - **Worktree:** all edits go in the PR's worktree, not the main checkout.
 - **Re-request works** once Copilot has completed a review — same POST endpoint.
 - **Default max:** 3 passes unless the user specifies otherwise.
-- **Copilot's login is `copilot-pull-request-reviewer[bot]`** (display login `Copilot`, type `Bot`). Request it with that exact login, and match submitted reviews / threads with `.startswith('copilot-pull-request-reviewer')` so the `[bot]` suffix (or any future change to it) doesn't break detection. **Do not request with the display name `Copilot`** — it returns `200 OK` but silently assigns nobody (confirmed on joby/edge-fmt, 2026-05); only the `[bot]` login returns `201 Created` and actually assigns. Always verify the assignment stuck (Step 2) rather than trusting the POST not to error.
+- **Copilot's login is `copilot-pull-request-reviewer[bot]`** (display login `Copilot`, type `Bot`). Request it with that exact login, and match submitted reviews / threads with `.startswith('copilot-pull-request-reviewer')` so the `[bot]` suffix (or any future change to it) doesn't break detection. **Do not request with the display name `Copilot`** — it returns `200 OK` but silently assigns nobody (confirmed on joby/edge-fmt, 2026-05); only the `[bot]` login returns `201 Created` and actually assigns. Always verify the assignment stuck (Step 2, via GraphQL — REST `requested_reviewers` never lists bots) rather than trusting the POST not to error.
 - **Reply endpoint is PR-scoped:** use `repos/{owner}/{repo}/pulls/{pr}/comments/{comment_id}/replies` — the `{pr}` number is required. The shorter `repos/{repo}/pulls/comments/{id}/replies` form returns `404 Not Found` (confirmed on joby/edge-fmt, 2026-05).
 - **Reply-POST parsing:** the replies response can carry extra data or omit keys like `in_reply_to_id` — parse it defensively (`.get(...)`), and treat the `resolveReviewThread` GraphQL mutation as the reliable success signal, not the reply parse.
 - **Human comments too:** Copilot is not the only reviewer. After processing Copilot threads, also check for unresolved threads from human reviewers (the `reviewThreads` query without the `copilot-pull-request-reviewer` filter) — those still need a reply + fix/resolve, and the Copilot-only filter will silently skip them.
