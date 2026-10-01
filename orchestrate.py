@@ -1153,11 +1153,16 @@ def _split_range(rng: str) -> tuple[str, str]:
 
 
 def require_range(repo: str, rng: str) -> None:
-    for ref in _split_range(rng):
+    a, b = _split_range(rng)
+    for ref in (a, b):
         check = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
                                cwd=repo, capture_output=True, text=True)
         if check.returncode != 0:
             fail(f"--diff-range endpoint {ref!r} does not resolve")
+    if "..." in rng:  # the symmetric form diffs from the merge base, so one must exist
+        mb = subprocess.run(["git", "merge-base", a, b], cwd=repo, capture_output=True, text=True)
+        if mb.returncode != 0:
+            fail(f"--diff-range {rng!r}: no merge base between {a!r} and {b!r} (use A..B for a plain two-commit diff)")
 
 
 def git_diff_range(cwd: str, rng: str) -> str:
@@ -1182,15 +1187,23 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
     except (OSError, UnicodeError, RuntimeError) as e:
         fail(f"Cannot read diff file {p}: {e}")
     names = [m.group(1) for m in re.finditer(r"(?m)^\+\+\+ b/(.+)$", text)]
+    # A patch is caller-supplied input: its paths must stay inside the repo, or the reviewer
+    # prompt would carry the contents of arbitrary files (`+++ b/../../etc/passwd`).
+    for name in names:
+        if Path(name).is_absolute() or ".." in Path(name).parts or "\\" in name:
+            fail(f"--diff-file {p}: path {name!r} escapes the repository")
     return text, names
 
 
 def _file_contents(cwd: str, names: list[str]) -> dict[str, str]:
     contents: dict[str, str] = {}
+    root = Path(cwd).resolve()
     for name in names:
         path = Path(cwd) / name
         if not path.exists():
             continue
+        if not path.resolve().is_relative_to(root):  # symlink or `..` pointing outside the tree
+            fail(f"changed file {name!r} resolves outside the repository")
         lines = path.read_text(errors="replace").splitlines()
         if len(lines) <= MAX_FILE_LINES:
             contents[name] = "\n".join(lines)

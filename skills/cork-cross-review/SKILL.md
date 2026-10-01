@@ -204,6 +204,10 @@ is for. Prefer API and prompt-only lanes for breadth.
 
 ```bash
 BASE=$(jq -r .baseRefName "$OUT/pr.json")
+# What each lane diffs. First round: the whole PR vs its base. Fix rounds (Step 7): only the
+# delta between the previous and the new head — the two are mutually exclusive flags.
+DIFF_ARGS=(--base-branch "origin/$BASE")                      # round 1
+# DIFF_ARGS=(--diff-range "$OLD_HEAD..$NEW_HEAD")             # fix rounds, set in Step 7
 SLICE=whole                     # or the slice's name: every report file carries it, so a reviewer
                                 # reused on another slice never overwrites its earlier report
 # The story every lane receives (--story-file): contract + scope + the verbatim rule below.
@@ -220,7 +224,7 @@ for LANE in $LANES; do
   esac
   ( python3 "$CORK_HOME/orchestrate.py" "$TID" "$LANE_WT" \
         --review-model "$LANE" --story-file "$OUT/story.md" \
-        --base-branch "origin/$BASE" --skip-validation \
+        "${DIFF_ARGS[@]}" --skip-validation \
         > "$OUT/review-$SLICE-$safe.txt" 2> "$OUT/review-$SLICE-$safe.err"
     echo $? > "$OUT/review-$SLICE-$safe.status" ) &      # `wait` alone discards exit codes
 done
@@ -236,7 +240,8 @@ with that slice's contract excerpt and in-scope paths.
 **How the contract reaches a lane (0.17.0).** The story file written at the top of the block
 above travels with `--story-file`, so API and harness lanes receive the same acceptance contract
 without touching cork's checkpoints (the `$TID` positional is only a label for this run).
-`--review-model` has no pathspec/slice option, so every call receives the full branch diff: for a
+`--review-model` has no pathspec/slice option, so every call receives the whole diff of the round
+(the full `<base>...HEAD` diff on round 1, the `--diff-range` delta on fix rounds): for a
 sliced review, write a story file per slice with that slice's contract excerpt and in-scope paths,
 then pass it with `--story-file` in that slice's lane loop. Harness lanes run with the
 scratch worktree as their working directory — `orchestrate.py` passes it as `cwd` and applies the
@@ -333,12 +338,19 @@ missed, run another lane on it.
 - **You are the author's session** (the PR is yours): apply the fixes yourself, run the gates,
   commit, push (never force-push), then **run the Step 8 cleanup block for this round** (its
   worktrees) and loop to Step 1, which allocates the next round's `$OUT`, `$WT` and
-  `$TID`. Fix rounds review **only the delta**: add
-  `--diff-range "$OLD_HEAD..$NEW_HEAD"` to every lane's Step 4 command (the trees are checked
-  out at `$NEW_HEAD`, so changed-file contents are current), and write a new story file with the
-  previous round's blockers, asking each lane to confirm its own blockers are closed and to look
-  for regressions in the delta. Run the *same* lanes. Keep `--base-branch` off those commands —
-  the two are mutually exclusive.
+  `$TID`. Fix rounds review **only the delta**. Before leaving this round record its head, and
+  after the new Step 1 fetch set the lanes' diff to the range between the two:
+
+  ```bash
+  OLD_HEAD=$HEAD                                     # the head this round reviewed (Step 2)
+  # … Step 8 cleanup, then Step 1 (new $OUT/$WT/$TID, fetches the pushed head into pr.json) …
+  NEW_HEAD=$(jq -r .headRefOid "$OUT/pr.json")
+  DIFF_ARGS=(--diff-range "$OLD_HEAD..$NEW_HEAD")    # replaces --base-branch for this round
+  ```
+
+  Step 2 checks the trees out at `$NEW_HEAD`, so changed-file contents are current. Write a new
+  story file with the previous round's blockers, asking each lane to confirm its own blockers
+  are closed and to look for regressions in the delta, then run Step 4 with the *same* lanes.
 - **Someone else's PR**: post `$OUT/consolidated.md` as a PR comment (`gh pr comment $N
   --body-file …`) or hand it to the author as they prefer. Never push to their branch.
 - After **three** loops without reaching zero blockers, stop and escalate to the human with the

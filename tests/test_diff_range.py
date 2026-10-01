@@ -77,6 +77,27 @@ class ReviewDiffSourceTest(unittest.TestCase):
         self._fails("Cannot read diff file", diff_file=str(bad))
         empty = Path(self.tmp.name) / "empty.patch"; empty.write_text("\n")
         self._fails("No diff for", diff_file=str(empty))
+        # three-dot range with no merge base: a clean failure, not a CalledProcessError traceback
+        _git(self.repo, "checkout", "-q", "--orphan", "island"); _git(self.repo, "rm", "-rfq", "."); (self.repo / "z.py").write_text("z\n")
+        _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "island"); island = _git(self.repo, "rev-parse", "HEAD")
+        _git(self.repo, "checkout", "-q", "main")
+        self._fails("no merge base", diff_range=f"{island}...{self.c3}")
+        self._review(diff_range=f"{island}..{self.c3}")   # the two-dot form needs none
+
+    def test_patch_paths_cannot_escape_the_repository(self):
+        secret = Path(self.tmp.name) / "secret.txt"; secret.write_text("TOP SECRET\n")
+        for escaping in ("../secret.txt", "/etc/passwd", "sub/../../secret.txt"):
+            with self.subTest(path=escaping):
+                patch = Path(self.tmp.name) / "evil.patch"
+                patch.write_text(f"diff --git a/{escaping} b/{escaping}\n--- a/{escaping}\n+++ b/{escaping}\n@@ -1 +1 @@\n-x\n+y\n")
+                self._fails("escapes the repository", diff_file=str(patch))
+                self.assertNotIn("TOP SECRET", self.seen.get("prompt", ""))
+        # a symlink inside the tree that points outside is refused at content-read time, too
+        (self.repo / "link.txt").symlink_to(secret)
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit):
+            orchestrate._file_contents(str(self.repo), ["link.txt"])
+        self.assertIn("resolves outside the repository", err.getvalue())
 
     def test_default_path_still_uses_base_branch(self):
         _git(self.repo, "branch", "base", self.c1)
