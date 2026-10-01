@@ -7,7 +7,7 @@ description: "Use when the user says \"cork\" / \"run cork\" on a branch (full m
 
 "Cork" = **C**ode **Or**chestrator **R**eview **K**ickoff.
 
-**Version:** 0.16.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
+**Version:** 0.17.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this). Confirm the live version in Step 0 with `orchestrate.py --version`.
 
 **The active Claude session is the coding agent.** Unlike the legacy headless mode (where `orchestrate.py` spawned `claude --print` subprocesses), here *you* — the session with full codebase + conversation context — do the implementing and fixing. The orchestrator script is used only as a stateless review tool: `--review-model MODEL` returns one outside model's findings on the current branch diff.
 
@@ -32,7 +32,7 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 
 - Fix steps run with full context (worktree state, prior decisions, the whole conversation) — a cold `claude --print` had none of that.
 - The user sees the work happen live and can interject.
-- Blind-review property is preserved: each `--review-model` call is stateless — the reviewer sees only the diff + changed files + AGENTS.md, never prior review text.
+- Blind-review property is preserved: each `--review-model` call is stateless — the prompt carries the story + diff + changed files + AGENTS.md and never prior review text. API and prompt-only lanes see nothing else; tree-capable harnesses (`claude`, `opencode`) can additionally read the repo from their working directory, still read-only.
 
 ## When invoked, do this
 
@@ -151,17 +151,22 @@ Dispatch concurrently, then collect when all return:
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
+# The story every reviewer judges against: the PR body's acceptance section, the Linear story the
+# branch names, or one the user gives you. Write it once; without it the lanes only get the generic
+# "Review the branch changes for <ticket>." fallback (or a stale checkpoint if <ticket> has one).
+OUTDIR=$(mktemp -d /tmp/cork-review.XXXXXX)   # per-run dir: concurrent runs never share story or report files
+STORY="$OUTDIR/story.md"                      # <- fill from the PR body / ticket / user before fanning out
 # PREFLIGHT_MODELS is the space-separated list of "provider/model" lines from Step 0 preflight
 for M in $PREFLIGHT_MODELS; do
   safe="${M//\//-}"
   python3 "$CORK_HOME/orchestrate.py" "${TICKET:-REVIEW}" {WORKTREE} \
-    --review-model "$M" --base-branch {BASE} --skip-validation \
-    > "/tmp/cork-review-${safe}.txt" 2>&1 &
+    --review-model "$M" --story-file "$STORY" --base-branch {BASE} --skip-validation \
+    > "$OUTDIR/review-${safe}.txt" 2>&1 &
 done
 wait
 ```
 
-Each `--review-model` call is stateless and read-only — it only prints findings. Pass `--skip-validation` here to bypass both API availability requests and harness login probes already performed by preflight. Without this flag, harness validation re-runs the CLI's login probe (no model turn is spent) but still does not check model access. The positional ticket arg isn't used by review output, so any placeholder is fine when there's no ticket. Copilot and OpenAI API lanes auto-route `gpt-5.x`/`gpt-6.x`/codex to `/responses`; CLI harnesses retain their own provider routing. If a model errors, drop it and keep the rest (see *Model availability* under full mode).
+Each `--review-model` call is stateless and read-only — the prompt carries the story + diff + changed files + AGENTS.md (never prior review text), tree-capable harnesses may also read the worktree, and the call only prints findings. Pass `--skip-validation` here to bypass both API availability requests and harness login probes already performed by preflight (one premium request saved per API model); without this flag, harness validation re-runs the CLI's login probe (no model turn is spent) but still does not check model access. With `--story-file` the positional ticket id is only a label; without a story flag it selects the checkpoint story for that id and appears in the generic fallback, so never rely on a placeholder to carry the contract. Copilot and OpenAI API lanes auto-route `gpt-5.x`/`gpt-6.x`/codex to `/responses`; CLI harnesses retain their own provider routing. If a model errors, drop it and keep the rest (see *Model availability* under full mode).
 
 ### R2 — Consolidate into one report
 

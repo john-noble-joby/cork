@@ -2124,7 +2124,33 @@ def cmd_auth_print_token(as_json: bool = False) -> None:
     print(token)
 
 
-def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True) -> None:
+def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True,
+               story_file: str | None = None, story_text: str | None = None) -> None:
+    if story_file is not None:
+        story_path = Path(story_file)
+        try:
+            story_path = story_path.expanduser()  # RuntimeError for an unknown ~user
+            story = story_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError, RuntimeError) as e:
+            fail(f"Cannot read story file {story_path}: {e}")
+        story_source = f"--story-file {story_path}"
+    elif story_text is not None:
+        story = story_text
+        story_source = "--story"
+    else:
+        state = load_state(tid)
+        done_summary = state.get("done", {}).get("summary")
+        checkpoint_summary = state.get("summary")
+        if done_summary:
+            story, story_source = done_summary, "checkpoint done.summary"
+        elif checkpoint_summary:
+            story, story_source = checkpoint_summary, "checkpoint summary"
+        else:
+            story = f"Review the branch changes for {tid}."
+            story_source = "fallback"
+    if (story_file is not None or story_text is not None) and not story.strip():
+        fail(f"Story from {story_source} is empty.")
+
     _validate_model_ref(*_split_model_ref(model_ref))  # shape only; independent of --skip-validation
     require_base_ref(repo, base)
     diff = git_diff_branch(repo, base)
@@ -2139,14 +2165,11 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
     files = changed_files_branch(repo, base)
-    _st = load_state(tid)
-    story = (_st.get("done", {}).get("summary") or _st.get("summary")
-             or f"Review the branch changes for {tid}.")
+    print(f"Story: {story_source} ({len(story)} chars)")
     print(f"\n── Review: {provider}/{model} — {len(files)} files, "
           f"{len(diff.splitlines())} diff lines vs {base}\n", flush=True)
     print(review(provider, model, instructions, story, diff, files, _DEFAULT_CHAR_BUDGET,
                  repo=repo))
-
 
 def cmd_preflight() -> None:
     cfg = load_config()
@@ -2296,13 +2319,24 @@ def main() -> None:
                              "first `count` entries directly, with the conservative default "
                              "char budget. Saves provider quota on repeated runs.")
     parser.add_argument("--review-model", metavar="MODEL",
-                        help="Review-only mode: run ONE configured reviewer's (provider/model: "
-                             "copilot, openai, anthropic, or a claude/codex harness) review of the "
-                             "branch diff, print findings to stdout, and exit. Stateless "
-                             "(reviewer sees only diff + changed files + AGENTS.md). Used by "
+                        help="Review-only mode: run ONE API or harness model's review of the "
+                             "branch diff, print findings to stdout, and exit. Stateless: the "
+                             "prompt carries story + diff + changed files + AGENTS.md and never "
+                             "prior review text; tree-capable harnesses (claude, opencode) may also "
+                             "read the repo from their cwd. Used by "
                              "the session-driven cork skill, where the active Claude session "
                              "does the implementing and fixing instead of a headless subprocess.")
+    story_group = parser.add_mutually_exclusive_group()
+    story_group.add_argument("--story-file", metavar="PATH",
+                             help="Review-only story/acceptance contract read as UTF-8.")
+    story_group.add_argument("--story", metavar="TEXT",
+                             help="Review-only story/acceptance contract supplied inline. "
+                                  "Use --story=TEXT when TEXT starts with '-'.")
     args = parser.parse_args()
+    if (args.story_file is not None or args.story is not None) and not args.review_model:
+        # Otherwise a forgotten --review-model silently turns an intended review into a full
+        # implementation run that ignores the supplied story.
+        parser.error("--story/--story-file are review-only flags: add --review-model MODEL")
 
     if args.status:
         cmd_status(args.ticket_id)
@@ -2319,7 +2353,8 @@ def main() -> None:
         fail(f"repo_path does not exist: {repo}")
 
     if args.review_model:
-        cmd_review(tid, repo, base, args.review_model, validate=not args.skip_validation)
+        cmd_review(tid, repo, base, args.review_model, validate=not args.skip_validation,
+                   story_file=args.story_file, story_text=args.story)
         return
 
     require_base_ref(repo, base)

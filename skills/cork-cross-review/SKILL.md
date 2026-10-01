@@ -5,7 +5,7 @@ description: "Use when the user says \"cross review PR <n>\", \"cork cross-revie
 
 # cork-cross-review — independent, cross-vendor PR verification
 
-**Version:** 0.16.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
+**Version:** 0.17.0 — keep in sync with the repo `VERSION` file (`install.sh` checks this).
 
 **You are the tech lead, not the reviewer.** The author never signs off on their own work, and
 neither do you — a *different vendor's* model does. Your job is to gather the diff and its
@@ -62,7 +62,7 @@ python3 "$CORK_HOME/orchestrate.py" preflight          # the lanes that will act
 
 | Kind | Example refs | What it is | Auth it needs |
 |---|---|---|---|
-| API (Copilot-hosted) | `copilot/gpt-5.6-sol`, `copilot/claude-opus-4.7`, `copilot/gemini-3.1-pro-preview` | Stateless call — sees only diff + changed files + standards | `cork login` (one Copilot seat covers all of these) |
+| API (Copilot-hosted) | `copilot/gpt-5.6-sol`, `copilot/claude-opus-4.7`, `copilot/gemini-3.1-pro-preview` | Stateless call — sees only the prompt: story (contract) + diff + changed files + standards | `cork login` (one Copilot seat covers all of these) |
 | Harness (agentic) | `codex/gpt-5.6-sol`, `claude/claude-opus-4.7` (0.11.0), `opencode/github-copilot/gpt-5.5`, `pi/glm-internal/glm-5.3-onprem` (0.13.0) | Locally installed coding-agent CLI run read-only with the scratch worktree as cwd. **Tree-capable:** `claude` (Read/Grep/Glob) and `opencode` (plan agent's read tools) can read callers and verify. **Prompt-only:** `codex` (shell and file tools disabled) and `pi` (`--no-tools`) see only the prompt, like an API lane | Each CLI's own vendor login (`codex login`, `claude auth login`, `opencode auth login`, pi then `/login` — or the provider's API-key env var, e.g. `GLM_API_KEY` for a LiteLLM/GLM provider; preflight prints the login command verbatim) |
 
 Harness lanes are **opt-in**: a default install's rotation holds only Copilot API lanes, so
@@ -94,7 +94,7 @@ mkdir -p ~/.cache/cork/$REPO/pr$N
 OUT=$(mktemp -d ~/.cache/cork/$REPO/pr$N/"$(date -u +%Y%m%dT%H%M%SZ)"-XXXXXX)   # allocated atomically: unique even for two runs in the same second
 RUN=${OUT##*/}                                                        # run id = that unique directory name; one run = one review round
 WT=/tmp/cork-$REPO-pr$N-$RUN/wt                                       # scratch worktree, derived from the run id
-TID="XR-$REPO-$N-$RUN"                                                # checkpoint id, derived from the run id
+TID="XR-$REPO-$N-$RUN"                                                # ticket-id positional: a per-run label
 gh pr view "$N" --json title,body,author,baseRefName,headRefName,headRefOid,additions,deletions,changedFiles > "$OUT/pr.json"
 gh pr diff "$N" > "$OUT/diff.patch"
 ```
@@ -167,7 +167,7 @@ snapshot "$WT" > "$OUT/post-gate-hashes"
 
 **Cleanup runs on every exit path after Step 1 has allocated the run**, not only after a clean
 verdict: a red gate and a `BLOCK` verdict both end with the Step 8 cleanup block, so the next run
-never trips over a registered worktree or a stale checkpoint. (A plan-gate stop in Step 0 happens
+never trips over a registered worktree. (A plan-gate stop in Step 0 happens
 before anything is allocated — there is nothing to clean, and the block refuses to run unset.)
 
 Never use the author's checkout. `$WT` is where the gates run and the cwd for prompt-only lanes
@@ -205,6 +205,10 @@ is for. Prefer API and prompt-only lanes for breadth.
 BASE=$(jq -r .baseRefName "$OUT/pr.json")
 SLICE=whole                     # or the slice's name: every report file carries it, so a reviewer
                                 # reused on another slice never overwrites its earlier report
+# The story every lane receives (--story-file): contract + scope + the verbatim rule below.
+# Written BEFORE the loop; rewrite it (contract excerpt, in-scope paths) before each slice's loop.
+{ echo "## Acceptance contract"; cat "$OUT/contract.md"; echo; echo "## In-scope paths"; echo "<pathspec or 'whole diff'>";
+  echo; echo "## Rule"; echo "<the verbatim rule below>"; } > "$OUT/story.md"
 for LANE in $LANES; do
   safe="${LANE//\//-}"
   LANE_WT="$WT"                                   # prompt-only lanes (codex, pi, API) cannot touch the tree
@@ -214,7 +218,8 @@ for LANE in $LANES; do
     snapshot "$LANE_WT" > "$OUT/pre-$SLICE-$safe-hashes" ;;
   esac
   ( python3 "$CORK_HOME/orchestrate.py" "$TID" "$LANE_WT" \
-        --review-model "$LANE" --base-branch "origin/$BASE" --skip-validation \
+        --review-model "$LANE" --story-file "$OUT/story.md" \
+        --base-branch "origin/$BASE" --skip-validation \
         > "$OUT/review-$SLICE-$safe.txt" 2> "$OUT/review-$SLICE-$safe.err"
     echo $? > "$OUT/review-$SLICE-$safe.status" ) &      # `wait` alone discards exit codes
 done
@@ -224,33 +229,18 @@ wait
 A lane counts as **reviewed** only when its `.status` is `0` *and* its `.txt` holds findings —
 not the `… — skipped]` sentinel, not empty, not a crashed lane's retry/progress chatter. Anything
 else is a failed lane (roster outcome `skipped`), even if stdout is non-empty. For a sliced review
-run this loop once per slice with `SLICE` set to that slice's name and the checkpoint re-seeded
+run this loop once per slice with `SLICE` set to that slice's name and the story file rewritten
 with that slice's contract excerpt and in-scope paths.
 
-**How the contract reaches a lane (as of 0.15.0).** `--review-model` has no `--story` flag: the
-review-only path reads its story from cork's checkpoint file
-`~/.local/share/code-orchestrator/<ticket>.json` (`done.summary`), and with no checkpoint every
-lane receives only "Review the branch changes for <ticket>." — the contract never arrives. So
-**before the fan-out**, write the story and seed the checkpoint for the ticket id you pass as the
-first positional — `$TID`, which is unique per run so it can neither collide with a concurrent
-review of the same PR number nor overwrite a real cork checkpoint (Step 8 deletes it):
-
-```bash
-{ echo "## Acceptance contract"; cat "$OUT/contract.md"; echo; echo "## In-scope paths"; echo "<pathspec or 'whole diff'>";
-  echo; echo "## Rule"; echo "<the verbatim rule below>"; } > "$OUT/story.md"
-mkdir -p ~/.local/share/code-orchestrator
-jq -n --rawfile s "$OUT/story.md" --arg tid "$TID" \
-  '{version:2, ticket_id:$tid, done:{implement:true, summary:$s}}' \
-  > ~/.local/share/code-orchestrator/"$TID".json
-```
-
-A `--story-file` flag that removes this pre-seed is a registered follow-on; until it lands, the
-checkpoint is the only channel. `--review-model` also has no pathspec/slice option, so every call
-receives the full branch diff: for a sliced review, re-seed the checkpoint once per slice with that
-slice's contract excerpt and in-scope paths, then run the lane loop. Harness lanes run with the
+**How the contract reaches a lane (0.17.0).** The story file written at the top of the block
+above travels with `--story-file`, so API and harness lanes receive the same acceptance contract
+without touching cork's checkpoints (the `$TID` positional is only a label for this run).
+`--review-model` has no pathspec/slice option, so every call receives the full branch diff: for a
+sliced review, write a story file per slice with that slice's contract excerpt and in-scope paths,
+then pass it with `--story-file` in that slice's lane loop. Harness lanes run with the
 scratch worktree as their working directory — `orchestrate.py` passes it as `cwd` and applies the
 read-only flags; you do not need to add prompt text for that. The story text for every lane
-carries this rule, verbatim:
+carries this rule, verbatim. Keep `story.md` to a few KB; put long material in the diff, not the story.
 
 > The DIFF is the object of review; the checkout is read-only CONTEXT at the PR head. If you have
 > read tools, verify your claims against it — callers, definitions, pinned dependencies, tests —
@@ -341,12 +331,12 @@ missed, run another lane on it.
 
 - **You are the author's session** (the PR is yours): apply the fixes yourself, run the gates,
   commit, push (never force-push), then **run the Step 8 cleanup block for this round** (its
-  worktree and checkpoint) and loop to Step 1, which allocates the next round's `$OUT`, `$WT` and
-  `$TID` and checks out the new head. Review-only mode has no diff-range input: every
+  worktrees) and loop to Step 1, which allocates the next round's `$OUT`, `$WT` and
+  `$TID`. Review-only mode has no diff-range input: every
   `--review-model` call receives the full `<base>...HEAD` diff, so each round is a full re-review.
-  Focus it on the delta through the story instead — before the fan-out, re-seed the checkpoint
-  with the previous round's blockers and the delta (`git diff --stat <old-head>..<new-head>`, plus
-  the hunks if small), asking each lane to confirm its own blockers are closed and to look for
+  Focus it on the delta through the story instead — write a new story file with the previous
+  round's blockers and the delta (`git diff --stat <old-head>..<new-head>`, plus the hunks if
+  small) and pass it with `--story-file`, asking each lane to confirm its own blockers are closed and to look for
   regressions there first. Run the *same* lanes. A `--diff-range` input that makes rounds
   delta-only is a registered follow-on.
 - **Someone else's PR**: post `$OUT/consolidated.md` as a PR comment (`gh pr comment $N
@@ -360,12 +350,11 @@ Zero blockers **and** green gates → the PR is ready for the human to merge. Sa
 consolidated report, and clean up:
 
 ```bash
-# Only for a run Step 1 allocated: unset WT/TID would make the loops target /wt* and .json.
-[ -n "${WT:-}" ] && [ -n "${TID:-}" ] || { echo "cleanup: no run allocated — nothing to clean" >&2; false; } &&
+# Only for a run Step 1 allocated: an unset WT would make the loop target /wt*.
+[ -n "${WT:-}" ] || { echo "cleanup: no run allocated — nothing to clean" >&2; false; } &&
 # Each step independent: one failure must not skip the others (it is reported, not hidden).
 for t in "${WT%/wt}"/wt*; do git worktree remove --force "$t" || echo "cleanup: worktree removal failed: $t" >&2; done
 git worktree prune                || echo "cleanup: worktree prune failed" >&2
-rm -f ~/.local/share/code-orchestrator/"$TID".json || echo "cleanup: checkpoint removal failed: $TID" >&2   # the seeded story checkpoint
 ```
 
 Run this block on **every** exit after Step 1 — red gate, `BLOCK`, or done. (A plan-gate stop in
