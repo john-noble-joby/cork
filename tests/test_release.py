@@ -86,6 +86,26 @@ class ReleaseScriptTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1); self.assertIn("no skills/*/SKILL.md", r.stderr)
         self.assertEqual(self._snapshot(), before)          # VERSION and CHANGELOG untouched
 
+    def test_unreleased_heading_must_be_exact(self):
+        log = (self.repo / "CHANGELOG.md").read_text()
+        # zero exact headings (variants) or two of them (doubled) — both refused before any write
+        for variant in ("## [Unreleased] ", "##  [Unreleased]", "## [unreleased]", "## [Unreleased]\n\n## [Unreleased]"):
+            with self.subTest(variant=repr(variant)):
+                (self.repo / "CHANGELOG.md").write_text(log.replace("## [Unreleased]", variant, 1))
+                before = self._snapshot()
+                r = self._run("1.3.0")
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr); self.assertIn("exactly one line reading", r.stderr)
+                self.assertEqual(self._snapshot(), before)         # nothing written before the refusal
+        (self.repo / "CHANGELOG.md").write_text(log)
+
+    def test_bare_stamp_line_is_rewritten_too(self):
+        # preflight accepts `**Version:** 1.2.3` with nothing after it; the rewrite must as well
+        (self.repo / "skills" / "beta" / "SKILL.md").write_text("# beta\n\n**Version:** 1.2.3\n")
+        r = self._run("1.3.0")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.repo / "skills" / "beta" / "SKILL.md").read_text(), "# beta\n\n**Version:** 1.3.0\n")
+        self.assertIn("**Version:** 1.3.0 — keep in sync.", (self.repo / "skills" / "alpha" / "SKILL.md").read_text())
+
     def test_refuses_stamp_drift_before_releasing(self):
         for stale in ("1.2.2", "1x2y3", "1.2.3.4"):     # 1x2y3 would pass a regex built from "1.2.3"
             with self.subTest(stamp=stale):

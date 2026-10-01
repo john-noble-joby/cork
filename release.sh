@@ -21,11 +21,13 @@ newer="$(python3 -c 'import sys; o, n = (tuple(map(int, v.split("."))) for v in 
 [ "$newer" = "yes" ] || { echo "✗ $NEW does not exceed the current VERSION $OLD" >&2; exit 1; }
 CHANGELOG="$REPO/CHANGELOG.md"
 grep -q "^## \[$NEW\]" "$CHANGELOG" && { echo "✗ CHANGELOG.md already has a [$NEW] section" >&2; exit 1; }
-grep -q '^## \[Unreleased\]' "$CHANGELOG" || { echo "✗ CHANGELOG.md has no '## [Unreleased]' heading" >&2; exit 1; }
+# The heading must be exactly `## [Unreleased]` (the same form the rewrite below replaces), so a
+# variant such as a trailing space cannot pass validation and then be left un-rewritten.
+[ "$(grep -cx '## \[Unreleased\]' "$CHANGELOG")" = "1" ] || { echo "✗ CHANGELOG.md needs exactly one line reading '## [Unreleased]'" >&2; exit 1; }
 
 # The Unreleased section must hold real notes: blank lines and bare `### Added`/`### Fixed`
 # headings do not count, so a note-free release is refused.
-unreleased_body="$(awk '/^## \[Unreleased\]/{f=1; next} /^## \[/{f=0} f' "$CHANGELOG" | grep -v '^[[:space:]]*$' | grep -v '^[[:space:]]*#' || true)"
+unreleased_body="$(awk '$0 == "## [Unreleased]"{f=1; next} /^## \[/{f=0} f' "$CHANGELOG" | grep -v '^[[:space:]]*$' | grep -v '^[[:space:]]*#' || true)"
 [ -n "$unreleased_body" ] || { echo "✗ '## [Unreleased]' has no release notes (headings alone do not count) — nothing to release" >&2; exit 1; }
 
 # Every skill must carry exactly one stamp, and it must equal the current VERSION. A checkout
@@ -42,17 +44,22 @@ done
 
 DATE="$(date -u +%Y-%m-%d)"
 printf '%s\n' "$NEW" > "$REPO/VERSION"
+# Each rewrite replaces the validated, line-anchored token and asserts exactly one substitution,
+# so a stamp with nothing after the version (or any other accepted variant) cannot slip through.
 for f in "${skills[@]}"; do
   python3 - "$f" "$OLD" "$NEW" <<'PY'
-import sys; p, old, new = sys.argv[1:]
+import re, sys; p, old, new = sys.argv[1:]
 s = open(p, encoding="utf-8").read()
-open(p, "w", encoding="utf-8").write(s.replace(f"**Version:** {old} ", f"**Version:** {new} ", 1))
+s, n = re.subn(rf"(?m)^\*\*Version:\*\* {re.escape(old)}(?=\s|$)", f"**Version:** {new}", s)
+assert n == 1, f"{p}: expected exactly one stamp substitution, made {n}"
+open(p, "w", encoding="utf-8").write(s)
 PY
 done
 python3 - "$CHANGELOG" "$NEW" "$DATE" <<'PY'
-import sys; p, new, date = sys.argv[1:]
+import re, sys; p, new, date = sys.argv[1:]
 s = open(p, encoding="utf-8").read()
-s = s.replace("## [Unreleased]\n", f"## [Unreleased]\n\n## [{new}] — {date}\n", 1)
+s, n = re.subn(r"(?m)^## \[Unreleased\]$", f"## [Unreleased]\n\n## [{new}] — {date}", s)
+assert n == 1, f"{p}: expected exactly one Unreleased heading, rewrote {n}"
 open(p, "w", encoding="utf-8").write(s)
 PY
 
