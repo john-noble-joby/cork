@@ -28,7 +28,7 @@ change, and add a section here.
   line-anchored `Approval recommended` / `Changes recommended` headings now map to
   `approve` / `block` (they used to classify as `none`, so three consecutive passes on one PR
   reported no verdict), `Needs a closer look` stays `none`, and findings listed under
-  `### Previously missed (N)` are reported in a new `missed=N` field alongside `suppressed`.
+  the collapsed **Previously missed (N)** block are reported in a new `missed=N` field alongside `suppressed`.
   The copilot-review-loop skill gates a clean pass on `approve` + `tc=0` + `suppressed=0` +
   `missed=0` and processes previously-missed body notes in step 2c. Tests run against real
   captured review bodies (`tests/fixtures/copilot-body-*.md`). Closes #18.
