@@ -32,16 +32,18 @@ class ReleaseScriptTest(unittest.TestCase):
         return {p.relative_to(self.repo): p.read_text() for p in self.repo.rglob("*") if p.is_file()}
 
     def test_release_stamps_everything_once(self):
+        before = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         r = self._run("1.3.0")
+        after = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         self.assertEqual(r.returncode, 0, r.stderr)
-        today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         self.assertEqual((self.repo / "VERSION").read_text(), "1.3.0\n")
         for name in ("alpha", "beta"):
             text = (self.repo / "skills" / name / "SKILL.md").read_text()
             self.assertIn("**Version:** 1.3.0 — keep in sync.", text)
             self.assertIn("body mentions 1.2.3 too", text)          # only the stamp line changes
         log = (self.repo / "CHANGELOG.md").read_text()
-        self.assertIn(f"## [Unreleased]\n\n## [1.3.0] — {today}\n\n### Fixed\n- something\n", log)
+        # the run may straddle UTC midnight: either date sampled around it is correct
+        self.assertTrue(any(f"## [Unreleased]\n\n## [1.3.0] — {d}\n\n### Fixed\n- something\n" in log for d in {before, after}), log[:200])
         self.assertIn("## [1.2.3] — 2026-01-01", log)
         self.assertIn("1.2.3 → 1.3.0", r.stdout); self.assertIn("2 skill stamps", r.stdout)
 
@@ -105,6 +107,16 @@ class ReleaseScriptTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual((self.repo / "skills" / "beta" / "SKILL.md").read_text(), "# beta\n\n**Version:** 1.3.0\n")
         self.assertIn("**Version:** 1.3.0 — keep in sync.", (self.repo / "skills" / "alpha" / "SKILL.md").read_text())
+
+    def test_version_file_is_validated_as_stored(self):
+        for stored in ("1 . 2 . 3\n", "1.2.3\n1.2.4\n", " 1.2.3\n", "1.2.3 \n", ""):
+            with self.subTest(stored=repr(stored)):
+                (self.repo / "VERSION").write_text(stored)
+                before = self._snapshot()
+                r = self._run("1.3.0")
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr); self.assertIn("not a SemVer version", r.stderr)
+                self.assertEqual(self._snapshot(), before)
+        (self.repo / "VERSION").write_text("1.2.3\n")
 
     def test_refuses_stamp_drift_before_releasing(self):
         for stale in ("1.2.2", "1x2y3", "1.2.3.4"):     # 1x2y3 would pass a regex built from "1.2.3"

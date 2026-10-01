@@ -14,7 +14,9 @@ NEW="${1:-}"
 SEMVER='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
 [[ "$NEW" =~ $SEMVER ]] || { echo "usage: release.sh X.Y.Z  (SemVer, no leading zeroes)" >&2; exit 2; }
 
-OLD="$(tr -d '[:space:]' < "$REPO/VERSION")"
+# Validate what the file actually stores: only the trailing newline is dropped, so "1 . 2 . 3"
+# or a second line is rejected rather than normalised into a version.
+OLD="$(<"$REPO/VERSION")"
 [[ "$OLD" =~ $SEMVER ]] || { echo "✗ VERSION file holds '$OLD', not a SemVer version" >&2; exit 1; }
 # The new version must have higher precedence: a release never moves the source of truth backwards.
 newer="$(python3 -c 'import sys; o, n = (tuple(map(int, v.split("."))) for v in sys.argv[1:]); print("yes" if n > o else "no")' "$OLD" "$NEW")"
