@@ -2749,7 +2749,9 @@ def main() -> None:
 
     require_base_ref(repo, base)
     repo = git_toplevel(repo)   # a nested directory must not become the containment root
-    base_name, base = base, pin_ref(repo, base)   # immutable from here: tool-capable steps follow
+    # Immutable from here: tool-capable steps follow. Diffs, names and the trusted rubric use
+    # the pinned commit; the branch name survives only for the PR's target and for display.
+    base_name, base = base, pin_ref(repo, base)
     print(f"Base: {base_name} pinned at {base[:12]}")
 
     if args.reset:
@@ -2950,7 +2952,7 @@ def main() -> None:
 
     # ── Push + open PR ───────────────────────────────────────────────────────
     print(f"\n── Push & PR ─────────────────────────────────────────────")
-    pr_output = run_claude(prompt_push_pr(tid, base, summary), cwd=repo)
+    pr_output = run_claude(prompt_push_pr(tid, base_name, summary), cwd=repo)   # the PR targets the branch, not the pinned commit
     print(f"  {pr_output[:300]}…" if len(pr_output) > 300 else f"  {pr_output}")
 
     branch = subprocess.check_output(

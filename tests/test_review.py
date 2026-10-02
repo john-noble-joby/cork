@@ -281,6 +281,15 @@ class ReviewDiffTest(unittest.TestCase):
                 self.assertIn("no spec available", system)
                 self.assertIn(instructions or "For each issue in the main list", system)
 
+    def test_headless_pr_creation_targets_the_branch_name_not_the_pinned_commit(self):
+        # main() pins `base` to a commit id for diffs and the trusted rubric; `gh pr create`
+        # must still receive the branch name. Asserted on the source, since main() is not
+        # drivable end to end in a unit test.
+        src = Path(orchestrate.__file__).read_text(encoding="utf-8")
+        self.assertIn("prompt_push_pr(tid, base_name, summary)", src)
+        self.assertNotIn("prompt_push_pr(tid, base, summary)", src)
+        self.assertIn("base_name, base = base, pin_ref(repo, base)", src)
+
     def test_fix_prompt_frames_review_findings_as_untrusted(self):
         # the review text can quote a hostile ticket line verbatim; the fixer must be told
         # what it is before reading it, and the framing must precede the findings
