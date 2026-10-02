@@ -200,7 +200,7 @@ Review-only usage accepts the contract directly for both API and harness lanes:
 ```bash
 python3 orchestrate.py <TICKET> <repo-path> --review-model <provider/model> \
   [--story-file <path> | --story <text>] \
-  [--base-branch <branch> | --diff-range <A..B> | --diff-file <path>] [--skip-validation]
+  [--base-branch <branch>] [--diff-range <A..B> | --diff-file <path>] [--skip-validation]
 ```
 
 Story precedence is `--story-file` → `--story` → checkpoint `done.summary` → checkpoint
@@ -210,7 +210,9 @@ the review starts; explicit stories are not written to the checkpoint.
 The diff under review comes from exactly one source — `--diff-range`, `--diff-file`, or the
 default merge-base diff vs `--base-branch`. `--base-branch` may accompany `--diff-range`: the
 range is the diff, the base is the trusted ref the review standards are read from (default
-`origin/develop`, and it must resolve). `--diff-file` takes no base. Changed-file contents are
+`origin/develop`, and it must resolve). `--diff-file` takes no base and rejects the flag.
+`<repo>` may be any directory inside the work tree; cork normalises it to the repository root
+before reading standards or file contents. Changed-file contents are
 always read from the working tree, so check the tree out at the diff's newer end. Every source
 applies the same empty-diff guard.
 

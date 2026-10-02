@@ -1171,6 +1171,20 @@ def run_claude_review(system: str, prompt: str, cwd: str) -> str:
     return result.stdout.strip()
 
 
+def git_toplevel(repo: str) -> str:
+    # Every review reads standards, changed names and file contents relative to the repository
+    # root. A nested directory passed as the repo would put the shipped default rubric "outside"
+    # the containment root and join root-relative names onto the wrong directory — so the
+    # caller-supplied path is normalised to the work tree's top level up front. A path that is
+    # not inside a work tree is returned unchanged: the base-ref and diff checks that follow
+    # already fail with their own, more specific messages.
+    try:
+        r = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=repo, capture_output=True, text=True)
+    except OSError:
+        return repo
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else repo
+
+
 def require_base_ref(repo: str, base: str) -> None:
     base_check = subprocess.run(
         ["git", "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"],
@@ -2484,6 +2498,7 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
         verdict = _probe(provider, model)
         if verdict != "ok":
             fail(f"{provider}/{model} not usable on this seat ({verdict}).")
+    repo = git_toplevel(repo)   # names, standards and file contents are root-relative from here on
     names = patch_names if diff_file is not None else _git_changed_names(repo, diff_range or f"{base}...HEAD")
     instructions, instructions_path = load_agent_instructions(repo, set(names), base_ref)
     if instructions_path:
@@ -2646,8 +2661,9 @@ def main() -> None:
     parser.add_argument("repo_path",  nargs="?", default=None,
                         help="Absolute path to target git repo (omit with --status)")
     parser.add_argument("--base-branch", default=None,
-                        help="Branch to diff against (default: origin/develop). Not combinable "
-                             "with --diff-range/--diff-file.")
+                        help="Branch to diff against (default: origin/develop). With --diff-range "
+                             "it is not diffed but stays the trusted ref the review standards are "
+                             "read from; not combinable with --diff-file.")
     parser.add_argument("--reset", action="store_true",
                         help="Delete checkpoint and start from scratch")
     parser.add_argument("--seed-only", action="store_true",
@@ -2715,6 +2731,7 @@ def main() -> None:
         return
 
     require_base_ref(repo, base)
+    repo = git_toplevel(repo)   # a nested directory must not become the containment root
 
     if args.reset:
         clear_state(tid)
