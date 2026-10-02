@@ -34,6 +34,37 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 - The user sees the work happen live and can interject.
 - Blind-review property is preserved: each `--review-model` call is stateless — the prompt carries the story + diff + changed files + AGENTS.md and never prior review text. API and prompt-only lanes see nothing else; tree-capable harnesses (`claude`, `opencode`) can additionally read the repo from their working directory, still read-only.
 
+## Story and base gates
+
+Before **full mode**, resolve the acceptance contract from the user's request, the linked
+ticket, or `{WORKTREE}/.cork/story.md`. If it is missing or is only the generic
+`Review the branch changes for <ticket>.` fallback, stop and ask for the story; do not
+start the model rotation. In review-only mode the fallback is allowed only to inspect
+implementation defects, not to claim spec conformance; warn loudly and ask for a real story
+when spec review is expected. Pass the contract with `--story-file` on every model call and
+include its absolute path in every self-review subagent prompt.
+
+Before diffing, refresh the remote-tracking base and use that ref (or its pinned commit) for
+every pass. Do not silently use a stale local branch:
+
+```bash
+BASE=develop   # confirmed with the user
+git fetch origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
+  || { echo "fetch failed; refusing to review against a stale base"; exit 1; }
+BASE_REF="origin/$BASE"
+BASE_SHA=$(git rev-parse --verify "$BASE_REF^{commit}") || exit 1
+git diff --stat "$BASE_SHA...HEAD"
+git diff --name-only "$BASE_SHA...HEAD"
+DIFF_LINES=$(git diff "$BASE_SHA...HEAD" | wc -l)
+printf 'Review diff: %s lines against %s (%s)\n' "$DIFF_LINES" "$BASE_REF" "$BASE_SHA"
+if [ "$DIFF_LINES" -gt 1500 ]; then
+  echo "WARNING: diff exceeds 1,500 lines; split or explicitly justify the size before review."
+fi
+```
+
+Read the complete file list and confirm every path belongs to the ticket before fan-out. Cork
+also prints the file list and line count for each model review.
+
 ## When invoked, do this
 
 ### Step 0 — Gather context & pick mode
@@ -41,18 +72,27 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 python3 "$CORK_HOME/orchestrate.py" --version            # cork version — announce it (see below)
-git rev-parse --verify --quiet "{BASE}^{commit}" >/dev/null || { echo "base {BASE} does not resolve"; exit 1; }
-git merge-base "{BASE}" HEAD >/dev/null      || { echo "no merge base with {BASE}"; exit 1; }
+git fetch origin "+refs/heads/{BASE}:refs/remotes/origin/{BASE}" || { echo "base fetch failed"; exit 1; }
+BASE_REF="origin/{BASE}"
+BASE_SHA=$(git rev-parse --verify "$BASE_REF^{commit}") || { echo "base does not resolve"; exit 1; }
+git merge-base "$BASE_SHA" HEAD >/dev/null || { echo "no merge base with $BASE_REF"; exit 1; }
 python3 "$CORK_HOME/orchestrate.py" preflight            # probe & select models for this seat
 python3 "$CORK_HOME/orchestrate.py" standards status .   # show the active review-standards layers
 git rev-parse --abbrev-ref HEAD                         # current branch
 git rev-parse --abbrev-ref HEAD | grep -oP 'MXE-\d+'    # ticket ID, if branch follows convention
 pwd                                                     # worktree path
-git log {BASE}..HEAD --oneline                          # commits vs base
+git log "$BASE_SHA"..HEAD --oneline                     # commits vs the fresh base
+git diff --stat "$BASE_SHA...HEAD"
+git diff --name-only "$BASE_SHA...HEAD"
+DIFF_LINES=$(git diff "$BASE_SHA...HEAD" | wc -l)
+printf 'Diff: %s lines vs %s (%s)\n' "$DIFF_LINES" "$BASE_REF" "$BASE_SHA"
+[ "$DIFF_LINES" -le 1500 ] || echo "WARNING: diff exceeds 1,500 lines; split or justify before review."
 ```
 
 Stop here if the base is unresolvable or unrelated — fail once, locally, before probing
 providers or starting any review process.
+Use the pinned `BASE_SHA` for every diff and `--base-branch` invocation in this run. Do not
+fetch again mid-fan-out; all reviewers must see the same base snapshot.
 
 If `standards status` shows *no project standards* and the default is on, mention once (non-blocking): the repo has no project standards layer — `standards init` adds one, `--opt-out` skips the default. Proceed regardless.
 
@@ -74,12 +114,12 @@ Confirm with the user before running (lead with the captured `{VERSION}` and the
 
 ### Step 1 — Implement (only if not already done)
 
-If the branch has no commits vs develop, implement the story now (in-session), then commit. If implementation is already committed, skip to Step 2.
+If the branch has no commits vs `BASE_SHA`, implement the story now (in-session), then commit. If implementation is already committed, skip to Step 2.
 
 ### Step 2 — Self-review
 
 ```bash
-[ -n "$(git diff {BASE}...HEAD)" ] || { echo "empty diff vs {BASE} — nothing was implemented"; exit 1; }
+[ -n "$(git diff {BASE_SHA}...HEAD)" ] || { echo "empty diff vs {BASE_SHA} — nothing was implemented"; exit 1; }
 ```
 
 After the implementation commit, stop here if the diff is still empty; do not fan out
@@ -111,7 +151,7 @@ Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it p
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch develop
+python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch "$BASE_SHA"
 ```
 
 Add `--story-file PATH` when the caller has an explicit contract for the reviewers — devit
@@ -134,7 +174,15 @@ Pi harness refs retain the inner provider: `pi/openai-codex/gpt-6-sol`. Pi uses 
 login and `--thinking` effort, with no tools, session persistence or ambient resources.
 As with other harnesses, preflight verifies the binary and its login (`pi auth check … --no-refresh`), not model availability.
 
-Read the findings from stdout. For each: apply the fix in the worktree (run tests before committing), or push back with reasoning if wrong. Commit after each model's fixes with message `fix: apply {MODEL} review [{TICKET}]`.
+Read the findings from stdout. For every fix batch, name the defect class and why the change
+closes the class (not just this instance) before committing; grep for sibling sites. Record a
+mutation check in the commit message: name the filtered test and state that inverting/removing
+the guard made it fail, then restoring it passed. A new test with no mutation evidence is a
+review finding. If a second fix in the same area is needed, stop patching instances and propose
+a design change instead of making a third patch.
+
+Commit after each model's fixes with message `fix: apply {MODEL} review [{TICKET}]` and include
+the mutation-check record in the message body.
 
 ### Step 6 — Push + PR
 
@@ -147,14 +195,14 @@ You apply **nothing** in this mode: no edits, no commits, no push, no PR, no mem
 Because no fixes land between passes, **every reviewer sees the identical diff** — so the reviews are independent and you run them **in parallel** (the opposite of full mode, where fixes between passes force sequencing).
 
 ```bash
-[ -n "$(git diff {BASE}...HEAD)" ] || { echo "empty diff vs {BASE} — nothing to review"; exit 1; }
+[ -n "$(git diff {BASE_SHA}...HEAD)" ] || { echo "empty diff vs {BASE_SHA} — nothing to review"; exit 1; }
 ```
 
 ### R1 — Fan out all reviewers at once
 
 Dispatch concurrently, then collect when all return:
 
-- **Self-review:** dispatch your own parallel review subagents over `git diff {BASE}...HEAD`. Gather findings only — apply nothing.
+- **Self-review:** dispatch your own parallel review subagents over `git diff {BASE_SHA}...HEAD`. Gather findings only — apply nothing.
 - **Each model from the `preflight` rotation** (captured in Step 0), all launched together (background processes, then `wait`):
 
 ```bash
@@ -168,11 +216,16 @@ STORY="$OUTDIR/story.md"                      # <- fill from the PR body / ticke
 for M in $PREFLIGHT_MODELS; do
   safe="${M//\//-}"
   python3 "$CORK_HOME/orchestrate.py" "${TICKET:-REVIEW}" {WORKTREE} \
-    --review-model "$M" --story-file "$STORY" --base-branch {BASE} --skip-validation \
+    --review-model "$M" --story-file "$STORY" --base-branch {BASE_SHA} --skip-validation \
     > "$OUTDIR/review-${safe}.txt" 2>&1 &
 done
 wait
 ```
+
+When consolidating, report the **actual completed rotation**: include only calls that returned
+findings rather than an error/`returned no usable content — skipped` sentinel, and list
+failed/skipped lanes separately. The configured/preflight rotation is not proof that each lane
+completed this fan-out.
 
 Each `--review-model` call is stateless and read-only — the prompt carries the story + diff + changed files + AGENTS.md (never prior review text), tree-capable harnesses may also read the worktree, and the call only prints findings. Pass `--skip-validation` here to bypass both API availability requests and harness login probes already performed by preflight (one premium request saved per API model); without this flag, harness validation re-runs the CLI's login probe (no model turn is spent) but still does not check model access. With `--story-file` the positional ticket id is only a label; without a story flag it selects the checkpoint story for that id and appears in the generic fallback, so never rely on a placeholder to carry the contract. Copilot and OpenAI API lanes auto-route `gpt-5.x`/`gpt-6.x`/codex to `/responses`; CLI harnesses retain their own provider routing. If a model errors, drop it and keep the rest (see *Model availability* under full mode).
 
@@ -192,7 +245,7 @@ Print the report and stop. If the user then wants fixes applied, that's a separa
 
 ## Notes
 
-- **Base branch** is `develop` for edge-fmt. Pass `--base-branch develop` (local and origin are kept in sync; if in doubt `git fetch origin && git merge --ff-only origin/develop`).
+- **Base branch** is `develop` for edge-fmt. Confirm the target, fetch it with the Step 0 refspec, and pass the pinned `BASE_SHA` to every review call.
 - **Run tests** after each fix before committing — don't commit a broken build. (Full mode only — review-only never writes code.)
 - **Review-only mode** is side-effect-free: parallel reviews → one consolidated report, nothing applied. Reach for it to review someone else's branch.
 - **Copilot token**: `--review-model` resolves a token in priority order — `CORK_COPILOT_TOKEN` env var → cork's own `~/.config/cork/auth.json` (`CORK_AUTH_FILE`) → opencode (`~/.local/share/opencode/auth.json`). Run `python3 "$CORK_HOME/orchestrate.py" auth status` to see the source, expiry, refreshability, and probe result. Preflight warns when it is using the non-refreshable opencode fallback or a token-only credential. To give cork its own refreshable token, run `python3 "$CORK_HOME/orchestrate.py" login` (GitHub device flow, writes the auth file automatically). Re-run `login` only if the refresh token itself expires (~6 months), is revoked, or status reports a non-refreshable source.

@@ -1860,13 +1860,29 @@ def _harness_auth_probe(provider: str, model: str) -> dict:
 def _probe(provider: str, model: str, details: dict | None = None) -> str:
     if provider in HARNESSES:
         result = _harness_auth_probe(provider, model)
+        if result["status"] == "ok":
+            try:
+                cwd = _probe_cwd()
+            except OSError as e:
+                result["status"] = "error"
+                result["detail"] = f"cannot create {STATE_DIR}: {e}"
+            else:
+                status, text = _harness_call(
+                    provider, model, _review_system(""), "Reply with exactly: OK",
+                    cwd, timeout=60)
+                if status == 200 and text:
+                    result["model_probe"] = "ok"
+                else:
+                    result["status"] = "timeout" if status == 504 else "error"
+                    result["detail"] = text[:300] or "model probe returned no output"
         if details is not None:
             details.update(result)
         return result["status"]
     # A cheap availability probe — cap output hard so it can't burn review-sized
-    # quota (the classification only needs the HTTP status, not the content).
+    # quota while still making a real, model-specific request through the review transport.
     try:
-        status, text, _ = _call_and_extract(provider, model, "", "ok", max_out=16)
+        status, text, _ = _call_and_extract(
+            provider, model, _review_system(""), "Reply with exactly: OK", max_out=16)
     except (TimeoutError, socket.timeout):
         return "timeout"
     except urllib.error.URLError as e:
@@ -1929,6 +1945,8 @@ def preflight(rotation: list[dict], count: int) -> list[dict]:
                 selected.append({"provider": provider, "model": model})
             if provider in HARNESSES:
                 detail = probe.get("detail") or "authenticated"
+                if probe.get("model_probe") == "ok":
+                    detail += "; model probe passed"
                 selection_note = "" if was_selected else " (not selected — count reached)"
                 print(f"  ✓ {provider}: live ({detail}{env_note}){selection_note}", flush=True)
             else:
@@ -2474,18 +2492,33 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
         story = story_text
         story_source = "--story"
     else:
-        state = load_state(tid)
-        done_summary = state.get("done", {}).get("summary")
-        checkpoint_summary = state.get("summary")
-        if done_summary:
-            story, story_source = done_summary, "checkpoint done.summary"
-        elif checkpoint_summary:
-            story, story_source = checkpoint_summary, "checkpoint summary"
+        default_story_path = Path(git_toplevel(repo)) / ".cork" / "story.md"
+        if default_story_path.is_file():
+            try:
+                story = default_story_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as e:
+                fail(f"Cannot read default story file {default_story_path}: {e}")
+            story_source = f"default story {default_story_path}"
         else:
-            story = f"Review the branch changes for {tid}."
-            story_source = "fallback"
-    if (story_file is not None or story_text is not None) and not story.strip():
+            state = load_state(tid)
+            done_summary = state.get("done", {}).get("summary")
+            checkpoint_summary = state.get("summary")
+            if done_summary:
+                story, story_source = done_summary, "checkpoint done.summary"
+            elif checkpoint_summary:
+                story, story_source = checkpoint_summary, "checkpoint summary"
+            else:
+                story = f"Review the branch changes for {tid}."
+                story_source = "fallback"
+    if not story.strip():
         fail(f"Story from {story_source} is empty.")
+    if story.strip() == f"Review the branch changes for {tid}.":
+        print(
+            "WARNING: review story is the generic fallback; spec-conformance review "
+            "cannot be reliable. Supply --story-file/--story or .cork/story.md.",
+            file=sys.stderr,
+            flush=True,
+        )
 
     _validate_model_ref(*_split_model_ref(model_ref))  # shape only; independent of --skip-validation
     # The diff under review comes from exactly one source: a commit range (delta rounds), a
@@ -2529,8 +2562,23 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
     files = _file_contents(repo, names)
     print(f"Story: {story_source} ({len(story)} chars)")
+    diff_lines = len(diff.splitlines())
     print(f"\n── Review: {provider}/{model} — {len(files)} files, "
-          f"{len(diff.splitlines())} diff lines vs {scope}\n", flush=True)
+          f"{diff_lines} diff lines vs {scope}")
+    print("Changed files:")
+    for name in names:
+        print(f"  - {name}")
+    print(f"⚠ Scope check: confirm every changed file belongs to {tid}.", flush=True)
+    if not names:
+        print("  (none)")
+    if diff_lines > 1500:
+        print(
+            f"WARNING: review diff is {diff_lines} lines (over the 1,500-line "
+            "review-size threshold). Consider splitting the change.",
+            file=sys.stderr,
+            flush=True,
+        )
+    print(flush=True)
     print(review(provider, model, instructions, story, diff, files, _DEFAULT_CHAR_BUDGET,
                  repo=repo))
 

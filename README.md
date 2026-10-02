@@ -203,9 +203,11 @@ python3 orchestrate.py <TICKET> <repo-path> --review-model <provider/model> \
   [--base-branch <branch> [--diff-range <A..B>] | --diff-file <path>] [--skip-validation]
 ```
 
-Story precedence is `--story-file` → `--story` → checkpoint `done.summary` → checkpoint
-`summary` → the built-in fallback. The selected source and character count are printed before
-the review starts; explicit stories are not written to the checkpoint.
+Story precedence is `--story-file` → `--story` → `<worktree>/.cork/story.md` → checkpoint
+`done.summary` → checkpoint `summary` → the built-in fallback. The selected source and
+character count are printed before the review starts; explicit stories are not written to the
+checkpoint. A generic fallback produces a loud warning because spec conformance cannot be
+reliably assessed; full-mode cork stops and asks for a real story instead.
 
 The diff under review comes from exactly one source — `--diff-range`, `--diff-file`, or the
 default merge-base diff vs `--base-branch`. `--base-branch` may accompany `--diff-range`: the
@@ -251,7 +253,10 @@ Cork picks reviewers at runtime. The ranked candidate list and desired count liv
 
 `rotation` is the ranked preference list; `count` is how many reviewers to actually run.
 `preflight` probes each entry in order, drops the unreachable ones, and selects the first
-`count` survivors (errors only if none survive). Before probing, preflight names the active
+`count` survivors (errors only if none survive). API probes use the same provider/model request
+path as reviews. Harness probes first check authentication, then make a minimal request through
+the same model-specific review call path; a logged-in CLI whose selected model is unavailable
+is not listed as usable. Before probing, preflight names the active
 Copilot credential source. Environment overrides are informational; warnings are reserved for
 a non-refreshable cork file or the opencode fallback. Auth failures (401/403) are fatal and name
 the rejected source plus the `login` recovery command. `gpt-5.x`/`gpt-6.x`/codex models are
@@ -270,9 +275,9 @@ is skipped without retrying, even if partial text exists. The skip includes the 
 incomplete reason or error message/code, falling back to `unknown reason` for missing or malformed
 diagnostic containers. For token exhaustion, reduce the diff size or effort before rerunning.
 Only missing, null, or empty-string statuses retain status-less compatibility handling; other
-non-completed values, including malformed falsy values, are skipped. Availability probes still
-classify by HTTP status only: HTTP 200 is available even
-when the body reports a failed or incomplete response; that does not prove a review completed.
+non-completed values, including malformed falsy values, are skipped. API availability probes
+classify by HTTP status: HTTP 200 is available even when the body reports a failed or incomplete
+response; that does not prove a review completed.
 
 **Providers:** Copilot is the default and recommended path (one flat-rate seat). `openai`
 and `anthropic` are supported but disabled by default; enable a provider in `config.json`

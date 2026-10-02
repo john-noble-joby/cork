@@ -98,6 +98,27 @@ class ReviewStoryTest(unittest.TestCase):
         prompt, output = self._api_prompt(story_file=str(self.story_file))
         self.assertIn("## Story / Task\napi acceptance contract", prompt)
         self.assertIn(f"Story: --story-file {self.story_file} (23 chars)", output)
+        self.assertIn("Changed files:\n  - a.py", output)
+        self.assertIn("confirm every changed file belongs to TASK-1", output)
+
+    def test_default_worktree_story_precedes_checkpoint_summaries(self):
+        default_story = Path(self.tmp.name) / ".cork" / "story.md"
+        default_story.parent.mkdir()
+        default_story.write_text("default acceptance contract", encoding="utf-8")
+        prompt, output = self._api_prompt()
+        self.assertIn("## Story / Task\ndefault acceptance contract", prompt)
+        self.assertNotIn("checkpoint story", prompt)
+        self.assertIn(f"Story: default story {default_story} (27 chars)", output)
+
+    def test_empty_default_story_fails(self):
+        default_story = Path(self.tmp.name) / ".cork" / "story.md"
+        default_story.parent.mkdir()
+        default_story.write_text(" \n", encoding="utf-8")
+        stderr = io.StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit):
+            orchestrate.cmd_review("TASK-1", self.tmp.name, "origin/main", "copilot/model",
+                                   validate=False)
+        self.assertIn(f"Story from default story {default_story} is empty.", stderr.getvalue())
 
     def test_story_file_reaches_harness_lane(self):
         self.story_file.write_text("harness acceptance contract", encoding="utf-8")
@@ -146,9 +167,21 @@ class ReviewStoryTest(unittest.TestCase):
 
     def test_fallback_is_used_when_no_source_exists(self):
         orchestrate.load_state = lambda tid: {"done": {}}
-        prompt, output = self._api_prompt()
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            prompt, output = self._api_prompt()
         self.assertIn("## Story / Task\nReview the branch changes for TASK-1.", prompt)
         self.assertIn("Story: fallback (37 chars)", output)
+        self.assertIn("WARNING: review story is the generic fallback", stderr.getvalue())
+
+    def test_large_diff_warns_and_reports_changed_files(self):
+        orchestrate.git_diff_branch = lambda repo, base: "\n".join(["+line"] * 1501)
+        stderr, output = io.StringIO(), io.StringIO()
+        with redirect_stderr(stderr), redirect_stdout(output):
+            orchestrate.cmd_review("TASK-1", self.tmp.name, "origin/main", "copilot/model",
+                                   validate=False, story_text="contract")
+        self.assertIn("over the 1,500-line review-size threshold", stderr.getvalue())
+        self.assertIn("Changed files:\n  - a.py", output.getvalue())
 
     def test_missing_story_file_fails_without_traceback(self):
         stderr = io.StringIO()

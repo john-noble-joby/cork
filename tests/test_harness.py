@@ -648,9 +648,12 @@ class ApiRoutingUnaffectedTest(HarnessBase):
     def test_probe_api_provider_uses_http_probe(self):
         seen = []
         orchestrate._call_and_extract = lambda p, m, s, u, max_out=None, repo="": (
-            seen.append((p, m, max_out)) or (200, "ok", None))
+            seen.append((p, m, s, u, max_out)) or (200, "ok", None))
         self.assertEqual(orchestrate._probe("copilot", "gpt-4.1"), "ok")
-        self.assertEqual(seen, [("copilot", "gpt-4.1", 16)])
+        self.assertEqual(seen[0][:2], ("copilot", "gpt-4.1"))
+        self.assertIn("Trust boundary:", seen[0][2])
+        self.assertEqual(seen[0][3], "Reply with exactly: OK")
+        self.assertEqual(seen[0][4], 16)
 
     def test_eligible_rotation_api_missing_token_wording(self):
         import io
@@ -861,7 +864,8 @@ class AuthProbeTest(HarnessBase):
         }
         for lane, (model, argv, output, detail) in cases.items():
             with self.subTest(lane=lane):
-                fake = _FakeRun(out=output, err="Logged in using ChatGPT" if lane == "codex" else "")
+                fake = _FakeRun(out=output or "OK",
+                                err="Logged in using ChatGPT" if lane == "codex" else "")
                 orchestrate.subprocess.run = fake
                 details = {}
                 self.assertEqual(orchestrate._probe(lane, model, details), "ok")
@@ -873,6 +877,22 @@ class AuthProbeTest(HarnessBase):
                                   kw["encoding"], kw["errors"]),
                                  (10, subprocess.DEVNULL, True, True, "utf-8", "replace"))
                 self.assertEqual(kw["cwd"], str(orchestrate.STATE_DIR))  # never the repo under review
+                self.assertEqual(details["model_probe"], "ok")
+
+    def test_harness_preflight_probes_the_selected_model_through_review_call(self):
+        orchestrate.subprocess.run = _FakeRun(out="Logged in using ChatGPT")
+        calls = []
+        original_call = orchestrate._harness_call
+        orchestrate._harness_call = lambda *args, **kwargs: (
+            calls.append((args, kwargs)) or (400, "model unavailable for integrator"))
+        self.addCleanup(setattr, orchestrate, "_harness_call", original_call)
+        details = {}
+        self.assertEqual(orchestrate._probe("codex", "gpt-5.6-sol", details), "error")
+        self.assertEqual(calls[0][0][:4], (
+            "codex", "gpt-5.6-sol", orchestrate._review_system(""),
+            "Reply with exactly: OK"))
+        self.assertEqual(calls[0][1]["timeout"], 60)
+        self.assertEqual(details["detail"], "model unavailable for integrator")
 
     def test_outcome_mapping(self):
         for fake, expected in ((_FakeRun(rc=1), "not_logged_in"),
@@ -1085,7 +1105,9 @@ class AuthProbeTest(HarnessBase):
 
     def test_preflight_reports_harness_after_selection_count_is_full(self):
         original = orchestrate._call_and_extract
+        original_auth = orchestrate._resolve_copilot_auth
         orchestrate._call_and_extract = lambda *a, **k: (200, "ok", None)
+        orchestrate._resolve_copilot_auth = lambda: ("TOKEN", "env", None, False)
         orchestrate.subprocess.run = _FakeRun(out="Logged in using ChatGPT")
         try:
             buf = io.StringIO()
@@ -1096,8 +1118,10 @@ class AuthProbeTest(HarnessBase):
                 ], 1)
         finally:
             orchestrate._call_and_extract = original
+            orchestrate._resolve_copilot_auth = original_auth
         self.assertEqual(selected, [{"provider": "copilot", "model": "gpt"}])
-        self.assertIn("codex: live (ChatGPT) (not selected — count reached)", buf.getvalue())
+        self.assertIn("codex: live (ChatGPT; model probe passed) (not selected — count reached)",
+                      buf.getvalue())
 
     def test_eligible_rotation_silences_disabled_harness(self):
         buf = io.StringIO()

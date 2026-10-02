@@ -45,6 +45,15 @@ procedure in the README's *Versioning* section.
   unprobed tool contract or unwritten matrix cell in pass 1 (an unchecked upstream only when a
   supplied sweep record omits it or the diff contradicts a story-named version). Evidence:
   edge-fmt #534/#537 (6 and 11 Copilot passes; a third of findings were docs/wording).
+- **Review the specified, fresh, final diff.** Review-only calls discover `.cork/story.md`
+  when no story flag is passed and warn when only the generic fallback is available; they print
+  changed paths and diff size, warning above 1,500 lines. Harness preflight now validates the
+  selected model through the same read-only review call path as `--review-model`. Cork refreshes
+  its `origin/<base>` snapshot and pins it for a fan-out. devit runs four read-only review lenses
+  before model rotation and a mandatory cork review-only fan-out after Copilot, repeating it
+  when later fixes exceed about 100 lines or touch an unseen file. Fix guidance records defect
+  class and mutation evidence, stops repeated instance patches, and the Copilot loop's max is a
+  consecutive no-fix streak rather than a lifetime request count. Closes #32.
 
 ### Changed
 - **Reviewer prompts open with a trust boundary and a diff cannot rewrite its own rubric.**
