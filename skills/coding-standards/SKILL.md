@@ -40,6 +40,8 @@ Before committing any fix (yours or a review finding's), name the defect class t
 ### 2. Comments are contracts (doc freshness)
 A comment describing behavior the code no longer has is a bug, not a nit. When behavior changes — null semantics, return shapes, timing, error codes — grep for every doc comment, inline comment, README line, and schema/column comment that describes the old behavior and update them in the same commit. Watch especially: "null means X" comments (must match the return contract callers infer by testing `== null`), "captured before Y" timing comments, and DB column comments mirroring an entity's doc.
 
+**Restatement inventory (the sweep form).** A behavior change has N restatements — code comments, docstrings, CLI help, hints and error/status messages, READMEs, runbook, env-file and compose comments, the PR body, the story — and each stale one becomes a separate late review finding (about a third of all findings on edge-fmt #534/#537). Before review, list every claim the diff alters, grep every restatement of each claim across the whole repo, and fix them together; one agent owning *consistency* across locations beats several owning locations (devit Phase 3.5 f, `skills/devit/references/docs-sweep.md`). Also report documentation the acceptance criteria asked for that the diff lacks.
+
 ### 3. Timing capture before the operation
 Capture `startTime` / `windowStart` / `captureTime` variables **immediately before** the operation they measure — never after the first async task has been dispatched. A timestamp assigned after `tasks = items.map(dispatch)` misses everything that happened while the tasks were being constructed.
 
@@ -87,6 +89,24 @@ What happens if cancellation fires between a parallel operation completing and i
 
 ### 16. Domain-model suitability and boundary hygiene
 Closed hierarchies must be well-bounded — consumer pattern-matching should feel natural, not force awkward default arms. Types carry real invariants: a no-invariant string wrapper is over-typed; an enum prematurely locking a concept that should stay string-valued is too. Nothing crosses a layer boundary that shouldn't: parser/DTO types and third-party attributes stay out of the domain; transport types stay off public service APIs.
+
+### Long-tail classes — sweep before the first review
+Classes 17–21 come from edge-fmt #534 and #537 (2026-10), where Copilot ran 6 and 11 passes and five passes *after* a clean one each found one or two real items. Each class is checkable from the diff plus the PR body in pass 1, so an implementer sweeps them before review (devit Phase 3.5 produces one artifact per class) and a reviewer flags the **absence of the sweep** as a finding rather than waiting for instances to surface one pass at a time.
+
+### 17. Sibling surfaces swept (surface inventory for gates)
+A new gate, guard, hint, validation or message applied to one command, path or handler must be applied to — or explicitly waived for — every sibling surface of the same shape (`start` → `pull`, `status`, `seed`, `stop`; one route → every route with that shape). Write the inventory: gate → siblings → applied / waived (why). This is class 11 generalized from rendering surfaces to behavior surfaces.
+
+### 18. Input domain enumerated once
+Every external value the change reads — URL, env var, path, CLI flag, tool output, config key — gets a written table of the accepted domain and the rejected cases, with one test per rejected row: empty, whitespace-only, case variants, bare delimiters, credentials / query / fragment in a URL, bad port, malformed authority, loopback spellings, IPv6 bracketing, scheme, path prefix. Validation that grows one rejected case per review pass is the failure mode; the table written up front is the fix. A reviewer who sees validation without a table asks for the table, in one finding.
+
+### 19. External-tool contracts probed, not assumed
+Code that parses another tool's or service's output — Docker labels and `<no value>` sentinels, `host-gateway-ip` vs `host-gateway-ips`, IPv6 bracketing, image names, a CLI that needs a checkout — is written against **captured real output**: run the real command once in each state that matters (present / missing / error) and store the output as a test fixture. A contract inferred from memory is a finding even when it turns out to be right, because nothing proves it.
+
+### 20. Upstream drift checked at design time
+For every repo or service the story depends on, fetch its current `main` and diff the contract the change touches — routes, auth requirements, schema, env names — against what the story assumed, before implementing. A dependency that moved before the branch was cut (routes under `/api/v1`, auth now required) is a design change to raise with the human, not a correctness finding to absorb in a late pass.
+
+### 21. Platform / network matrix written and tested
+When behavior varies by viewpoint or platform — host view vs container view, Linux vs macOS, loopback vs gateway vs daemon override — write the full matrix before review, with the expected value and the test that proves it in every cell. Each unwritten cell surfaces later as its own finding; name the empty cells in one finding instead.
 
 ## Universal smells
 

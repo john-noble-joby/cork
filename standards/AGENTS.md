@@ -120,6 +120,34 @@ Each recurs across real review history; when a diff fixes one instance, verify t
   wrappers carry real invariants; enums do not prematurely close string-valued concepts;
   parser/DTO/transport types stay out of the domain and off public service APIs.
 
+## Long-tail classes (pre-review)
+Review history (edge-fmt #534/#537: 6 and 11 Copilot passes, five single-item passes after a
+"clean" one) shows the items that surface late belong to a few classes that are checkable in
+pass 1 from the diff plus the PR body. Flag these as findings in the **first** pass; do not wait
+for the instance to show up:
+- **Unswept sibling** — a new gate, guard, hint, validation or message applied to one command,
+  path or handler whose siblings of the same shape (`start` but not `pull`/`status`/`stop`; one
+  route but not its peers) are untouched and not explicitly waived. Ask for the surface inventory.
+- **Unenumerated input domain** — an external value (URL, env var, path, flag, tool output,
+  config key) validated against a few cases with no stated domain: missing rows for empty,
+  whitespace, case, bare delimiters, credentials/query/fragment, bad port, malformed authority,
+  loopback spellings, IPv6 brackets, scheme, prefix. One finding naming the missing rows, not
+  one finding per row per pass.
+- **Unprobed tool contract** — code that parses another tool's or service's output (sentinels,
+  field names, formats, image names, "needs a checkout") with no captured real output as a
+  fixture. Inferred contracts are findings even when they happen to be right.
+- **Unchecked upstream** — a change that depends on another repo or service with no evidence its
+  current `main` was fetched and the touched contract (routes, auth, schema, env names) compared
+  to the story's assumption.
+- **Unwritten matrix** — behaviour that varies by viewpoint or platform (host vs container,
+  Linux vs macOS, loopback vs gateway vs daemon override) without the full matrix written and a
+  test per cell; name the empty cells.
+- **Restatement inventory** — a behaviour change has N restatements: code comments, docstrings,
+  CLI help, hints and error messages, READMEs, runbook, env-file and compose comments, the PR
+  body, the story. Report every stale, overclaiming or contradicting restatement in one finding
+  per claim, and documentation the acceptance criteria asked for that the diff lacks. This is
+  the sweep form of *Doc/comment freshness* above.
+
 ## Tests
 - Happy path: assert the actual produced values, not just "not null".
 - Error paths: a test for every stable failure mode (missing / blank / out-of-range /

@@ -69,6 +69,8 @@ Run this isolated from the correctness/standards reads so the two don't contamin
 - No stale references to renamed/removed types in docs or commit messages in the diff.
 - Open questions in the spec that implementation answered are marked answered.
 
+**Restatement inventory.** For each behavior claim the diff alters, the review expects every restatement (comments, docstrings, help, hints/messages, READMEs, runbook, env/compose comments, PR body, story) to agree with the code. Report stale, overclaiming or contradicting restatements as one finding per claim, and documentation the acceptance criteria asked for that is absent. If the PR body carries a `## Pre-review sweep` section, check its claims (surface inventory, input-domain table, contract probes, upstream-drift check, platform matrix, docs sweep) rather than rediscovering the items; if it does not, the missing sweep is itself a first-pass finding (coding-standards classes 17–21).
+
 ## Report format
 
 `## Strengths` (2–5 bullets — affirm non-obvious good choices) ·
