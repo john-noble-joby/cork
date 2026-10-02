@@ -103,7 +103,10 @@ bug). All work happens in the worktree, not the main checkout.
 
 ```bash
 BASE=develop                   # or what the user said
-git fetch origin "$BASE"
+# Explicit refspec: update origin/$BASE itself — a bare `git fetch origin $BASE` only guarantees
+# FETCH_HEAD, so an overridden base with no remote-tracking ref would fail here and an existing
+# one could start from stale code. Phase 4's --base-branch and the docs sweep use the same ref.
+git fetch origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
 BR="feature/<TICKET>-<slug>"   # or bugfix/<TICKET>-<slug>
 git worktree add ".worktrees/$BR" -b "$BR" "origin/$BASE"
 cd ".worktrees/$BR"
@@ -192,7 +195,7 @@ with "none" under it rather than omitting it, so the absence is a claim a review
 | c | **Contract probes.** For every external tool or API whose output the change parses — Docker, git, a CLI, a sibling service — run the real command once in each state that matters (present / missing / error) and capture the real output into a test fixture. Never infer a sentinel (`<no value>`), a field name (`host-gateway-ip` vs `-ips`) or a format from memory. **Redact before committing:** replace credentials, tokens, personal data, hostnames, absolute paths, timestamps and volatile IDs with stable placeholders that keep the contract's *shape* (field names, nesting, sentinels, delimiters, bracketing) intact, and note at the top of the fixture what was replaced. A fixture that leaks a secret is worse than no fixture. | List: command → states probed → fixture path → what was redacted. |
 | d | **Upstream-drift check (refresh).** The first check ran before G2 (Phase 2) and its result is in `$SWEEP_DIR/upstream.md`. Re-fetch each dependency's `main` now — it may have moved again while you implemented — and diff the touched contract (routes, auth requirements, schema, env names) against both the story's assumption and your implementation. New drift found here is still a design question for the user before review, not a finding to absorb in pass 7. | List: dependency → ref at G2 → ref now → drift found / none. |
 | e | **Platform / network matrix.** When behaviour varies by viewpoint or platform — host vs container, Linux vs macOS, loopback vs gateway vs daemon override — write the full matrix with every cell filled: expected value and the test that proves it. An unwritten cell is a finding waiting for a later pass. | Matrix with a test per cell. |
-| f | **Docs & wording sweep.** First **draft the PR body now** — the "In plain terms" section plus artifacts a–e — and save it as `$SWEEP_DIR/pr-body.md`; the PR does not exist yet, and the sweep must check the body's claims too. Then dispatch a subagent with the prompt in `references/docs-sweep.md` — **one by default; up to two for a big story, split by audience** — passing the worktree, base, story text and that draft body. It lists every behaviour claim the diff alters, greps every restatement of each claim across the repo (comments, docstrings, help, hints, messages, READMEs, runbook, env and compose comments, commit messages, the draft PR body, the story), and reports stale, overclaiming or contradicting text plus documentation the acceptance criteria asked for that the diff lacks. With the audience split (operator/QA-facing vs code-facing) the invariant is not the agent count but the **shared claim inventory**: you write it once, both agents check restatements against it, and you reconcile the two reports per claim; never split by location. Fix its findings before Phase 4 and update the draft body. | Its report, condensed to claim → restatements checked → fixed. |
+| f | **Docs & wording sweep.** First **draft the PR body now** — the "In plain terms" section plus artifacts a–e — and save it as `$SWEEP_DIR/pr-body.md`; the PR does not exist yet, and the sweep must check the body's claims too. Then dispatch a subagent with the prompt in `references/docs-sweep.md` — **one by default; up to two for a big story, split by audience** — passing the worktree, the fetched base ref `origin/$BASE` (the same ref the reviewers diff against, never the bare branch name), the story text and that draft body. It lists every behaviour claim the diff alters, greps every restatement of each claim across the repo (comments, docstrings, help, hints, messages, READMEs, runbook, env and compose comments, commit messages, the draft PR body, the story), and reports stale, overclaiming or contradicting text plus documentation the acceptance criteria asked for that the diff lacks. With the audience split (operator/QA-facing vs code-facing) the invariant is not the agent count but the **shared claim inventory**: you write it once, both agents check restatements against it, and you reconcile the two reports per claim; never split by location. Fix its findings before Phase 4 and update the draft body. | Its report, condensed to claim → restatements checked → fixed. |
 
 Run the repo's tests again. The artifacts live outside the repo, so a clean sweep may change
 no tracked file — commit only if `git status --porcelain` is non-empty (fixes, new fixtures,
@@ -202,8 +205,10 @@ corrected docs). Only now move to Phase 4.
 
 Run the usual cork **full** review→fix flow on the branch (invoke/follow the `cork`
 skill): per-model blind review → apply the valid findings or **push back with
-justification** → commit after each model. Record every pushback for the Phase 7
-summary. cork's `preflight` picks the models available on this seat.
+justification** → commit after each model whose findings changed tracked files (a model
+whose findings were all pushed back leaves nothing to commit — do not create an empty one).
+Record every pushback for the Phase 7 summary. cork's `preflight` picks the models
+available on this seat.
 
 **Give every reviewer the sweep.** Write the story file once — the story text followed by
 the Phase 3.5 artifacts — and add `--story-file` to each `--review-model` call the cork skill
