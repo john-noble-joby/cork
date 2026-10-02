@@ -2682,14 +2682,6 @@ def main() -> None:
 
     instructions, instructions_path = load_agent_instructions(
         repo, set(_git_changed_names(repo, f"{base}...HEAD")), base)
-    # The headless Claude self-review is told to *read* its standards from a path. That path
-    # must hold the trusted text assembled above — never the branch's own copy, which the
-    # diff may have edited — so it is written to a cork-owned scratch file outside the repo.
-    standards_file = ""
-    if instructions:
-        standards_dir = Path(tempfile.mkdtemp(prefix="cork-review-standards-"))
-        (standards_dir / "REVIEW_STANDARDS.md").write_text(instructions, encoding="utf-8")
-        standards_file = str(standards_dir / "REVIEW_STANDARDS.md")
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
     else:
@@ -2744,9 +2736,17 @@ def main() -> None:
     # ── Step 2: Claude multi-agent self-review ────────────────────────────────
     if rem["self_review"]:
         step(2, total, "Claude Code: multi-agent self-review", ticket_id=tid)
-        self_review_out = run_claude(
-            prompt_claude_review(base, standards_file, summary), cwd=repo
-        )
+        # The self-review is told to *read* its standards from a path. That path must hold the
+        # trusted text assembled above — never the branch's own copy, which the diff may have
+        # edited — so it lives in a scratch dir outside the repo for exactly this call.
+        with tempfile.TemporaryDirectory(prefix="cork-review-standards-") as standards_dir:
+            standards_file = ""
+            if instructions:
+                standards_file = str(Path(standards_dir) / "REVIEW_STANDARDS.md")
+                Path(standards_file).write_text(instructions, encoding="utf-8")
+            self_review_out = run_claude(
+                prompt_claude_review(base, standards_file, summary), cwd=repo
+            )
         print(f"  {self_review_out[:300]}…")
         state["done"]["self_review"] = self_review_out
         mark_done_v2(tid, state)
