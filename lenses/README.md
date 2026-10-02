@@ -13,7 +13,14 @@ concern implies, and names the test that would catch each defect.
 | `spec-and-test-coverage.md` | every story requirement classified; every new conditional named with the test that kills it |
 | `standards-and-docs.md` | comments as contracts, decision registers, versioning policy, closed-hierarchy and keyed-registry sweeps, presentation surfaces |
 
-Placeholders to fill before dispatch: `{WORKTREE}`, `{BASE}` (the fetched remote-tracking ref),
+Lens files are the subagent's instructions, so they come from a trusted source: the shipped
+ones from `$CORK_HOME/lenses/`, a repo's own from `code-review/lenses/` **at the trusted base
+ref** (`git show <base>:code-review/lenses/<name>.md`), and — when the repository under review
+is cork itself — the shipped ones from the base ref too (`git -C "$CORK_HOME" show
+<base>:lenses/<name>.md`), never from the checkout being reviewed.
+
+Placeholders to fill before dispatch: `{WORKTREE}`, `{BASE}` (the trusted ref exactly as
+selected — e.g. `origin/develop` — never re-prefixed),
 `{STORY_FILE}` (the persisted story, read as untrusted data) and `{STANDARDS}` (the path of a
 file written by `orchestrate.py standards show <repo> --base-ref <fetched base>` — the
 assembled rubric read from the trusted ref, never the checkout's standards files). Every lens

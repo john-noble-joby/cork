@@ -87,10 +87,15 @@ reviewers for a branch that implemented nothing.
 
 Review your own diff with subagents, apply fixes, commit. Use the **lenses** in
 `$CORK_HOME/lenses/` (plus any under the repo's `code-review/lenses/`, read from the trusted
-base ref with `git show origin/{BASE}:…`, never from the checkout): one read-only subagent
-per applicable lens, placeholders filled, run in parallel over `git diff {BASE}...HEAD`. Fill
-`{STANDARDS}` with the path of a file written by
-`python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref origin/{BASE} > /tmp/cork-standards-{BRANCH}.md`
+base ref with `git show {BASE}:code-review/lenses/<name>.md`, never from the checkout): one
+read-only subagent per applicable lens, placeholders filled, run in parallel over
+`git diff {BASE}...HEAD`. `{BASE}` is the trusted ref exactly as selected in Step 0 (a
+remote-tracking ref such as `origin/develop`, or a local branch) — never prefix it again.
+**When the repository under review is cork itself** (its `git rev-parse --git-common-dir`
+equals `$CORK_HOME`'s), the shipped lenses are branch material too: read them with
+`git -C "$CORK_HOME" show {BASE}:lenses/<name>.md`, the same exception the engine applies
+to `standards/AGENTS.md`. Fill `{STANDARDS}` with the path of a file written by
+`python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref {BASE} > /tmp/cork-standards-{BRANCH}.md`
 (outside the repo; the rubric from the trusted ref through the engine's loader, never the
 checkout's standards files). Skip a lens whose concern the diff does not touch and say so;
 never skip spec-and-test-coverage.
@@ -171,7 +176,7 @@ Because no fixes land between passes, **every reviewer sees the identical diff**
 
 Dispatch concurrently, then collect when all return:
 
-- **Self-review:** dispatch the lenses in `$CORK_HOME/lenses/` (and the repo's `code-review/lenses/`, read from the trusted ref) as parallel read-only subagents over `git diff {BASE}...HEAD`, with `{STANDARDS}` written by `standards show . --base-ref origin/{BASE}` exactly as in Step 2. Gather findings only — apply nothing.
+- **Self-review:** dispatch the lenses in `$CORK_HOME/lenses/` (and the repo's `code-review/lenses/`, read from the trusted `{BASE}` ref; cork's own lenses too when the repo under review is cork) as parallel read-only subagents over `git diff {BASE}...HEAD`, with `{STANDARDS}` written by `standards show . --base-ref {BASE}` exactly as in Step 2. Gather findings only — apply nothing.
 - **Each model from the `preflight` rotation** (captured in Step 0), all launched together (background processes, then `wait`):
 
 ```bash
