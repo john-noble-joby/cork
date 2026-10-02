@@ -213,7 +213,11 @@ OUTDIR=$(mktemp -d /tmp/cork-review.XXXXXX)   # per-run dir: concurrent runs nev
 STORY="$OUTDIR/story.md"                      # <- fill from the PR body / ticket / user before fanning out
 STANDARDS_FILE="$OUTDIR/standards.md"; python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "{BASE}" > "$STANDARDS_FILE"   # for the lenses
 # PREFLIGHT_MODELS is the space-separated list of "provider/model" lines from Step 0 preflight
-CONTEXT_ARGS=(); for f in "${CONTEXT_FILES[@]}"; do CONTEXT_ARGS+=(--context-file "$f"); done   # callers, DI, covering tests, docs
+# Blast radius the diff does not show — callers of changed symbols, DI/registration wiring, covering
+# tests, restating docs, and any changed file the manifest lists as diff-only. Repo-relative paths;
+# populate it here (the full-mode array is a different shell), or the lanes get no context at all.
+CONTEXT_FILES=( )                             # <- fill from grep/LSP over the changed symbols
+CONTEXT_ARGS=(); for f in "${CONTEXT_FILES[@]}"; do CONTEXT_ARGS+=(--context-file "$f"); done
 for M in $PREFLIGHT_MODELS; do
   safe="${M//\//-}"
   python3 "$CORK_HOME/orchestrate.py" "${TICKET:-REVIEW}" {WORKTREE} \
