@@ -32,7 +32,8 @@ procedure in the README's *Versioning* section.
 ### Added
 - **`cork` command.** `bin/cork` is a six-line shim that resolves its own symlink chain and
   execs the `orchestrate.py` of the clone it lives in; `install.sh` links it at
-  `~/.local/bin/cork` (repointing a stale or dangling link, never replacing a foreign file)
+  `~/.local/bin/cork` (repointing a link to another cork clone, present or deleted; never
+  replacing a regular file or a symlink to anything else)
   and prints a hint when that directory is not on `PATH`. No package, no venv, no second
   copy — `git pull` stays the whole upgrade, and skills keep calling
   `$CORK_HOME/orchestrate.py` explicitly. Closes #28.
