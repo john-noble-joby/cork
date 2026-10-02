@@ -189,6 +189,13 @@ class BranchControlledStandardsTest(unittest.TestCase):
         plain, _ = orchestrate.load_agent_instructions(str(self.repo))   # no diff: checkout as before
         self.assertIn("BRANCH UNIVERSAL", plain)
 
+    def test_non_utf8_standards_at_trusted_ref_do_not_abort_the_review(self):
+        _git(self.repo, "checkout", "-q", "main")
+        (self.repo / "code-review" / "AGENTS.md").write_bytes(b"BASE RULES caf\xe9\n")   # latin-1 byte
+        _git(self.repo, "commit", "-qam", "latin-1 byte in standards")
+        text, _, _ = self._load({"a.py"})
+        self.assertIn("BASE RULES caf\ufffd", text)
+
     def test_trusted_ref_opt_out_survives_branch_deleting_or_editing_the_sentinel(self):
         # the base opted out; the branch deletes (or rewrites) the sentinel — the base decides
         _git(self.repo, "checkout", "-q", "main")

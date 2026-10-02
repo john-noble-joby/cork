@@ -1370,11 +1370,13 @@ def _tree_file(repo: str, ref: str, rel: str) -> str | None:
     # `git show ref:path` would happily return a symlink's *target string*, and the working
     # tree can alias any path through a symlinked parent, so provenance is checked in the
     # trusted tree itself: only a blob with a regular-file mode counts.
-    entry = subprocess.run(["git", "ls-tree", ref, "--", rel], cwd=repo, capture_output=True, text=True)
+    entry = subprocess.run(["git", "ls-tree", ref, "--", rel], cwd=repo, capture_output=True, text=True, errors="replace")
     if entry.returncode != 0 or not entry.stdout.startswith(("100644 ", "100755 ")):
         return None
-    shown = subprocess.run(["git", "show", f"{ref}:{rel}"], cwd=repo, capture_output=True, text=True)
-    return shown.stdout if shown.returncode == 0 else None
+    # replacement decoding, like the checkout and default-standards reads: a stray non-UTF-8
+    # byte in a standards file must not abort the review
+    shown = subprocess.run(["git", "show", f"{ref}:{rel}"], cwd=repo, capture_output=True)
+    return shown.stdout.decode("utf-8", "replace") if shown.returncode == 0 else None
 
 
 def _repo_opted_out(repo: str, changed: set[str] | None = None,
