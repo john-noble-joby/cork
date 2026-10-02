@@ -248,10 +248,12 @@ python3 "$CORK_HOME/orchestrate.py" <TICKET> . --review-model <MODEL> --base-bra
 The reviewer prompt then carries `## Pre-review sweep` inside `## Story / Task`, which is
 what the standards' *Long-tail classes* section tells reviewers to check. Without the flag,
 API and prompt-only lanes see only the diff and will apply those classes to the diff alone.
-The story and sweep are ticket-derived text: `orchestrate.py` opens every reviewer's system
-prompt with a trust boundary that marks the story, diff and file contents as material under
-review, never instructions, so a ticket line that addresses the reviewer becomes a finding
-rather than a directive. You do not need to sanitise them, but do not strip that boundary.
+The story and sweep are ticket-derived text: `orchestrate.py` opens every reviewer prompt
+(the system prompt for API lanes, the top of the ordinary prompt for harness lanes and the
+headless self-review) with a trust boundary that marks the story, diff, file contents and any
+repository file read during review as material under review, never instructions, so a ticket
+line that addresses the reviewer becomes a finding rather than a directive. You do not need
+to sanitise them, but do not strip that boundary.
 
 **Keep the sweep current between models.** cork's full mode is sequential: each model's fixes
 land before the next model runs. After applying a model's findings — and committing them, since

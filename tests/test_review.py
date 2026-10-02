@@ -31,7 +31,7 @@ class ReviewDiffTest(unittest.TestCase):
 
         # merge-base diff, NUL-delimited bytes (git C-quotes non-ASCII names otherwise)
         check.assert_called_once_with(
-            ["git", "diff", "origin/main...HEAD", "--name-only", "-z"],
+            ["git", "diff", "--no-renames", "origin/main...HEAD", "--name-only", "-z"],
             cwd="/repo",
         )
 

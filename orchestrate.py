@@ -1166,7 +1166,9 @@ def git_diff_branch(cwd: str, base: str) -> str:
 def _git_changed_names(cwd: str, *diff_args: str) -> list[str]:
     # NUL-delimited and decoded as filesystem paths: with the default core.quotePath, plain
     # `--name-only` C-quotes a name like café.py into "caf\303\251.py", which no file matches.
-    raw = subprocess.check_output(["git", "diff", *diff_args, "--name-only", "-z"], cwd=cwd)
+    # --no-renames: a rename lists both the old and the new path, so a standards file moved by
+    # the diff still counts as touched on both sides (see _project_standards).
+    raw = subprocess.check_output(["git", "diff", "--no-renames", *diff_args, "--name-only", "-z"], cwd=cwd)
     return [os.fsdecode(part) for part in raw.split(b"\0") if part]
 
 
@@ -2675,6 +2677,14 @@ def main() -> None:
 
     instructions, instructions_path = load_agent_instructions(
         repo, set(_git_changed_names(repo, f"{base}...HEAD")), base)
+    # The headless Claude self-review is told to *read* its standards from a path. That path
+    # must hold the trusted text assembled above — never the branch's own copy, which the
+    # diff may have edited — so it is written to a cork-owned scratch file outside the repo.
+    standards_file = ""
+    if instructions:
+        standards_dir = Path(tempfile.mkdtemp(prefix="cork-review-standards-"))
+        (standards_dir / "REVIEW_STANDARDS.md").write_text(instructions, encoding="utf-8")
+        standards_file = str(standards_dir / "REVIEW_STANDARDS.md")
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
     else:
@@ -2730,7 +2740,7 @@ def main() -> None:
     if rem["self_review"]:
         step(2, total, "Claude Code: multi-agent self-review", ticket_id=tid)
         self_review_out = run_claude(
-            prompt_claude_review(base, instructions_path, summary), cwd=repo
+            prompt_claude_review(base, standards_file, summary), cwd=repo
         )
         print(f"  {self_review_out[:300]}…")
         state["done"]["self_review"] = self_review_out

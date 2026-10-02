@@ -379,11 +379,15 @@ that large — or an OpenCode prompt that large, since that lane passes the prom
 argument — is refused by cork before the CLI runs and the lane is skipped with an explicit
 size message. Codex, Claude and Pi take the prompt itself on stdin. Only Claude and Pi
 have a `--system-prompt` standards argument subject to that limit; Codex sends both the
-standards and task on stdin. **Trust boundary:** the
-reviewer follows instructions from the branch under review (`code-review/AGENTS.md`, file
-contents) with your local login, so a hostile branch could steer it into reading and quoting
-files it can reach (`--restricted` limits claude to the repo; codex has no file access,
-but does have web search).
+standards and task on stdin. **Trust boundary:** every reviewer prompt opens with a
+boundary that marks the story, diff, file contents and any repository file read during review
+as material under review, never instructions; the only trusted text is cork's default
+standards plus the project standards taken from the **trusted ref** (a `code-review/AGENTS.md`
+the diff itself edits is loaded from the base, not the branch — see *Coding & review
+standards*). The reviewer still runs with your local login and tree access, so a hostile
+branch can at most try to steer it into reading and quoting files it can reach
+(`--restricted` limits claude to the repo; codex has no file access, but does have web
+search) — such attempts are reported as findings, not followed.
 Run harness lanes only on branches you would run the repo's own hooks or tests from — the
 same trust you already extend to the implementer step. A timeout kills the CLI process
 itself; tool subprocesses it spawned are not tracked.
