@@ -207,7 +207,7 @@ Review-only usage accepts the contract directly for both API and harness lanes:
 
 ```bash
 python3 orchestrate.py <TICKET> <repo-path> --review-model <provider/model> \
-  [--story-file <path> | --story <text>] \
+  [--story-file <path> | --story <text>] [--context-file <path> ...] \
   [--base-branch <branch> [--diff-range <A..B>] | --diff-file <path>] [--skip-validation]
 ```
 
@@ -271,8 +271,11 @@ lanes (the same model-family gate applies to each); other OpenAI-compatible mode
 `review_budget_chars` (default 192000) is the size of the prompt an API review may carry —
 standards, story, diff, required context and as many changed files as fit, smallest first.
 Every review prints an **input manifest**: the budget split, the files sent with full contents,
-and the files the model saw diff-only (over budget, or over 500 lines). Raise the budget on a
-seat whose models have 200k+ token windows; the manifest tells you what the current value drops.
+and the files the model saw diff-only (over budget, over 500 lines, or not readable in the
+tree). Raise the budget on a seat whose models have 200k+ token windows by editing the field in
+`config.json` directly (`config set` covers only the boolean preferences); the manifest tells
+you what the current value drops. Only named `--context-file` inputs can fail a review for
+size; without them an over-budget diff is reviewed diff-only, and the manifest says so.
 
 `responses_effort` controls reasoning for Responses API calls (both reviews and probes):
 `"low"`, `"medium"` (the backward-compatible default), or `"high"`. Edit this field in

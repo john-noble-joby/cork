@@ -37,10 +37,12 @@ procedure in the README's *Versioning* section.
   turned into a finding. `--context-file PATH` (repeatable) names unchanged files the reviewer
   must see whole — callers, DI wiring, covering tests, restating docs — included under
   `## Required Context` ahead of the changed files and never dropped: a review that cannot fit
-  them fails with the breakdown. `review_budget_chars` in config.json (default 192000) sets the
-  prompt size per API review for seats whose models have larger windows. cork warns loudly on
-  the fallback story, on a local base behind `origin/<base>`, and on a diff over the 1,500-line
-  soft limit. Closes the context items of #32 (hangar #36, FAST #540).
+  them fails with the breakdown (in bytes on argv-transported lanes); without named context an
+  over-budget diff stays a diff-only review. `review_budget_chars` in config.json (default
+  192000) sets the prompt size per API review for seats whose models have larger windows. cork
+  warns loudly on the fallback story, on a local base that is behind, ahead of or diverged from
+  `origin/<base>` (review-only and headless), and on a diff over the 1,500-line soft limit.
+  Closes the context items of #32 (hangar #36, FAST #540).
 - **Lenses.** `lenses/` ships four narrow-concern reviewer prompts (state & concurrency; HTTP
   contract & store; spec & test coverage; standards & docs) run as parallel read-only subagents.
   devit gains *Phase 3.75 — Lens gate* before the model rotation and *Phase 6.5 — Final cork

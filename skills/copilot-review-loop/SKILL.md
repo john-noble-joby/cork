@@ -291,7 +291,7 @@ Push any commits, then evaluate stop conditions.
 | Condition | Action |
 |---|---|
 | `verdict=approve` AND `tc=0` AND `suppressed=0` AND `missed=0` this pass | **STOP** — satisfied, clean pass |
-| Comments (inline + body-level) all processed/resolved, `iteration == max` | **STOP** |
+| Comments (inline + body-level) all processed/resolved, `iteration == max` | **STOP — budget stop**: findings were still arriving; say so in the summary |
 | Comments (inline + body-level) all processed/resolved, `iteration < max` | Re-request, increment, reschedule |
 
 Judge "clean pass" from step 2's **verdict + `tc` + `suppressed` + `missed`** together — **never**
@@ -299,7 +299,8 @@ from an empty `reviewThreads` fetch (the index lags a fresh `COMMENTED`), **neve
 alone (Lite-mode reviews suppress findings into the body with `tc=0` but a `block` verdict), and
 **never** from a `Needs a closer look` verdict (it is not an approval).
 
-Print final summary on stop: iterations run, commits made, PR URL.
+Print final summary on stop: iterations run, commits made, PR URL, and whether the stop was a
+**clean pass** or a **budget stop** (and, for a budget stop, which findings were still arriving).
 
 ### 7. Re-request and continue
 
@@ -333,10 +334,12 @@ Update loop prompt with `iteration={N+1}` and reschedule.
 - **Run tests** after every fix commit before pushing. Don't push broken builds.
 - **Worktree:** all edits go in the PR's worktree, not the main checkout.
 - **Re-request works** once Copilot has completed a review — same POST endpoint.
-- **Default max:** 3 passes unless the user specifies otherwise. `max` caps passes that
-  **found something**: a clean pass always ends the loop early, and reaching `max` with findings
-  still arriving is a **budget stop**, reported as such in the final summary — never as "done".
-  devit passes `max=4` and treats a budget stop as a missed defect class to sweep in one commit.
+- **Default max:** 3 passes unless the user specifies otherwise. `max` caps **non-approving**
+  passes — ones with findings, or a bare `Needs a closer look` — and every such pass consumes an
+  iteration; a clean pass always ends the loop early, and reaching `max` with findings still
+  arriving is a **budget stop** (step 6), reported as such in the final summary — never as
+  "done". devit passes `max=4` and treats a budget stop as a missed defect class to sweep in one
+  commit.
 - **Auto-review on push does not replace the request.** Repos with Copilot auto-review still
   post a review per push, but a new pass is only guaranteed by an explicit request after each
   push; verify the assignment each tick (Step 2's GraphQL check), since a request can also lapse

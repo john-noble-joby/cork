@@ -86,7 +86,8 @@ After the implementation commit, stop here if the diff is still empty; do not fa
 reviewers for a branch that implemented nothing.
 
 Review your own diff with subagents, apply fixes, commit. Use the **lenses** in
-`$CORK_HOME/lenses/` (plus any under the repo's `code-review/lenses/`): one read-only subagent
+`$CORK_HOME/lenses/` (plus any under the repo's `code-review/lenses/`, read from the trusted
+base ref with `git show origin/{BASE}:…`, never from the checkout): one read-only subagent
 per applicable lens, placeholders filled, run in parallel over `git diff {BASE}...HEAD`. Skip a
 lens whose concern the diff does not touch and say so; never skip spec-and-test-coverage.
 
@@ -175,10 +176,11 @@ CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 OUTDIR=$(mktemp -d /tmp/cork-review.XXXXXX)   # per-run dir: concurrent runs never share story or report files
 STORY="$OUTDIR/story.md"                      # <- fill from the PR body / ticket / user before fanning out
 # PREFLIGHT_MODELS is the space-separated list of "provider/model" lines from Step 0 preflight
+CONTEXT_ARGS=(); for f in "${CONTEXT_FILES[@]}"; do CONTEXT_ARGS+=(--context-file "$f"); done   # callers, DI, covering tests, docs
 for M in $PREFLIGHT_MODELS; do
   safe="${M//\//-}"
   python3 "$CORK_HOME/orchestrate.py" "${TICKET:-REVIEW}" {WORKTREE} \
-    --review-model "$M" --story-file "$STORY" --base-branch {BASE} --skip-validation \
+    --review-model "$M" --story-file "$STORY" --base-branch {BASE} "${CONTEXT_ARGS[@]}" --skip-validation \
     > "$OUTDIR/review-${safe}.txt" 2>&1 &
 done
 wait
