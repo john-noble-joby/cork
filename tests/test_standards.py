@@ -111,12 +111,17 @@ class BranchControlledStandardsTest(unittest.TestCase):
         (self.repo / "code-review" / "AGENTS.md").write_text("BRANCH RULES"); _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "add rules")
         text, label, out = self._load({"code-review/AGENTS.md"})
         self.assertEqual(text, "UNIVERSAL"); self.assertNotIn("BRANCH RULES", text)
-        self.assertIn("no trusted base copy", out)
+        self.assertIn("no copy at main", out)
 
-    def test_changed_standards_without_a_trusted_ref_are_ignored(self):
+    def test_without_a_trusted_ref_the_whole_project_layer_is_dropped(self):
+        # --diff-file: nothing vouches for the checkout, whether or not the patch lists the file
         (self.repo / "code-review" / "AGENTS.md").write_text("BRANCH RULES")
-        text, _, out = self._load({"code-review/AGENTS.md"}, ref=None)   # e.g. --diff-file
-        self.assertEqual(text, "UNIVERSAL"); self.assertIn("no trusted base copy", out)
+        text, _, out = self._load({"code-review/AGENTS.md"}, ref=None)
+        self.assertEqual(text, "UNIVERSAL"); self.assertIn("no trusted ref", out)
+        text, _, out = self._load({"a.py"}, ref=None)        # standards file not in the patch
+        self.assertEqual(text, "UNIVERSAL"); self.assertIn("no trusted ref", out)
+        text, _ = orchestrate.load_agent_instructions(str(self.repo))      # plain load: unchanged
+        self.assertIn("BRANCH RULES", text)
 
     def test_branch_added_opt_out_sentinel_does_not_disable_the_default(self):
         (self.repo / "code-review" / ".cork-standards-off").write_text("")
@@ -124,9 +129,10 @@ class BranchControlledStandardsTest(unittest.TestCase):
         self.assertIn("UNIVERSAL", text); self.assertIn("default standards apply", out)
         text, _, _ = self._load({"a.py"})   # sentinel not part of the diff: honoured as before
         self.assertNotIn("UNIVERSAL", text)
-        # without a trusted ref (--diff-file) a changed sentinel cannot opt out either
-        text, _, out = self._load({"code-review/.cork-standards-off"}, ref=None)
-        self.assertIn("UNIVERSAL", text); self.assertIn("no trusted ref", out)
+        # without a trusted ref (--diff-file) a sentinel cannot opt out, listed in the patch or not
+        for changed in ({"code-review/.cork-standards-off"}, {"a.py"}):
+            text, _, out = self._load(changed, ref=None)
+            self.assertIn("UNIVERSAL", text); self.assertIn("no trusted ref", out)
 
     def test_trusted_ref_opt_out_survives_branch_deleting_or_editing_the_sentinel(self):
         # the base opted out; the branch deletes (or rewrites) the sentinel — the base decides

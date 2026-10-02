@@ -1370,10 +1370,16 @@ def _repo_opted_out(repo: str, changed: set[str] | None = None,
     # The opt-out sentinel is branch-controlled like any file, so when the diff under review
     # touches it the trusted ref decides: opted out iff the sentinel exists there. A sentinel
     # the branch introduced never counts; one the branch deleted still does.
+    if changed is not None and trusted_ref is None:
+        # A diff with no trusted revision (--diff-file): the checkout is branch-controlled and
+        # nothing vouches for the sentinel, whether or not the patch lists it.
+        if (Path(repo) / _OPT_OUT_SENTINEL).exists():
+            print(f"  ⚠ {_OPT_OUT_SENTINEL} present but there is no trusted ref for this diff — default standards apply", flush=True)
+        return False
     if changed is not None and _OPT_OUT_SENTINEL in changed:
-        at_ref = trusted_ref is not None and _show_at(repo, trusted_ref, _OPT_OUT_SENTINEL) is not None
-        state = f"following {trusted_ref}: {'opted out' if at_ref else 'default standards apply'}" if trusted_ref else "no trusted ref: default standards apply"
-        print(f"  ⚠ {_OPT_OUT_SENTINEL} is changed by this diff — {state}", flush=True)
+        at_ref = _show_at(repo, trusted_ref, _OPT_OUT_SENTINEL) is not None
+        print(f"  ⚠ {_OPT_OUT_SENTINEL} is changed by this diff — following {trusted_ref}: "
+              f"{'opted out' if at_ref else 'default standards apply'}", flush=True)
         return at_ref
     return (Path(repo) / _OPT_OUT_SENTINEL).exists()
 
@@ -1388,16 +1394,23 @@ def _project_standards(repo: str, changed: set[str] | None,
     # The project's standards become reviewer *instructions*, so a version the diff under
     # review added or edited must not be the one that governs its own review — a PR could
     # otherwise rewrite the rubric to suppress findings. For a changed file take the copy at
-    # the trusted ref (the base the diff is measured from); with no such ref, or none at the
-    # base, the branch's copy is reviewed like any other changed file and governs nothing.
+    # the trusted ref (the base the diff is measured from); with none at the base, or no
+    # trusted ref at all, the checkout's copy is reviewed like any other file and governs nothing.
+    if changed is not None and trusted_ref is None:
+        # --diff-file: the patch may omit a standards file the checkout carries, and nothing
+        # vouches for any working-tree copy, so the whole project layer is dropped.
+        if any((Path(repo) / rel).exists() for rel in _PROJECT_STANDARDS):
+            print("  ⚠ project standards present but there is no trusted ref for this diff — "
+                  "only the default standards apply; the checkout's copy is review material", flush=True)
+        return "", ""
     for rel in _PROJECT_STANDARDS:
         p = Path(repo) / rel
         if changed is not None and rel in changed:
-            base_text = _show_at(repo, trusted_ref, rel) if trusted_ref else None
+            base_text = _show_at(repo, trusted_ref, rel)
             if base_text and base_text.strip():
                 print(f"  ⚠ {rel} is changed by this diff — reviewers follow the {trusted_ref} revision; the branch's copy is review material", flush=True)
                 return base_text, f"{rel}@{trusted_ref}"
-            print(f"  ⚠ {rel} is added or changed by this diff with no trusted base copy — not used as review instructions", flush=True)
+            print(f"  ⚠ {rel} is added by this diff with no copy at {trusted_ref} — not used as review instructions", flush=True)
             continue
         if p.exists():
             return p.read_text(errors="replace"), str(p)
@@ -2680,13 +2693,6 @@ def main() -> None:
     rem     = _remaining_work(state)
     summary = state.get("done", {}).get("summary") or state.get("summary", "")
 
-    instructions, instructions_path = load_agent_instructions(
-        repo, set(_git_changed_names(repo, f"{base}...HEAD")), base)
-    if instructions_path:
-        print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
-    else:
-        print("No AGENTS.md found — using default review format")
-
     # Accumulators for human-attention summary printed at the end
     uncertain_items: list[tuple[str, str]] = []
     fix_notes: list[tuple[str, str]] = []
@@ -2710,6 +2716,16 @@ def main() -> None:
         fail("No diff vs base branch — nothing to review.")
     diff_lines = len(diff.splitlines())
     print(f"  {len(files)} files, {diff_lines} diff lines vs {base}")
+
+    # Standards are loaded only now — after Step 1 has implemented and committed — so a
+    # rubric or opt-out sentinel the implementation itself added or edited is seen as part
+    # of the diff and taken from the trusted base, not snapshotted from the working tree.
+    instructions, instructions_path = load_agent_instructions(
+        repo, set(_git_changed_names(repo, f"{base}...HEAD")), base)
+    if instructions_path:
+        print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
+    else:
+        print("No AGENTS.md found — using default review format")
 
     # ── Diff-size gate ───────────────────────────────────────────────────────
     # A diff > ~1,500 lines saturates reviewer context and overflows smaller
