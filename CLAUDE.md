@@ -5,7 +5,7 @@
 Serial multi-model coding pipeline that takes a Linear ticket and produces reviewed, fixed code:
 
 1. **Claude Code** fetches the story via Linear MCP, searches mem0 for codebase context, creates a feature branch, implements the story
-2. **Claude Code** reviews its own diff (multi-agent), then applies the findings
+2. **Claude Code** reviews its own diff (headless: one isolated read-only reviewer pass; the session-driven `cork` skill uses parallel subagents), then applies the findings
 3. Each blind reviewer from the **preflight-selected ranked rotation** (configured API and CLI-harness providers, up to `count` models from `~/.config/cork/config.json`) reviews the current code state in turn — never prior review text — and **Claude Code** applies each model's findings before the next reviewer runs
 4. **Claude Code** applies the final model's findings and saves decisions to mem0
 
@@ -39,8 +39,8 @@ No frameworks. No classes. No abstractions beyond what the task requires.
 ## Key Files in Target Repos
 
 When the orchestrator runs against a repo, it looks for:
-- `AGENTS.md`, `agent.md`, or `.github/AGENTS.md` — injected as system prompt for reviewer models
-- Standard git history — `git diff HEAD` is the source of truth for what Claude Code changed
+- `code-review/AGENTS.md`, `code-review/agent.md`, `AGENTS.md`, `agent.md`, or `.github/AGENTS.md` (first match) — injected as system prompt for reviewer models, read from the trusted base ref when a diff is under review
+- Standard git history — `git diff <base>...HEAD` (merge-base against the base branch) is the source of truth for what Claude Code changed; see README *Coding & review standards* for where the standards come from
 
 ## Environment
 

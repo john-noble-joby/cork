@@ -114,6 +114,14 @@ CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch develop
 ```
 
+Add `--story-file PATH` when the caller has an explicit contract for the reviewers — devit
+passes the Linear story plus its Phase 3.5 `## Pre-review sweep` artifacts this way. The
+artifacts live outside the repository, so no lane can reach them through the tree: not the
+API models or the harnesses without tree access (`codex`, `pi`), and not the tree-capable
+ones (`claude`, `opencode`) either, because the files are not in the tree they can read. The
+story file is the only way the artifacts reach any reviewer.
+Without it the reviewer gets the checkpoint summary or the generic fallback as its story.
+
 `{MODEL}` is the full `provider/model` ref printed by `preflight` (e.g. `copilot/gpt-5.5`); `orchestrate.py` splits it (a bare id defaults to `copilot`).
 
 This command **only prints the model's review to stdout** — it makes no changes. Applying the findings is your job (next paragraph).

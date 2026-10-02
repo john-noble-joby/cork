@@ -136,7 +136,7 @@ Lower-level detail and the underlying `orchestrate.py` engine.
 | Steps | Who | What |
 |-------|-----|------|
 | 1 | Claude Code | Fetch story, search mem0, implement, **commit** |
-| 2 | Claude Code | Multi-agent self-review |
+| 2 | Claude Code | Isolated single-pass self-review (safe mode, read-only tools, trusted standards as system prompt) |
 | 3 | Claude Code | Apply self-review findings, **commit** |
 | 4, 6, … | Reviewer model (×N) | Blind review — sees current code, not prior findings |
 | 5, 7, … | Claude Code (×N) | Apply findings, **commit** |
@@ -170,6 +170,16 @@ The **effective** rubric for a repo is:
   `code-review/AGENTS.md` that **extends** the default baseline (your specifics take
   precedence); fill in your stack's conventions.
 - **Opt a repo out:** `standards init <repo> --opt-out` (writes `code-review/.cork-standards-off`).
+- **A diff cannot rewrite its own rubric:** the project standards file and the opt-out
+  sentinel become reviewer *instructions*, so whenever a diff is under review they are read
+  from the **trusted git tree** at the base branch (`--base-branch`, also alongside
+  `--diff-range` — a range start such as a delta round's old head is the PR's own commit and
+  never anchors trust) — never from the checkout, and only a regular-file blob there counts
+  (a symlink, committed or in the working tree, cannot alias them). The branch's copy is
+  reviewed like any other file. The same holds for cork's own `standards/AGENTS.md` when cork
+  reviews its own checkout. With no trusted ref (`--diff-file`) the project layer is dropped
+  for that review and a warning says so; a branch-added sentinel never disables the default.
+  Plain `standards status` still reads the checkout.
 - **Opt out everywhere:** `python3 orchestrate.py config set default_standards false`.
 - **Scope of the opt-out:** these toggles control what `orchestrate.py` injects into API
   reviewers and the devit implementer prompt. The installed `coding-standards` skill is a
@@ -190,7 +200,7 @@ Review-only usage accepts the contract directly for both API and harness lanes:
 ```bash
 python3 orchestrate.py <TICKET> <repo-path> --review-model <provider/model> \
   [--story-file <path> | --story <text>] \
-  [--base-branch <branch> | --diff-range <A..B> | --diff-file <path>] [--skip-validation]
+  [--base-branch <branch> [--diff-range <A..B>] | --diff-file <path>] [--skip-validation]
 ```
 
 Story precedence is `--story-file` → `--story` → checkpoint `done.summary` → checkpoint
@@ -198,9 +208,13 @@ Story precedence is `--story-file` → `--story` → checkpoint `done.summary` �
 the review starts; explicit stories are not written to the checkpoint.
 
 The diff under review comes from exactly one source — `--diff-range`, `--diff-file`, or the
-default merge-base diff vs `--base-branch` (the three are mutually exclusive). Changed-file
-contents are always read from the working tree, so check the tree out at the diff's newer end.
-Every source applies the same empty-diff guard.
+default merge-base diff vs `--base-branch`. `--base-branch` may accompany `--diff-range`: the
+range is the diff, the base is the trusted ref the review standards are read from (default
+`origin/develop`, and it must resolve). `--diff-file` takes no base and rejects the flag.
+`<repo>` may be any directory inside the work tree; cork normalises it to the repository root
+before reading standards or file contents. Changed-file contents are
+always read from the working tree, so check the tree out at the diff's newer end. Every source
+applies the same empty-diff guard.
 
 | Flag | Review-only behavior |
 |------|----------------------|
@@ -208,7 +222,7 @@ Every source applies the same empty-diff guard.
 | `--story-file PATH` | Read the story/acceptance contract from a UTF-8 file. |
 | `--story TEXT` | Supply the story inline; use `--story=TEXT` if it starts with `-`. |
 | `--base-branch BRANCH` | Diff `merge-base(BRANCH, HEAD)...HEAD` (default `origin/develop`). |
-| `--diff-range A..B` | Review `git diff A..B` (or `A...B`) instead — e.g. `old-head..new-head` so a fix round reviews only its delta. Both endpoints must resolve. |
+| `--diff-range A..B` | Review `git diff A..B` (or `A...B`) instead — e.g. `old-head..new-head` so a fix round reviews only its delta. Both endpoints must resolve; standards still come from `--base-branch`. |
 | `--diff-file PATH` | Review a unified diff read from PATH; changed files come from its `+++ b/<path>` headers. Paths must carry git's `a/`/`b/` prefixes (`git diff`, or `diff -urN a b`); `diff --git` lines are optional and an unprefixed header is refused. |
 | `--skip-validation` | Skip the model availability probe. |
 
@@ -373,11 +387,15 @@ that large — or an OpenCode prompt that large, since that lane passes the prom
 argument — is refused by cork before the CLI runs and the lane is skipped with an explicit
 size message. Codex, Claude and Pi take the prompt itself on stdin. Only Claude and Pi
 have a `--system-prompt` standards argument subject to that limit; Codex sends both the
-standards and task on stdin. **Trust boundary:** the
-reviewer follows instructions from the branch under review (`code-review/AGENTS.md`, file
-contents) with your local login, so a hostile branch could steer it into reading and quoting
-files it can reach (`--restricted` limits claude to the repo; codex has no file access,
-but does have web search).
+standards and task on stdin. **Trust boundary:** every reviewer prompt opens with a
+boundary that marks the story, diff, file contents and any repository file read during review
+as material under review, never instructions; the only trusted text is cork's default
+standards plus the project standards taken from the **trusted ref** (a `code-review/AGENTS.md`
+the diff itself edits is loaded from the base, not the branch — see *Coding & review
+standards*). The reviewer still runs with your local login and tree access, so a hostile
+branch can at most try to steer it into reading and quoting files it can reach
+(`--restricted` limits claude to the repo; codex has no file access, but does have web
+search) — such attempts are reported as findings, not followed.
 Run harness lanes only on branches you would run the repo's own hooks or tests from — the
 same trust you already extend to the implementer step. A timeout kills the CLI process
 itself; tool subprocesses it spawned are not tracked.

@@ -69,6 +69,8 @@ Run this isolated from the correctness/standards reads so the two don't contamin
 - No stale references to renamed/removed types in docs or commit messages in the diff.
 - Open questions in the spec that implementation answered are marked answered.
 
+**Restatement inventory.** For each behavior claim the diff alters, the review expects every restatement (comments, docstrings, help, hints/messages, READMEs, runbook, env/compose comments, commit messages, PR body) to agree with the code. Report stale, overclaiming or contradicting restatements as one finding per claim, and documentation the acceptance criteria asked for that is absent. The story is not a restatement — it is the contract, and code that disagrees with an acceptance criterion is a spec-conformance finding (the second axis), never a "stale story"; do not recommend editing the criteria to fit the implementation. If the story section or PR body you were given carries a `## Pre-review sweep` inventory, check its claims (surface inventory, input-domain table, contract probes, upstream-drift check, platform matrix, docs sweep) against the diff and flag what it omits, rather than rediscovering the items; if you were given none, apply coding-standards classes 17–21 to the diff directly and do not report the inventory's absence — your input may not include the PR body. Class 20 (upstream drift) is the exception: its evidence is out of band and a story section is always present, so it is raisable only from an explicit sweep inventory or upstream record that omits a dependency the diff touches, or from a visible contradiction in the diff with a dependency version the story names — never from story text alone.
+
 ## Report format
 
 `## Strengths` (2–5 bullets — affirm non-obvious good choices) ·

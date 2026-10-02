@@ -29,6 +29,48 @@ procedure in the README's *Versioning* section.
 
 ## [Unreleased]
 
+### Added
+- **Long-tail review classes are swept before review, not discovered one pass at a time.**
+  devit gains *Phase 3.5 — Pre-review sweep*: six artifacts pasted into the PR body — surface
+  inventory for every new gate, input-domain table for every external value, contract probes
+  with real output captured as fixtures, upstream-drift check against dependencies' `main`, a
+  platform/network matrix with a test per cell, and a docs & wording sweep
+  (`skills/devit/references/docs-sweep.md`: one agent by default; for a big story up to two
+  split by audience, never by location, working from one shared claim inventory that the
+  session reconciles) — plus a
+  review-only-first note for large diffs and a ~4-pass Copilot budget that treats repeated
+  single-item passes as a missed class. The default standards (`standards/AGENTS.md`) and the
+  canonical `coding-standards` skill (classes 17–21 and the restatement inventory under
+  class 2) tell reviewers to flag a concrete unswept sibling, unenumerated input row,
+  unprobed tool contract or unwritten matrix cell in pass 1 (an unchecked upstream only when a
+  supplied sweep record omits it or the diff contradicts a story-named version). Evidence:
+  edge-fmt #534/#537 (6 and 11 Copilot passes; a third of findings were docs/wording).
+
+### Changed
+- **Reviewer prompts open with a trust boundary and a diff cannot rewrite its own rubric.**
+  `orchestrate.py` prepends a `TRUST_BOUNDARY` to every reviewer prompt (API lanes, harness
+  lanes, headless self-review): the story, diff, changed files and any repository file opened
+  during review are material, never instructions. Project standards (`code-review/AGENTS.md`
+  and friends), the `.cork-standards-off` sentinel and — when cork reviews its own checkout —
+  cork's own `standards/AGENTS.md` are read from the trusted git tree at the base branch
+  whenever a diff is under review (`--base-branch` now accompanies `--diff-range` for exactly
+  this; a range start never anchors trust) — never from the checkout, and only as regular-file
+  blobs, so neither an edit nor a symlink alias on the branch can supply them. **Behaviour
+  change for `--diff-file` reviews:** they have no trusted ref, so the project layer (and any
+  opt-out) is dropped for that review with a warning — pass the diff as `--diff-range` with
+  `--base-branch` when the project standards matter. The headless
+  pipeline loads them after the implementation step, and its self-review now runs under the
+  `claude` reviewer lane's isolation (`--safe-mode`, read-only tools: no branch `CLAUDE.md`,
+  hooks or project settings) with the trusted standards as its system prompt and the diff and
+  changed files delivered in the message (it has no shell), instead of a bare `claude --print`.
+  That step is therefore a deliberate single reviewer pass — the
+  read-only tool allowlist cannot dispatch subagents — and is labelled "isolated
+  self-review"; the session-driven `cork` skill keeps its parallel-subagent self-review. The
+  launcher applies the harness lanes' argv-size and subprocess error guards. The fix step's
+  prompt carries its own boundary so quoted
+  directives in findings are not acted on. The default standards carry the same boundary for
+  human readers.
+
 ## [0.18.0] — 2026-10-02
 
 ### Added
