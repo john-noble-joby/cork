@@ -2,7 +2,7 @@ import io
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
@@ -291,6 +291,21 @@ class ReviewDiffTest(unittest.TestCase):
         self.assertNotIn("prompt_push_pr(tid, base, summary)", src)
         self.assertIn("base_name, base = base, pin_ref(repo, base)", src)
 
+    def test_review_prints_an_input_manifest_naming_included_and_omitted_files(self):
+        # a verdict is only readable against what the model saw: every run prints the budget
+        # split, the files sent with full contents, and the files it saw diff-only (and why)
+        files = {"small.py": "x" * 10, "mid.py": "y" * 100, "big.py": "z" * 5_000}
+        out = io.StringIO()
+        with patch.object(orchestrate, "_call_and_extract", return_value=(200, "review ok", None)), redirect_stdout(out):
+            orchestrate.review("copilot", "model", "", "story", "diff", files,
+                               char_budget=len(orchestrate._review_system("")) + 500 + 300 + 200,
+                               large={"huge.cs": 1_234})
+        text = out.getvalue()
+        self.assertIn("review input: budget", text)
+        self.assertRegex(text, r"full contents \(2/4 changed files\): mid\.py \(100\), small\.py \(10\)")
+        self.assertIn("diff-only, over budget (1): big.py (5,000)", text)
+        self.assertIn(f"diff-only, over {orchestrate.MAX_FILE_LINES} lines (1): huge.cs (1,234 lines)", text)
+
     def test_fix_prompt_frames_review_findings_as_untrusted(self):
         # the review text can quote a hostile ticket line verbatim; the fixer must be told
         # what it is before reading it, and the framing must precede the findings
@@ -380,7 +395,7 @@ class ReviewDiffTest(unittest.TestCase):
         story = "Implement the widget"
         diff = "diff"
         with (
-            patch.object(orchestrate, "_budget_files", return_value=("", 0)) as budget,
+            patch.object(orchestrate, "_budget_files", return_value=("", [])) as budget,
             patch.object(
                 orchestrate, "_call_and_extract", return_value=(200, "review output", None)
             ) as call_api,

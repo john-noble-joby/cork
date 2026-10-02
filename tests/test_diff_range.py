@@ -28,7 +28,7 @@ class ReviewDiffSourceTest(unittest.TestCase):
         _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "c3")
         self.c3 = _git(self.repo, "rev-parse", "HEAD")
         _git(self.repo, "update-ref", "refs/remotes/origin/main", self.c1)   # the default base ref
-        self._originals = {n: getattr(orchestrate, n) for n in ("CONFIG_PATH", "load_agent_instructions", "_call_and_extract", "_probe", "_DEFAULT_STANDARDS")}
+        self._originals = {n: getattr(orchestrate, n) for n in ("CONFIG_PATH", "load_agent_instructions", "_call_and_extract", "_probe", "_DEFAULT_STANDARDS", "load_state")}
         orchestrate.CONFIG_PATH = Path(self.tmp.name) / "config.json"
         orchestrate.load_agent_instructions = lambda repo, changed=None, ref=None: ("STANDARDS", None)
         self.seen = {}
@@ -245,6 +245,42 @@ class ReviewDiffSourceTest(unittest.TestCase):
         with redirect_stdout(io.StringIO()), redirect_stderr(err), self.assertRaises(SystemExit):
             orchestrate.cmd_review("T-1", str(self.repo), "origin/nope", "copilot/model", validate=False, story_text="story", diff_range=f"{weakened}..HEAD")
         self.assertIn("does not resolve", err.getvalue())
+
+    def test_large_files_are_omitted_with_a_manifest_line_not_replaced_by_a_remark(self):
+        # a >500-line changed file used to arrive as "[N-line file — this may itself be a
+        # finding...]"; reviewers flagged the size while claiming full coverage. It is now
+        # left out of the prompt and named in the manifest with its line count.
+        (self.repo / "huge.py").write_text("".join(f"x{i} = {i}\n" for i in range(600)))
+        _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "huge")
+        prompt, out = self._review(diff_range=f"{self.c3}..HEAD")
+        self.assertNotIn("### huge.py", prompt); self.assertNotIn("SRP", prompt); self.assertNotIn("this may itself be a finding", prompt)
+        self.assertIn(f"diff-only, over {orchestrate.MAX_FILE_LINES} lines (1): huge.py (600 lines)", out)
+        self.assertIn("review input: budget", out)
+        self.assertEqual(orchestrate._large_files(str(self.repo), ["huge.py", "a.py", "missing.py"]), {"huge.py": 600})
+
+    def test_review_warns_on_fallback_story_stale_local_base_and_large_diff(self):
+        # no story → the spec axis has nothing to check; say so loudly instead of "Story: fallback"
+        orchestrate.load_state = lambda tid: {}
+        self.addCleanup(setattr, orchestrate, "load_state", self._originals.get("load_state", orchestrate.load_state))
+        out = io.StringIO()
+        with redirect_stdout(out):
+            orchestrate.cmd_review("T-1", str(self.repo), "origin/main", "copilot/model", validate=False)
+        self.assertIn("no story supplied", out.getvalue()); self.assertIn("Story: fallback", out.getvalue())
+        # a local base behind its remote reviews the base's own catch-up, not the PR
+        _git(self.repo, "branch", "b2", self.c1); _git(self.repo, "update-ref", "refs/remotes/origin/b2", self.c3)
+        _git(self.repo, "checkout", "-q", "-b", "topic", self.c2); (self.repo / "t.py").write_text("t = 1\n")
+        _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "topic")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            orchestrate.cmd_review("T-1", str(self.repo), "b2", "copilot/model", validate=False, story_text="story")
+        self.assertIn("local base 'b2' is 2 commit(s) behind origin/b2", out.getvalue())
+        # a large diff gets the soft-limit warning pointing at the manifest
+        (self.repo / "wide.py").write_text("".join(f"w{i} = {i}\n" for i in range(1_600)))
+        _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "wide")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            orchestrate.cmd_review("T-1", str(self.repo), "b2", "copilot/model", validate=False, story_text="story")
+        self.assertIn("soft limit 1,500", out.getvalue())
 
     def test_pin_ref_resolves_a_name_to_an_immutable_commit(self):
         _git(self.repo, "branch", "pinme", self.c2)
