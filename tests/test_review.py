@@ -334,8 +334,9 @@ class ReviewDiffTest(unittest.TestCase):
         out = io.StringIO()
         with patch.object(orchestrate, "load_config", return_value={}), patch.object(orchestrate.subprocess, "run", fake_run), \
              patch.object(orchestrate, "_harness_scratch", return_value=__import__("contextlib").nullcontext("")), redirect_stdout(out):
-            orchestrate.review("opencode", "p/m", "S" * 3_000, "story", "diff", files, repo="/repo")
+            orchestrate.review("opencode", "p/m", "S" * 3_000, "é" * 100, "diff", files, repo="/repo")
         self.assertIn("bytes (argv cap)", out.getvalue())
+        self.assertIn("story 200,", out.getvalue())          # components are reported in bytes too, not characters
 
     def test_fix_prompt_frames_review_findings_as_untrusted(self):
         # the review text can quote a hostile ticket line verbatim; the fixer must be told

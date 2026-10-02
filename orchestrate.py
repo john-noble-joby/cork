@@ -2077,24 +2077,27 @@ def _review_system(instructions: str) -> str:
 
 def _print_manifest(system: str, story: str, diff: str, files: dict[str, str],
                     included: list[str], budget: int, large: dict[str, int],
-                    required: dict[str, str], skipped: list[str], unit: str = "chars") -> None:
+                    required: dict[str, str], skipped: list[str], unit: str = "chars",
+                    size: Callable[[str], int] = len) -> None:
     # What the model actually saw. A "no findings" verdict means nothing without this: on a
     # large diff the standards and the diff take most of the budget and smallest-file-first
     # packing drops exactly the big DI, test and docs files, silently. Printed every run; the
     # denominator is the whole changed set, and every path lands in exactly one category.
-    full = sum(len(files[n]) for n in included)
-    req = sum(len(c) for c in required.values())
+    # `size` is the unit the budget was packed in — characters, or UTF-8 bytes after an argv
+    # repack — so every component is reported in the unit the line names.
+    full = sum(size(files[n]) for n in included)
+    req = sum(size(c) for c in required.values())
     total = len(files) + len(large) + len(skipped)
-    print(f"  → review input: budget {budget:,} {unit} — standards {len(system):,}, story {len(story):,}, "
-          f"diff {len(diff):,}, required context {req:,}, file contents {full:,}", flush=True)
+    print(f"  → review input: budget {budget:,} {unit} — standards {size(system):,}, story {size(story):,}, "
+          f"diff {size(diff):,}, required context {req:,}, file contents {full:,}", flush=True)
     print(f"  → full contents ({len(included)}/{total} changed paths): "
-          + (", ".join(f"{n} ({len(files[n]):,})" for n in sorted(included)) or "none"), flush=True)
+          + (", ".join(f"{n} ({size(files[n]):,})" for n in sorted(included)) or "none"), flush=True)
     if required:
         print(f"  → required context ({len(required)}, always included): "
-              + ", ".join(f"{n} ({len(c):,})" for n, c in sorted(required.items())), flush=True)
+              + ", ".join(f"{n} ({size(c):,})" for n, c in sorted(required.items())), flush=True)
     dropped = sorted(n for n in files if n not in included)
     if dropped:
-        print(f"  → diff-only, over budget ({len(dropped)}): " + ", ".join(f"{n} ({len(files[n]):,})" for n in dropped), flush=True)
+        print(f"  → diff-only, over budget ({len(dropped)}): " + ", ".join(f"{n} ({size(files[n]):,})" for n in dropped), flush=True)
     if large:
         print(f"  → diff-only, over {MAX_FILE_LINES} lines ({len(large)}): "
               + ", ".join(f"{n} ({c:,} lines)" for n, c in sorted(large.items())), flush=True)
@@ -2146,7 +2149,7 @@ def review(provider: str, model: str, instructions: str, story: str,
                      f"{fixed_bytes - _MAX_ARG_BYTES:,} before any changed file fits "
                      f"({_budget_breakdown(prefix, story, diff, required_section, _utf8_len, 'bytes')}) — "
                      f"review a narrower diff, drop a --context-file, or use a stdin-prompt lane")
-    effective_budget, unit = char_budget, "chars"
+    effective_budget, unit, size = char_budget, "chars", len
 
     def build(budget: int, size: Callable[[str], int] = len) -> tuple[str, list[str]]:
         fixed = size(system) + size(story) + size(diff) + size(required_section) + 500
@@ -2177,8 +2180,8 @@ def review(provider: str, model: str, instructions: str, story: str,
                 else:
                     hi = mid
             user_msg, included = build(lo, _utf8_len)  # a diff alone over the limit still gets the 413 skip
-            effective_budget, unit = lo, "bytes (argv cap)"
-    _print_manifest(system, story, diff, files, included, effective_budget, large or {}, required, skipped or [], unit)
+            effective_budget, unit, size = lo, "bytes (argv cap)", _utf8_len
+    _print_manifest(system, story, diff, files, included, effective_budget, large or {}, required, skipped or [], unit, size)
 
     if provider in HARNESSES:  # one shot; a dead harness is a skipped reviewer, never a traceback
         status, text, _ = _call_and_extract(provider, model, system, user_msg, repo=repo)
@@ -2417,6 +2420,11 @@ def cmd_standards_show(repo: str, base_ref: str | None) -> None:
     # pass it to subagents this way, so a branch cannot edit its own rubric); without it, the
     # checkout — the same distinction `standards status` draws. Text on stdout only, so it
     # can be redirected to a file; the source label goes to stderr.
+    # The ref is validated and pinned exactly as review mode does it: a typo or a vanished
+    # remote-tracking ref must fail, not print a rubric that silently lacks the project layer.
+    if base_ref is not None:
+        require_base_ref(repo, base_ref)
+        base_ref = pin_ref(repo, base_ref)
     text, label = load_agent_instructions(repo, set() if base_ref else None, base_ref)
     print(f"standards: {label or 'none'}", file=sys.stderr, flush=True)
     if text:
@@ -2619,7 +2627,7 @@ def _devit_scratch_dir(tid: str) -> Path:
 
 def _devit_scratch_story(tid: str) -> tuple[str, str] | None:
     # story.md (story + pre-review sweep, Phase 4 onward) beats story.txt (the bare ticket).
-    if not tid or Path(tid).name != tid:   # a ticket id is one path component; never walk elsewhere
+    if not tid or tid in (".", "..") or Path(tid).name != tid:   # one plain path component; never walk elsewhere
         return None
     for name in ("story.md", "story.txt"):
         path = _devit_scratch_dir(tid) / name

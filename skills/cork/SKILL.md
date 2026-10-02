@@ -124,7 +124,7 @@ Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it p
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch develop --story-file {STORY_FILE}
+python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch {BASE} --story-file {STORY_FILE}
 ```
 
 `--story-file` is **required on every call**: write the ticket (or the user's stated contract)

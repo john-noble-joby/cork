@@ -213,6 +213,9 @@ class ReviewStoryTest(unittest.TestCase):
         (cache / "devit" / "story.md").write_text("escaped")
         self.assertIsNone(orchestrate._devit_scratch_story("../TASK-1"))   # one path component only
         self.assertIsNone(orchestrate._devit_scratch_story(""))
+        (cache / "story.md").write_text("escaped"); (cache / "devit" / "story.txt").write_text("escaped")
+        self.assertIsNone(orchestrate._devit_scratch_story(".."))          # Path("..").name == ".."
+        self.assertIsNone(orchestrate._devit_scratch_story("."))
         self._scratch("story.md", " \n"); self._scratch("story.txt", " \n")
         self.assertIsNone(orchestrate._devit_scratch_story("TASK-1"))      # blank files are not a story
 

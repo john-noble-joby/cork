@@ -51,7 +51,9 @@ procedure in the README's *Versioning* section.
   mutation check in the commit message and stop at a second fix of the same area to propose a
   design change. The cork skill passes `--story-file` and `--context-file` on every call and
   reports the rotation that actually completed; the Copilot loop skill defines `max` as a cap
-  on passes that found something, notes that auto-review on push still needs a request, and
+  on non-approving passes (findings, or a bare "needs a closer look"), distinguishes a budget
+  stop caused by findings still arriving from one caused by a persistent non-approving verdict,
+  notes that auto-review on push still needs a request, and
   that the overview is a per-review snapshot. Standards gain an *Evidence discipline* section
   (independent Boolean clauses, one failure per fixture, failed state before absence
   assertions, both credential modes and malformed successful responses, contracts traced

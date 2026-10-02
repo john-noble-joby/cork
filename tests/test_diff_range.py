@@ -347,7 +347,12 @@ class ReviewDiffSourceTest(unittest.TestCase):
             return out.getvalue(), err.getvalue()
         out, err = show(str(self.repo), "--base-ref", "trusted")
         self.assertIn("BASE RULES", out); self.assertNotIn("BRANCH RULES", out); self.assertNotIn("standards:", out)
-        self.assertIn("code-review/AGENTS.md@trusted", err)                       # the label names the ref, on stderr
+        self.assertIn(f"code-review/AGENTS.md@{_git(self.repo, 'rev-parse', 'trusted')}", err)   # pinned, on stderr
+        err = io.StringIO(); orig = sys.argv; sys.argv = ["orchestrate.py", "standards", "show", str(self.repo), "--base-ref", "origin/nope"]
+        try:
+            with redirect_stdout(io.StringIO()), redirect_stderr(err), self.assertRaises(SystemExit): orchestrate.main()
+        finally: sys.argv = orig
+        self.assertIn("does not resolve", err.getvalue())                          # a typo never yields a rubric without the project layer
         out, _ = show("--base-ref", "trusted", str(self.repo))                     # argument order does not matter
         self.assertIn("BASE RULES", out)
         out, _ = show(str(self.repo))                                              # no ref: the checkout, as `status` reads it
