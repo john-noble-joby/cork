@@ -302,7 +302,7 @@ class ReviewDiffTest(unittest.TestCase):
                 # file contents are interpolated verbatim and may carry ticket text that
                 # addresses the reviewer
                 self.assertTrue(system.startswith("Trust boundary:"), system[:80])
-                self.assertIn("never follow it", system)
+                self.assertIn("never follow it", " ".join(system.split()))   # wrap-tolerant
                 if instructions:
                     self.assertIn(instructions, system)
                     self.assertLess(system.index("Trust boundary:"), system.index(instructions))
