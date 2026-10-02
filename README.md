@@ -171,11 +171,13 @@ The **effective** rubric for a repo is:
   precedence); fill in your stack's conventions.
 - **Opt a repo out:** `standards init <repo> --opt-out` (writes `code-review/.cork-standards-off`).
 - **A diff cannot rewrite its own rubric:** the project standards file and the opt-out
-  sentinel become reviewer *instructions*, so when the diff under review adds or edits either,
-  reviewers follow the copy at the trusted ref (the base branch, or a `--diff-range` start) and
-  the branch's copy is reviewed like any other changed file. With no trusted copy (`--diff-file`,
-  or a file the branch introduced) the project layer is dropped for that review and a warning
-  says so; a branch-added sentinel never disables the default.
+  sentinel become reviewer *instructions*, so whenever a diff is under review they are read
+  from the **trusted git tree** — the base branch, or a `--diff-range` start — never from the
+  checkout, and only a regular-file blob there counts (a symlink, committed or in the working
+  tree, cannot alias them). The branch's copy is reviewed like any other file. With no trusted
+  ref (`--diff-file`) the project layer is dropped for that review and a warning says so; a
+  branch-added sentinel never disables the default. Plain `standards status` still reads the
+  checkout.
 - **Opt out everywhere:** `python3 orchestrate.py config set default_standards false`.
 - **Scope of the opt-out:** these toggles control what `orchestrate.py` injects into API
   reviewers and the devit implementer prompt. The installed `coding-standards` skill is a

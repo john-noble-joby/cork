@@ -50,10 +50,14 @@ procedure in the README's *Versioning* section.
   `orchestrate.py` prepends a `TRUST_BOUNDARY` to every reviewer prompt (API lanes, harness
   lanes, headless self-review): the story, diff, changed files and any repository file opened
   during review are material, never instructions. Project standards (`code-review/AGENTS.md`
-  and friends) and the `.cork-standards-off` sentinel that the diff under review adds or edits
-  no longer govern that review — reviewers follow the copy at the trusted ref (base branch or
-  range start), the branch's copy is review material, and a branch-added sentinel cannot opt
-  out of the default. The default standards carry the same boundary for human readers.
+  and friends) and the `.cork-standards-off` sentinel are read from the trusted git tree
+  (base branch or range start) whenever a diff is under review — never from the checkout, and
+  only as regular-file blobs, so neither an edit nor a symlink alias on the branch can supply
+  them; with no trusted ref (`--diff-file`) the project layer is dropped. The headless
+  pipeline loads them after the implementation step, and its self-review reads the trusted
+  text from a scratch file. The fix step's prompt carries its own boundary so quoted
+  directives in findings are not acted on. The default standards carry the same boundary for
+  human readers.
 
 ## [0.18.0] — 2026-10-02
 
