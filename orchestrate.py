@@ -1141,6 +1141,21 @@ def run_claude(prompt: str, cwd: str) -> str:
     return result.stdout.strip()
 
 
+def run_claude_review(system: str, prompt: str, cwd: str) -> str:
+    # The self-review must not run as the general implement/fix runner above: bare
+    # `claude --print` loads the branch's CLAUDE.md, hooks and project settings, which outrank
+    # the prompt and so let a branch rewrite its own review rubric. Reuse the `claude` reviewer
+    # lane's isolation (--safe-mode: no CLAUDE.md/hooks/MCP; --restricted + read-only tools)
+    # with the trusted standards as the system prompt. The user's default model is kept.
+    spec = HARNESSES["claude"]
+    argv = ([CLAUDE] + [a for a in spec["argv"] if a not in ("--model", "{model}")]
+            + [spec["system_flag"], system] + list(spec["read_only"]))
+    result = subprocess.run(argv, cwd=cwd, input=prompt, capture_output=True, text=True, errors="replace")
+    if result.returncode != 0:
+        fail(f"Claude self-review exited {result.returncode}:\n{result.stderr[-2000:]}")
+    return result.stdout.strip()
+
+
 def require_base_ref(repo: str, base: str) -> None:
     base_check = subprocess.run(
         ["git", "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"],
@@ -1916,19 +1931,25 @@ def _split_model_ref(ref: str) -> tuple[str, str]:
     return "copilot", ref
 
 
-def review(provider: str, model: str, instructions: str, story: str,
-           diff: str, files: dict[str, str],
-           char_budget: int = _DEFAULT_CHAR_BUDGET,
-           max_attempts: int = 3, repo: str = "") -> str:
+def _review_system(instructions: str) -> str:
+    # Every reviewer — API lane or the headless self-review — gets the same system prompt:
+    # the trust boundary first, then the standards (or the built-in format), then the spec axis.
     review_system = (
         instructions + "\n\n---\n"
-        "Note: you are a single-pass API reviewer — you cannot spawn "
+        "Note: you are a single-pass reviewer — you cannot spawn "
         "sub-agents or invoke skills. Apply the standards in one pass and "
         "produce the output-format section. Do NOT apply fixes; report "
         "findings only."
         if instructions else REVIEW_SYSTEM
     )
-    system = TRUST_BOUNDARY + "\n\n" + review_system + "\n\n" + SPEC_CONFORMANCE_SUFFIX
+    return TRUST_BOUNDARY + "\n\n" + review_system + "\n\n" + SPEC_CONFORMANCE_SUFFIX
+
+
+def review(provider: str, model: str, instructions: str, story: str,
+           diff: str, files: dict[str, str],
+           char_budget: int = _DEFAULT_CHAR_BUDGET,
+           max_attempts: int = 3, repo: str = "") -> str:
+    system = _review_system(instructions)
 
     def build(budget: int, size: Callable[[str], int] = len) -> tuple[str, int]:
         fixed = size(system) + size(story) + size(diff) + 500
@@ -2090,19 +2111,14 @@ def prompt_initial(ticket_id: str) -> str:
     )
 
 
-def prompt_claude_review(base: str, instructions_path: str, summary: str) -> str:
-    review_src = (
-        f"Read and follow the review instructions in {instructions_path}."
-        if instructions_path
-        else "Perform a thorough multi-agent code review."
-    )
+def prompt_claude_review(base: str, summary: str) -> str:
+    # User message for the headless self-review; the standards, trust boundary and spec axis
+    # travel in the system prompt (_review_system), exactly as for an API lane.
     return (
-        f"{TRUST_BOUNDARY}\n\n"
         f"## Story / Task\n{summary}\n\n"
         f"Review the current feature branch against {base}. "
         f"The full branch diff is available via: git diff {base}...HEAD\n"
-        f"{review_src}\n\n"
-        f"{SPEC_CONFORMANCE_SUFFIX}\n\n"
+        "Follow the review standards in your system prompt.\n\n"
         "Output ONLY a structured findings report. "
         "Do NOT apply any fixes. Do NOT edit any files."
     )
@@ -2787,17 +2803,12 @@ def main() -> None:
     # ── Step 2: Claude multi-agent self-review ────────────────────────────────
     if rem["self_review"]:
         step(2, total, "Claude Code: multi-agent self-review", ticket_id=tid)
-        # The self-review is told to *read* its standards from a path. That path must hold the
-        # trusted text assembled above — never the branch's own copy, which the diff may have
-        # edited — so it lives in a scratch dir outside the repo for exactly this call.
-        with tempfile.TemporaryDirectory(prefix="cork-review-standards-") as standards_dir:
-            standards_file = ""
-            if instructions:
-                standards_file = str(Path(standards_dir) / "REVIEW_STANDARDS.md")
-                Path(standards_file).write_text(instructions, encoding="utf-8")
-            self_review_out = run_claude(
-                prompt_claude_review(base, standards_file, summary), cwd=repo
-            )
+        # Isolated reviewer invocation (no CLAUDE.md/hooks/project settings from the branch),
+        # with the trusted standards assembled above as the system prompt — the branch cannot
+        # supply any part of its own review rubric.
+        self_review_out = run_claude_review(
+            _review_system(instructions), prompt_claude_review(base, summary), cwd=repo
+        )
         print(f"  {self_review_out[:300]}…")
         state["done"]["self_review"] = self_review_out
         mark_done_v2(tid, state)

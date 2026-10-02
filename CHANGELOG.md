@@ -54,8 +54,10 @@ procedure in the README's *Versioning* section.
   (base branch or range start) whenever a diff is under review — never from the checkout, and
   only as regular-file blobs, so neither an edit nor a symlink alias on the branch can supply
   them; with no trusted ref (`--diff-file`) the project layer is dropped. The headless
-  pipeline loads them after the implementation step, and its self-review reads the trusted
-  text from a scratch file. The fix step's prompt carries its own boundary so quoted
+  pipeline loads them after the implementation step, and its self-review now runs under the
+  `claude` reviewer lane's isolation (`--safe-mode`, read-only tools: no branch `CLAUDE.md`,
+  hooks or project settings) with the trusted standards as its system prompt, instead of a
+  bare `claude --print`. The fix step's prompt carries its own boundary so quoted
   directives in findings are not acted on. The default standards carry the same boundary for
   human readers.
 

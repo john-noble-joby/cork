@@ -113,7 +113,8 @@ printf '%s\n' "$BASE" > "$SWEEP_DIR/base"
 # Explicit refspec: update origin/$BASE itself — a bare `git fetch origin $BASE` only guarantees
 # FETCH_HEAD, so an overridden base with no remote-tracking ref would fail here and an existing
 # one could start from stale code. Phase 4's --base-branch and the docs sweep use the same ref.
-git fetch origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
+git fetch origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
+  || { echo "fetch of $BASE failed — not creating a worktree from a possibly stale origin/$BASE"; exit 1; }
 BR="feature/<TICKET>-<slug>"   # or bugfix/<TICKET>-<slug>
 git worktree add ".worktrees/$BR" -b "$BR" "origin/$BASE"
 cd ".worktrees/$BR"
