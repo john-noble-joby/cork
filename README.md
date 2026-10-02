@@ -200,7 +200,7 @@ Review-only usage accepts the contract directly for both API and harness lanes:
 ```bash
 python3 orchestrate.py <TICKET> <repo-path> --review-model <provider/model> \
   [--story-file <path> | --story <text>] \
-  [--base-branch <branch>] [--diff-range <A..B> | --diff-file <path>] [--skip-validation]
+  [--base-branch <branch> [--diff-range <A..B>] | --diff-file <path>] [--skip-validation]
 ```
 
 Story precedence is `--story-file` → `--story` → checkpoint `done.summary` → checkpoint

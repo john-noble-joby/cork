@@ -243,9 +243,10 @@ class AuthVisibilityTest(unittest.TestCase):
 
     def test_main_full_run_preserves_no_token_guidance(self):
         original_argv, original_state_dir = orchestrate.sys.argv, orchestrate.STATE_DIR
-        original_base_check = orchestrate.require_base_ref
+        original_base_check, original_pin = orchestrate.require_base_ref, orchestrate.pin_ref
         # The temp dir is not a git repo; auth guidance, not base validation, is under test.
         orchestrate.require_base_ref = lambda repo, base: None
+        orchestrate.pin_ref = lambda repo, ref: ref
         orchestrate.sys.argv = ["orchestrate.py", "TEST-1", self.tmp.name]
         orchestrate.STATE_DIR = Path(self.tmp.name) / "state"
         orchestrate.load_config = lambda quiet=False: {
@@ -260,7 +261,7 @@ class AuthVisibilityTest(unittest.TestCase):
                 orchestrate.main()
         finally:
             orchestrate.sys.argv, orchestrate.STATE_DIR = original_argv, original_state_dir
-            orchestrate.require_base_ref = original_base_check
+            orchestrate.require_base_ref, orchestrate.pin_ref = original_base_check, original_pin
         self.assertIn(f"Copilot token: none — run `{orchestrate._LOGIN_COMMAND}`", out.getvalue())
         self.assertIn("✗ copilot/full-run-model skipped (no copilot token)", out.getvalue())
 

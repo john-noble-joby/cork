@@ -245,6 +245,16 @@ class ReviewDiffSourceTest(unittest.TestCase):
             orchestrate.cmd_review("T-1", str(self.repo), "origin/nope", "copilot/model", validate=False, story_text="story", diff_range=f"{weakened}..HEAD")
         self.assertIn("does not resolve", err.getvalue())
 
+    def test_pin_ref_resolves_a_name_to_an_immutable_commit(self):
+        _git(self.repo, "branch", "pinme", self.c2)
+        self.assertEqual(orchestrate.pin_ref(str(self.repo), "pinme"), self.c2)
+        _git(self.repo, "branch", "-f", "pinme", self.c3)          # the name moves; the pin did not
+        self.assertNotEqual(orchestrate.pin_ref(str(self.repo), "pinme"), self.c2)
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit):
+            orchestrate.pin_ref(str(self.repo), "origin/nope")
+        self.assertIn("does not resolve", err.getvalue())
+
     def test_default_path_still_uses_base_branch(self):
         _git(self.repo, "branch", "base", self.c1)
         prompt, out = self._review_with_base("base")
