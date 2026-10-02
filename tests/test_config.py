@@ -4,6 +4,26 @@ from pathlib import Path
 import orchestrate
 
 
+class ReviewBudgetTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self._cfg = orchestrate.CONFIG_PATH
+        orchestrate.CONFIG_PATH = Path(self.tmp.name) / "config.json"
+    def tearDown(self):
+        orchestrate.CONFIG_PATH = self._cfg; self.tmp.cleanup()
+    def _write(self, **extra):
+        orchestrate.CONFIG_PATH.write_text(json.dumps({"rotation": [{"provider": "copilot", "model": "m"}], **extra}))
+    def test_review_budget_defaults_and_can_be_raised_per_seat(self):
+        self.assertEqual(orchestrate.review_budget(), orchestrate._DEFAULT_CHAR_BUDGET)   # no config file
+        self._write(review_budget_chars=600_000)
+        self.assertEqual(orchestrate.review_budget(), 600_000)
+    def test_review_budget_must_be_a_sane_integer(self):
+        import io, contextlib
+        for bad in (1_000, "192000", True, 192000.5):
+            self._write(review_budget_chars=bad)
+            with self.subTest(bad=bad), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                orchestrate.load_config(quiet=True)
+
+
 class ConfigTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

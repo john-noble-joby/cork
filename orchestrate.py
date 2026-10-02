@@ -369,6 +369,7 @@ DEFAULT_CONFIG = {
     "interactive_review": True,
     "default_standards": True,
     "responses_effort": _DEFAULT_RESPONSES_EFFORT,
+    "review_budget_chars": _DEFAULT_CHAR_BUDGET,   # prompt size per API review; raise it for large-window seats
     "providers": {
         "copilot":   {"enabled": True},
         "openai":    {"enabled": False},
@@ -942,6 +943,9 @@ def _validate_config(cfg: dict) -> None:
         fail("config.default_standards must be true or false (a JSON boolean)")
     if cfg.get("responses_effort", _DEFAULT_RESPONSES_EFFORT) not in _RESPONSES_EFFORTS:
         fail("config.responses_effort must be low, medium, or high")
+    budget = cfg.get("review_budget_chars", _DEFAULT_CHAR_BUDGET)
+    if isinstance(budget, bool) or not isinstance(budget, int) or budget < 50_000:
+        fail("config.review_budget_chars must be an integer of at least 50000 (characters per review prompt)")
 
 
 def _validate_model_ref(provider: str, model: object) -> None:
@@ -984,6 +988,13 @@ def _validate_harness_cfg(name: str, hc: dict) -> None:
         valid = False
     if not valid:
         fail(f"config.providers.{name}.timeout must be a positive finite number of seconds")
+
+
+def review_budget() -> int:
+    # Characters of prompt an API review may carry. The default fits every Copilot model; a
+    # seat whose models have 200k+ token windows should raise it — the review-input manifest
+    # shows what fell off at the current value.
+    return int(load_config(quiet=True).get("review_budget_chars", _DEFAULT_CHAR_BUDGET))
 
 
 def load_config(quiet: bool = False) -> dict:
@@ -1401,6 +1412,25 @@ def _file_contents(cwd: str, names: list[str]) -> dict[str, str]:
         if len(lines) <= MAX_FILE_LINES:
             contents[name] = "\n".join(lines)
     return contents
+
+
+def _required_contents(cwd: str, paths: list[str]) -> dict[str, str]:
+    # --context-file: unchanged files the reviewer must see whole — callers of a changed
+    # symbol, DI registrations, the tests covering the change, the docs that restate it. Same
+    # containment rules as changed files, but no size cut and no budget fallback: the caller
+    # named them as required, so a missing one is an error and one that does not fit the
+    # budget fails the review instead of being dropped (see review()).
+    root = Path(cwd).resolve()
+    out: dict[str, str] = {}
+    for rel in paths:
+        path = Path(cwd) / rel
+        if not path.is_file():
+            fail(f"--context-file {rel!r} is not a file in the repository")
+        resolved = path.resolve()
+        if not resolved.is_relative_to(root) or any(part.lower() == ".git" for part in resolved.relative_to(root).parts):
+            fail(f"--context-file {rel!r} resolves outside the repository or into git metadata")
+        out[rel] = resolved.read_text(errors="replace")
+    return out
 
 
 def _large_files(cwd: str, names: list[str]) -> dict[str, int]:
@@ -2029,7 +2059,8 @@ def _review_system(instructions: str) -> str:
 
 
 def _print_manifest(system: str, story: str, diff: str, files: dict[str, str],
-                    included: list[str], budget: int, large: dict[str, int]) -> None:
+                    included: list[str], budget: int, large: dict[str, int],
+                    required: dict[str, str] | None = None) -> None:
     # What the model actually saw. A "no findings" verdict means nothing without this: on a
     # large diff the standards and the diff take most of the budget and smallest-file-first
     # packing drops exactly the big DI, test and docs files, silently. Printed every run.
@@ -2038,6 +2069,9 @@ def _print_manifest(system: str, story: str, diff: str, files: dict[str, str],
           f"diff {len(diff):,}, file contents {full:,}", flush=True)
     print(f"  → full contents ({len(included)}/{len(files) + len(large)} changed files): "
           + (", ".join(f"{n} ({len(files[n]):,})" for n in sorted(included)) or "none"), flush=True)
+    if required:
+        print(f"  → required context ({len(required)}, always included): "
+              + ", ".join(f"{n} ({len(c):,})" for n, c in sorted(required.items())), flush=True)
     dropped = sorted(n for n in files if n not in included)
     if dropped:
         print(f"  → diff-only, over budget ({len(dropped)}): " + ", ".join(f"{n} ({len(files[n]):,})" for n in dropped), flush=True)
@@ -2050,13 +2084,25 @@ def review(provider: str, model: str, instructions: str, story: str,
            diff: str, files: dict[str, str],
            char_budget: int = _DEFAULT_CHAR_BUDGET,
            max_attempts: int = 3, repo: str = "",
-           large: dict[str, int] | None = None) -> str:
+           large: dict[str, int] | None = None,
+           required: dict[str, str] | None = None) -> str:
     system = _review_system(instructions)
+    required = required or {}
+    required_block = "\n\n".join(f"### {n}\n```\n{c}\n```" for n, c in required.items())
+    required_section = f"## Required Context (unchanged files the change depends on)\n{required_block}\n\n" if required else ""
+    fixed_min = len(system) + len(story) + len(diff) + len(required_section) + 500
+    if fixed_min > char_budget:
+        # Required context is never silently dropped: that is the whole point of naming it.
+        fail(f"review input exceeds the {char_budget:,}-char budget by {fixed_min - char_budget:,} before any "
+             f"changed file fits (standards {len(system):,}, story {len(story):,}, diff {len(diff):,}, "
+             f"required context {len(required_section):,}) — review a narrower diff, drop a --context-file, "
+             f"or raise review_budget_chars in config.json")
 
     def build(budget: int, size: Callable[[str], int] = len) -> tuple[str, list[str]]:
-        fixed = size(system) + size(story) + size(diff) + 500
+        fixed = size(system) + size(story) + size(diff) + size(required_section) + 500
         file_block, names = _budget_files(files, max(0, budget - fixed), size)
         return (f"## Story / Task\n{story}\n\n"
+                f"{required_section}"
                 f"## Changed Files (current state)\n{file_block}\n\n"
                 f"## Branch Diff\n```diff\n{diff}\n```"), names
 
@@ -2082,7 +2128,7 @@ def review(provider: str, model: str, instructions: str, story: str,
                 else:
                     hi = mid
             user_msg, included = build(lo, _utf8_len)  # a diff alone over the limit still gets the 413 skip
-    _print_manifest(system, story, diff, files, included, char_budget, large or {})
+    _print_manifest(system, story, diff, files, included, char_budget, large or {}, required)
 
     if provider in HARNESSES:  # one shot; a dead harness is a skipped reviewer, never a traceback
         status, text, _ = _call_and_extract(provider, model, system, user_msg, repo=repo)
@@ -2503,7 +2549,8 @@ def cmd_auth_print_token(as_json: bool = False) -> None:
 
 def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True,
                story_file: str | None = None, story_text: str | None = None,
-               diff_range: str | None = None, diff_file: str | None = None) -> None:
+               diff_range: str | None = None, diff_file: str | None = None,
+               context_files: list[str] | None = None) -> None:
     if story_file is not None:
         story_path = Path(story_file)
         try:
@@ -2579,8 +2626,9 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     print(f"Story: {story_source} ({len(story)} chars)")
     print(f"\n── Review: {provider}/{model} — {len(files)} files, "
           f"{len(diff.splitlines())} diff lines vs {scope}\n", flush=True)
-    print(review(provider, model, instructions, story, diff, files, _DEFAULT_CHAR_BUDGET,
-                 repo=repo, large=_large_files(repo, names)))
+    print(review(provider, model, instructions, story, diff, files, review_budget(),
+                 repo=repo, large=_large_files(repo, names),
+                 required=_required_contents(repo, context_files or [])))
 
 def cmd_preflight() -> None:
     cfg = load_config()
@@ -2771,9 +2819,15 @@ def main() -> None:
     diff_group.add_argument("--diff-file", metavar="PATH",
                             help="Review-only: review a unified diff read from PATH (UTF-8); "
                                  "changed files are taken from its `+++ b/<path>` headers.")
+    parser.add_argument("--context-file", metavar="PATH", action="append", dest="context_files",
+                        help="Review-only, repeatable: an unchanged repo file the reviewer must see whole "
+                             "(a caller of a changed symbol, DI wiring, the covering tests, restating docs). "
+                             "Always included in full; the review fails rather than dropping it when it "
+                             "does not fit review_budget_chars.")
     args = parser.parse_args()
     review_only_flags = [f for f, v in (("--story", args.story), ("--story-file", args.story_file),
-                                        ("--diff-range", args.diff_range), ("--diff-file", args.diff_file))
+                                        ("--diff-range", args.diff_range), ("--diff-file", args.diff_file),
+                                        ("--context-file", args.context_files))
                          if v is not None]
     if review_only_flags and not args.review_model:
         # Otherwise a forgotten --review-model silently turns an intended review into a full
@@ -2799,7 +2853,8 @@ def main() -> None:
     if args.review_model:
         cmd_review(tid, repo, base, args.review_model, validate=not args.skip_validation,
                    story_file=args.story_file, story_text=args.story,
-                   diff_range=args.diff_range, diff_file=args.diff_file)
+                   diff_range=args.diff_range, diff_file=args.diff_file,
+                   context_files=args.context_files)
         return
 
     require_base_ref(repo, base)
@@ -2972,7 +3027,7 @@ def main() -> None:
             print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {key}")
             review_out = review(
                 entry["provider"], entry["model"],
-                instructions, summary, diff, files, _DEFAULT_CHAR_BUDGET, repo=repo,
+                instructions, summary, diff, files, review_budget(), repo=repo,
                 large=_large_files(repo, _git_changed_names(repo, f"{base}...HEAD")),
             )
             print(f"  {review_out[:300]}…")

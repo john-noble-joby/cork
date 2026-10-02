@@ -1,4 +1,5 @@
 import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -281,6 +282,23 @@ class ReviewDiffSourceTest(unittest.TestCase):
         with redirect_stdout(out):
             orchestrate.cmd_review("T-1", str(self.repo), "b2", "copilot/model", validate=False, story_text="story")
         self.assertIn("soft limit 1,500", out.getvalue())
+
+    def test_required_context_files_are_always_included_or_the_review_fails(self):
+        # an unchanged caller named with --context-file arrives whole, ahead of the changed
+        # files, and is listed in the manifest; a missing path is an error, not a skip
+        (self.repo / "caller.py").write_text("from a import a\nprint(a)\n")   # untracked is fine: it is read, not diffed
+        prompt, out = self._review(context_files=["caller.py"])
+        self.assertIn("## Required Context", prompt); self.assertIn("### caller.py", prompt); self.assertIn("print(a)", prompt)
+        self.assertLess(prompt.index("## Required Context"), prompt.index("## Changed Files"))
+        self.assertIn("required context (1, always included): caller.py", out)
+        self._fails("is not a file in the repository", context_files=["nope.py"])
+        (Path(self.tmp.name) / "outside.py").write_text("secret = 1\n")       # exists, but outside the tree
+        self._fails("outside the repository", context_files=["../outside.py"])
+        # a required file that cannot fit the budget fails the review instead of being dropped
+        big = Path(self.tmp.name) / "config.json"
+        big.write_text(json.dumps({"rotation": [{"provider": "copilot", "model": "m"}], "review_budget_chars": 50_000}))
+        (self.repo / "huge_ctx.py").write_text("x" * 60_000)
+        self._fails("review input exceeds the 50,000-char budget", context_files=["huge_ctx.py"])
 
     def test_pin_ref_resolves_a_name_to_an_immutable_commit(self):
         _git(self.repo, "branch", "pinme", self.c2)

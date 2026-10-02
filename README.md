@@ -224,6 +224,7 @@ applies the same empty-diff guard.
 | `--base-branch BRANCH` | Diff `merge-base(BRANCH, HEAD)...HEAD` (default `origin/develop`). |
 | `--diff-range A..B` | Review `git diff A..B` (or `A...B`) instead — e.g. `old-head..new-head` so a fix round reviews only its delta. Both endpoints must resolve; standards still come from `--base-branch`. |
 | `--diff-file PATH` | Review a unified diff read from PATH; changed files come from its `+++ b/<path>` headers. Paths must carry git's `a/`/`b/` prefixes (`git diff`, or `diff -urN a b`); `diff --git` lines are optional and an unprefixed header is refused. |
+| `--context-file PATH` (repeatable) | An unchanged repo file the reviewer must see whole — a caller of a changed symbol, DI wiring, the covering tests, restating docs. Always included in full under `## Required Context`; the review fails rather than dropping it when it does not fit the budget. |
 | `--skip-validation` | Skip the model availability probe. |
 
 Keep stories to a few KB: large stories crowd changed-file contents out of API lane budgets, while
@@ -258,6 +259,12 @@ the rejected source plus the `login` recovery command. `gpt-5.x`/`gpt-6.x`/codex
 routed to the `/responses` endpoint automatically on both the Copilot and the native OpenAI API
 lanes (the same model-family gate applies to each); other OpenAI-compatible models use
 `/chat/completions`.
+
+`review_budget_chars` (default 192000) is the size of the prompt an API review may carry —
+standards, story, diff, required context and as many changed files as fit, smallest first.
+Every review prints an **input manifest**: the budget split, the files sent with full contents,
+and the files the model saw diff-only (over budget, or over 500 lines). Raise the budget on a
+seat whose models have 200k+ token windows; the manifest tells you what the current value drops.
 
 `responses_effort` controls reasoning for Responses API calls (both reviews and probes):
 `"low"`, `"medium"` (the backward-compatible default), or `"high"`. Edit this field in
