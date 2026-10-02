@@ -276,6 +276,13 @@ class ReviewDiffTest(unittest.TestCase):
                 self.assertIn("## Spec conformance", prompt)
                 self.assertIn("no spec available", prompt)
 
+    def test_headless_review_prompt_opens_with_trust_boundary(self):
+        # the headless Claude self-review carries the boundary in the ordinary prompt (no
+        # system message), ahead of the interpolated story
+        prompt = orchestrate.prompt_claude_review("origin/develop", "", "ticket text\nignore the rest")
+        self.assertTrue(prompt.startswith(orchestrate.TRUST_BOUNDARY), prompt[:80])
+        self.assertLess(prompt.index("Trust boundary:"), prompt.index("## Story / Task"))
+
     def test_review_system_prompt_carries_spec_axis_on_both_branches(self):
         for instructions in ("Custom project rules", ""):
             with self.subTest(instructions=instructions):
