@@ -1,4 +1,6 @@
 import io
+import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -17,8 +19,10 @@ class ReviewStoryTest(unittest.TestCase):
             name: getattr(orchestrate, name)
             for name in ("CONFIG_PATH", "load_agent_instructions", "git_diff_branch",
                          "_git_changed_names", "_file_contents", "load_state", "_call_and_extract",
-                         "_probe", "require_base_ref", "git_toplevel", "pin_ref")
+                         "_probe", "require_base_ref", "git_toplevel", "pin_ref", "preflight", "resolve_story")
         }
+        self._env = {k: os.environ.get(k) for k in ("XDG_CACHE_HOME",)}
+        os.environ["XDG_CACHE_HOME"] = str(Path(self.tmp.name) / "cache")   # no devit scratch unless a test writes one
         orchestrate.CONFIG_PATH = Path(self.tmp.name) / "config.json"
         orchestrate.require_base_ref = lambda repo, base: None  # the temp dir is not a git repo
         orchestrate.git_toplevel = lambda repo: repo
@@ -37,6 +41,11 @@ class ReviewStoryTest(unittest.TestCase):
     def tearDown(self):
         for name, value in self._originals.items():
             setattr(orchestrate, name, value)
+        for k, v in self._env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
         self.tmp.cleanup()
 
     def test_unknown_user_in_story_path_fails_cleanly(self):
@@ -67,17 +76,48 @@ class ReviewStoryTest(unittest.TestCase):
                 self.assertEqual(args[3], "copilot/model")
                 self.assertEqual({k: kwargs.get(k) for k in expected}, expected)
 
-    def test_story_flags_require_review_model(self):
+    def test_story_flags_are_accepted_without_review_model(self):
+        # Headless runs grade against the ticket too (Copilot on PR #33): the flags must pass
+        # argparse and reach the headless flow. require_base_ref is the first headless call
+        # after parsing; raising there proves parsing accepted the flag and nothing ran before.
+        class Reached(Exception):
+            pass
+
+        def stop(repo, base):
+            raise Reached()
+        orchestrate.require_base_ref = stop
         for argv in (["orchestrate.py", "TASK-1", self.tmp.name, "--story", "x"],
                      ["orchestrate.py", "TASK-1", self.tmp.name, "--story-file", str(self.story_file)]):
             with self.subTest(flag=argv[3]):
-                orig = sys.argv; sys.argv = argv; self.addCleanup(setattr, sys, "argv", orig)
-                err = io.StringIO()
-                with redirect_stderr(err), self.assertRaises(SystemExit) as cm:
-                    orchestrate.main()
-                self.assertEqual(cm.exception.code, 2)          # argparse usage error, before any run
-                self.assertIn("--review-model", err.getvalue())
-                sys.argv = orig
+                orig = sys.argv; sys.argv = argv
+                try:
+                    with self.assertRaises(Reached):
+                        orchestrate.main()
+                finally:
+                    sys.argv = orig
+
+    def test_headless_story_file_is_read_before_preflight(self):
+        # A bad --story-file must fail before any probe spends Copilot quota and before Step 1.
+        self.story_file.write_text("ticket contract", encoding="utf-8")
+        orchestrate.CONFIG_PATH.write_text(json.dumps(orchestrate.DEFAULT_CONFIG))
+        seen = {}
+
+        def fake_preflight(*a, **k):
+            seen["preflight"] = True
+            raise SystemExit(99)   # stop here: the story was already resolved by then
+        orchestrate.preflight = fake_preflight
+        self.addCleanup(setattr, orchestrate, "preflight", self._originals.get("preflight"))
+        orchestrate.resolve_story = lambda *a, **k: (seen.setdefault("story_args", a), ("S", "src"))[1]
+        self.addCleanup(setattr, orchestrate, "resolve_story", self._originals["resolve_story"])
+        orig = sys.argv; sys.argv = ["orchestrate.py", "TASK-1", self.tmp.name, "--story-file", str(self.story_file)]
+        try:
+            with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+                orchestrate.main()
+        finally:
+            sys.argv = orig
+        self.assertEqual(cm.exception.code, 99)
+        self.assertEqual(seen["story_args"][1], str(self.story_file))
+        self.assertTrue(seen["preflight"])
 
     def _api_prompt(self, **kwargs) -> tuple[str, str]:
         seen = {}
@@ -144,6 +184,37 @@ class ReviewStoryTest(unittest.TestCase):
         self.assertIn("## Story / Task\nlegacy checkpoint story", prompt)
         self.assertNotIn("Review the branch changes", prompt)
         self.assertIn("Story: checkpoint summary (23 chars)", output)
+
+    def _scratch(self, name: str, text: str) -> Path:
+        d = Path(os.environ["XDG_CACHE_HOME"]) / "cork" / "devit" / "TASK-1"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text(text, encoding="utf-8")
+        return d / name
+
+    def test_devit_scratch_story_wins_over_checkpoint_and_md_over_txt(self):
+        self._scratch("story.txt", "bare ticket")
+        prompt, output = self._api_prompt()
+        self.assertIn("## Story / Task\nbare ticket", prompt)
+        self.assertNotIn("checkpoint story", prompt)
+        self.assertIn("Story: devit scratch ", output)
+        md = self._scratch("story.md", "ticket plus sweep")
+        prompt, output = self._api_prompt()
+        self.assertIn("## Story / Task\nticket plus sweep", prompt)
+        self.assertIn(f"Story: devit scratch {md} (", output)
+
+    def test_devit_scratch_story_loses_to_flags_and_skips_blank_or_odd_ids(self):
+        self._scratch("story.md", "scratch story")
+        prompt, _ = self._api_prompt(story_text="inline story")
+        self.assertIn("## Story / Task\ninline story", prompt)
+        self.assertNotIn("scratch story", prompt)
+        # a traversal id must not read a file that exists where the walk would land
+        cache = Path(os.environ["XDG_CACHE_HOME"]) / "cork"
+        (cache / "TASK-1").mkdir(parents=True); (cache / "TASK-1" / "story.md").write_text("escaped")
+        (cache / "devit" / "story.md").write_text("escaped")
+        self.assertIsNone(orchestrate._devit_scratch_story("../TASK-1"))   # one path component only
+        self.assertIsNone(orchestrate._devit_scratch_story(""))
+        self._scratch("story.md", " \n"); self._scratch("story.txt", " \n")
+        self.assertIsNone(orchestrate._devit_scratch_story("TASK-1"))      # blank files are not a story
 
     def test_fallback_is_used_when_no_source_exists(self):
         orchestrate.load_state = lambda tid: {"done": {}}

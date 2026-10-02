@@ -88,8 +88,12 @@ reviewers for a branch that implemented nothing.
 Review your own diff with subagents, apply fixes, commit. Use the **lenses** in
 `$CORK_HOME/lenses/` (plus any under the repo's `code-review/lenses/`, read from the trusted
 base ref with `git show origin/{BASE}:…`, never from the checkout): one read-only subagent
-per applicable lens, placeholders filled, run in parallel over `git diff {BASE}...HEAD`. Skip a
-lens whose concern the diff does not touch and say so; never skip spec-and-test-coverage.
+per applicable lens, placeholders filled, run in parallel over `git diff {BASE}...HEAD`. Fill
+`{STANDARDS}` with the path of a file written by
+`python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref origin/{BASE} > /tmp/cork-standards-{BRANCH}.md`
+(outside the repo; the rubric from the trusted ref through the engine's loader, never the
+checkout's standards files). Skip a lens whose concern the diff does not touch and say so;
+never skip spec-and-test-coverage.
 
 ### Steps 3+ — One blind pass per model
 
@@ -115,16 +119,18 @@ Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it p
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch develop
+python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch develop --story-file {STORY_FILE}
 ```
 
-Add `--story-file PATH` when the caller has an explicit contract for the reviewers — devit
-passes the Linear story plus its Phase 3.5 `## Pre-review sweep` artifacts this way. The
-artifacts live outside the repository, so no lane can reach them through the tree: not the
-API models or the harnesses without tree access (`codex`, `pi`), and not the tree-capable
-ones (`claude`, `opencode`) either, because the files are not in the tree they can read. The
-story file is the only way the artifacts reach any reviewer.
-Without it the reviewer gets the checkpoint summary or the generic fallback as its story.
+`--story-file` is **required on every call**: write the ticket (or the user's stated contract)
+to a file outside the repository before the rotation starts and pass that path. devit passes
+the Linear story plus its Phase 3.5 `## Pre-review sweep` artifacts this way. The file lives
+outside the repository, so no lane can reach it through the tree: not the API models or the
+harnesses without tree access (`codex`, `pi`), and not the tree-capable ones (`claude`,
+`opencode`) either, because it is not in the tree they can read. The story file is the only
+way the contract reaches any reviewer. Without the flag `orchestrate.py` falls back to the
+story devit persisted for the ticket, then the checkpoint summary, then a generic fallback —
+a call whose output says `Story: fallback` reviewed with no spec and must be re-run.
 
 `{MODEL}` is the full `provider/model` ref printed by `preflight` (e.g. `copilot/gpt-5.5`); `orchestrate.py` splits it (a bare id defaults to `copilot`).
 
@@ -165,7 +171,7 @@ Because no fixes land between passes, **every reviewer sees the identical diff**
 
 Dispatch concurrently, then collect when all return:
 
-- **Self-review:** dispatch the lenses in `$CORK_HOME/lenses/` (and the repo's `code-review/lenses/`) as parallel read-only subagents over `git diff {BASE}...HEAD`. Gather findings only — apply nothing.
+- **Self-review:** dispatch the lenses in `$CORK_HOME/lenses/` (and the repo's `code-review/lenses/`, read from the trusted ref) as parallel read-only subagents over `git diff {BASE}...HEAD`, with `{STANDARDS}` written by `standards show . --base-ref origin/{BASE}` exactly as in Step 2. Gather findings only — apply nothing.
 - **Each model from the `preflight` rotation** (captured in Step 0), all launched together (background processes, then `wait`):
 
 ```bash

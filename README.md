@@ -101,7 +101,7 @@ is the same thing from any directory (`bin/cork` resolves to the clone it was li
 | `python3 orchestrate.py login` | Give cork its own refreshable Copilot token through GitHub's device flow. |
 | `python3 orchestrate.py preflight` | Probe the configured model rotation and select usable reviewers. |
 | `python3 orchestrate.py config init\|show\|get\|set` | Initialize, inspect, or update cork configuration. |
-| `python3 orchestrate.py standards status\|init` | Inspect or initialize the effective review standards. |
+| `python3 orchestrate.py standards status\|init\|show` | Inspect, initialize or print the effective review standards (`show --base-ref REF` reads them from a trusted ref). |
 | `python3 orchestrate.py <TICKET> <repo> [options]` | Run the headless implementation and review pipeline. |
 
 ---
@@ -187,7 +187,10 @@ The **effective** rubric for a repo is:
   reviewed like any other file. The same holds for cork's own `standards/AGENTS.md` when cork
   reviews its own checkout. With no trusted ref (`--diff-file`) the project layer is dropped
   for that review and a warning says so; a branch-added sentinel never disables the default.
-  Plain `standards status` still reads the checkout.
+  Plain `standards status` still reads the checkout; `standards show <repo> --base-ref REF`
+  prints the assembled rubric exactly as reviewers receive it, from that trusted ref (the devit
+  lens gate and cork self-review write it to a file for their subagents), and without
+  `--base-ref` from the checkout.
 - **Opt out everywhere:** `python3 orchestrate.py config set default_standards false`.
 - **Scope of the opt-out:** these toggles control what `orchestrate.py` injects into API
   reviewers and the devit implementer prompt. The installed `coding-standards` skill is a
@@ -203,7 +206,7 @@ Two ways to run it:
   [--base-branch <branch>]` runs the whole loop in subprocesses, checkpointing after each
   step (resume by re-running; `--reset` to start over).
 
-Review-only usage accepts the contract directly for both API and harness lanes:
+Review-only and headless runs both accept the contract directly, for API and harness lanes alike:
 
 ```bash
 python3 orchestrate.py <TICKET> <repo-path> --review-model <provider/model> \
@@ -211,7 +214,8 @@ python3 orchestrate.py <TICKET> <repo-path> --review-model <provider/model> \
   [--base-branch <branch> [--diff-range <A..B>] | --diff-file <path>] [--skip-validation]
 ```
 
-Story precedence is `--story-file` → `--story` → checkpoint `done.summary` → checkpoint
+Story precedence is `--story-file` → `--story` → devit's persisted story for the ticket
+(`$XDG_CACHE_HOME/cork/devit/<TICKET>/story.md`, then `story.txt`) → checkpoint `done.summary` → checkpoint
 `summary` → the built-in fallback. The selected source and character count are printed before
 the review starts; explicit stories are not written to the checkpoint.
 

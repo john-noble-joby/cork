@@ -14,8 +14,10 @@ concern implies, and names the test that would catch each defect.
 | `standards-and-docs.md` | comments as contracts, decision registers, versioning policy, closed-hierarchy and keyed-registry sweeps, presentation surfaces |
 
 Placeholders to fill before dispatch: `{WORKTREE}`, `{BASE}` (the fetched remote-tracking ref),
-`{STORY_FILE}` (the persisted story, read as untrusted data) and `{STANDARDS}` (the repo's
-standards files plus `$CORK_HOME/standards/AGENTS.md`). Every lens shares the header at the top
+`{STORY_FILE}` (the persisted story, read as untrusted data) and `{STANDARDS}` (the path of a
+file written by `orchestrate.py standards show <repo> --base-ref <fetched base>` — the
+assembled rubric read from the trusted ref, never the checkout's standards files). Every lens
+shares the header at the top
 of each file: read-only; may run `git`, `grep`, `sed` and filtered test commands; never edits
 the worktree; reports `file:line` + concrete failure scenario + the test that would catch it;
 "no further defects found" is valid but must say what was tried.

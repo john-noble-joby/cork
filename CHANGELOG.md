@@ -56,7 +56,17 @@ procedure in the README's *Versioning* section.
   (independent Boolean clauses, one failure per fixture, failed state before absence
   assertions, both credential modes and malformed successful responses, contracts traced
   through unchanged consumers, inspected vs executed, size is not a finding, advice is a
-  claim). Closes #32.
+  claim). Refs #32 — the remaining item, probing harness model availability in preflight, is
+  tracked in #34.
+- **Reviewers grade against the ticket in every mode.** `--story-file`/`--story` now apply to
+  headless runs too: the blind reviewers and the isolated self-review receive the story, while
+  the implementer's summary stays the fix prompts' context. Without a flag cork looks for the
+  story devit persisted for the ticket (`$XDG_CACHE_HOME/cork/devit/<TICKET>/story.md`, then
+  `story.txt` — outside every repository), then the checkpoint summary, then the named fallback.
+  `standards show <repo> --base-ref REF` prints the assembled rubric from a trusted ref; the
+  devit lens gate and cork self-review feed it to lens subagents instead of the checkout's
+  standards files. An unreadable changed file is listed as skipped in the manifest; an
+  unreadable `--context-file` fails the review like a missing one.
 - **Long-tail review classes are swept before review, not discovered one pass at a time.**
   devit gains *Phase 3.5 — Pre-review sweep*: six artifacts pasted into the PR body — surface
   inventory for every new gate, input-domain table for every external value, contract probes

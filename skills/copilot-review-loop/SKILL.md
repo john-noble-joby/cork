@@ -127,9 +127,10 @@ Route on `state tc verdict suppressed missed`:
   - if `tc > 0` → **2b** (settle the thread index) → step 3 → step 4 (inline threads);
   - if `suppressed > 0` or `missed > 0` → **2c** (body findings);
   - do **both** when both are non-zero, then continue to step 5/6.
-- `verdict=none` with every count at zero (a bare `Needs a closer look`) is not clean: there is
-  nothing to fix, so treat it like a processed pass — re-request if `iteration < max`, else stop
-  and tell the user the pass carried no findings but no approval either.
+- `verdict=none` with every count at zero (a bare `Needs a closer look`) is not clean and is a
+  **non-approving pass**: it consumes an iteration exactly like a pass with findings. There is
+  nothing to fix, so go straight to step 6 — re-request and increment if `iteration < max`,
+  else stop and tell the user the pass carried no findings but no approval either.
 
 Never treat inline and body-level findings as either/or — "all processed" in step 6 means inline
 threads **and** body findings (suppressed and previously missed) from this pass are all handled.
