@@ -16,14 +16,15 @@ class ReviewStoryTest(unittest.TestCase):
         self._originals = {
             name: getattr(orchestrate, name)
             for name in ("CONFIG_PATH", "load_agent_instructions", "git_diff_branch",
-                         "changed_files_branch", "load_state", "_call_and_extract", "_probe",
-                         "require_base_ref")
+                         "_git_changed_names", "_file_contents", "load_state", "_call_and_extract",
+                         "_probe", "require_base_ref")
         }
         orchestrate.CONFIG_PATH = Path(self.tmp.name) / "config.json"
         orchestrate.require_base_ref = lambda repo, base: None  # the temp dir is not a git repo
-        orchestrate.load_agent_instructions = lambda repo: ("STANDARDS", "/repo/AGENTS.md")
+        orchestrate.load_agent_instructions = lambda repo, changed=None, ref=None: ("STANDARDS", "/repo/AGENTS.md")
         orchestrate.git_diff_branch = lambda repo, base: "diff --git a/a.py b/a.py\n+change"
-        orchestrate.changed_files_branch = lambda repo, base: {"a.py": "current"}
+        orchestrate._git_changed_names = lambda repo, *diff_args: ["a.py"]
+        orchestrate._file_contents = lambda repo, names: {"a.py": "current"}
         orchestrate.load_state = lambda tid: {
             "done": {"summary": "done checkpoint story"},
             "summary": "legacy checkpoint story",

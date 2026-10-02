@@ -1187,10 +1187,6 @@ def git_diff_range(cwd: str, rng: str) -> str:
     return subprocess.check_output(["git", "diff", rng], cwd=cwd, text=True)
 
 
-def changed_files_range(cwd: str, rng: str) -> dict[str, str]:
-    return _file_contents(cwd, _git_changed_names(cwd, rng))
-
-
 _GIT_ESCAPES = {b"n": b"\n", b"t": b"\t", b"r": b"\r", b"a": b"\a", b"b": b"\b", b"f": b"\f",
                 b"v": b"\v", b'"': b'"', b"\\": b"\\"}
 
@@ -1350,20 +1346,52 @@ _PROJECT_STANDARDS = [
 ]
 
 
-def _repo_opted_out(repo: str) -> bool:
-    return (Path(repo) / "code-review" / ".cork-standards-off").exists()
+_OPT_OUT_SENTINEL = "code-review/.cork-standards-off"
 
 
-def load_agent_instructions(repo: str) -> tuple[str, str]:
-    # Effective review/coding rubric = cork universal default (gated) + the repo's own.
-    project_text, project_path = "", ""
+def _repo_opted_out(repo: str, changed: set[str] | None = None) -> bool:
+    # A sentinel the diff under review adds or edits is branch-controlled and cannot opt the
+    # branch out of the default standards.
+    if changed is not None and _OPT_OUT_SENTINEL in changed:
+        print(f"  ⚠ {_OPT_OUT_SENTINEL} is changed by this diff — ignoring it; the default standards still apply", flush=True)
+        return False
+    return (Path(repo) / _OPT_OUT_SENTINEL).exists()
+
+
+def _show_at(repo: str, ref: str, rel: str) -> str | None:
+    r = subprocess.run(["git", "show", f"{ref}:{rel}"], cwd=repo, capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else None
+
+
+def _project_standards(repo: str, changed: set[str] | None,
+                       trusted_ref: str | None) -> tuple[str, str]:
+    # The project's standards become reviewer *instructions*, so a version the diff under
+    # review added or edited must not be the one that governs its own review — a PR could
+    # otherwise rewrite the rubric to suppress findings. For a changed file take the copy at
+    # the trusted ref (the base the diff is measured from); with no such ref, or none at the
+    # base, the branch's copy is reviewed like any other changed file and governs nothing.
     for rel in _PROJECT_STANDARDS:
         p = Path(repo) / rel
+        if changed is not None and rel in changed:
+            base_text = _show_at(repo, trusted_ref, rel) if trusted_ref else None
+            if base_text and base_text.strip():
+                print(f"  ⚠ {rel} is changed by this diff — reviewers follow the {trusted_ref} revision; the branch's copy is review material", flush=True)
+                return base_text, f"{rel}@{trusted_ref}"
+            print(f"  ⚠ {rel} is added or changed by this diff with no trusted base copy — not used as review instructions", flush=True)
+            continue
         if p.exists():
-            project_text, project_path = p.read_text(errors="replace"), str(p)
-            break
+            return p.read_text(errors="replace"), str(p)
+    return "", ""
+
+
+def load_agent_instructions(repo: str, changed: set[str] | None = None,
+                            trusted_ref: str | None = None) -> tuple[str, str]:
+    # Effective review/coding rubric = cork universal default (gated) + the repo's own.
+    # `changed` = paths the diff under review touches; `trusted_ref` = the ref the diff is
+    # measured from (base branch or range start). Both None = plain working-tree load.
+    project_text, project_path = _project_standards(repo, changed, trusted_ref)
     use_default = (load_config(quiet=True).get("default_standards", True)
-                   and not _repo_opted_out(repo))
+                   and not _repo_opted_out(repo, changed))
     universal_text = (_DEFAULT_STANDARDS.read_text(errors="replace")
                       if use_default and _DEFAULT_STANDARDS.exists() else "")
     parts, labels = [], []
@@ -2315,26 +2343,32 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     # patch file (a diff produced elsewhere), or — the default — merge-base...HEAD vs the base
     # branch. Changed-file contents are always read from the working tree, so the tree should
     # be checked out at the diff's newer end.
+    # `trusted_ref` is where the diff is measured from: project standards the diff itself
+    # touches are taken from there, never from the branch (see _project_standards).
+    trusted_ref: str | None
     if diff_range is not None:
         require_range(repo, diff_range)
-        diff, files_fn, scope = git_diff_range(repo, diff_range), (lambda: changed_files_range(repo, diff_range)), diff_range
+        diff, scope, trusted_ref = git_diff_range(repo, diff_range), diff_range, _split_range(diff_range)[0]
+        names_fn = lambda: _git_changed_names(repo, diff_range)
     elif diff_file is not None:
-        diff, names = read_diff_file(diff_file)
-        files_fn, scope = (lambda: _file_contents(repo, names)), f"diff file {diff_file}"
+        diff, patch_names = read_diff_file(diff_file)
+        scope, trusted_ref, names_fn = f"diff file {diff_file}", None, (lambda: patch_names)
     else:
         require_base_ref(repo, base)
-        diff, files_fn, scope = git_diff_branch(repo, base), (lambda: changed_files_branch(repo, base)), base
-    if not diff.strip():
+        diff, scope, trusted_ref = git_diff_branch(repo, base), base, base
+        names_fn = lambda: _git_changed_names(repo, f"{base}...HEAD")
+    if not diff.strip():   # before the probe and before listing names: an empty diff needs neither
         fail(f"No diff for {scope} — nothing to review.")
     provider, model = _split_model_ref(model_ref)
     if validate:
         verdict = _probe(provider, model)
         if verdict != "ok":
             fail(f"{provider}/{model} not usable on this seat ({verdict}).")
-    instructions, instructions_path = load_agent_instructions(repo)
+    names = names_fn()
+    instructions, instructions_path = load_agent_instructions(repo, set(names), trusted_ref)
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
-    files = files_fn()
+    files = _file_contents(repo, names)
     print(f"Story: {story_source} ({len(story)} chars)")
     print(f"\n── Review: {provider}/{model} — {len(files)} files, "
           f"{len(diff.splitlines())} diff lines vs {scope}\n", flush=True)
@@ -2622,7 +2656,8 @@ def main() -> None:
     rem     = _remaining_work(state)
     summary = state.get("done", {}).get("summary") or state.get("summary", "")
 
-    instructions, instructions_path = load_agent_instructions(repo)
+    instructions, instructions_path = load_agent_instructions(
+        repo, set(_git_changed_names(repo, f"{base}...HEAD")), base)
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
     else:

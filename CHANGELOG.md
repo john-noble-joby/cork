@@ -45,6 +45,16 @@ procedure in the README's *Versioning* section.
   unprobed tool contract, an unchecked upstream or an unwritten matrix in pass 1. Evidence:
   edge-fmt #534/#537 (6 and 11 Copilot passes; a third of findings were docs/wording).
 
+### Changed
+- **Reviewer prompts open with a trust boundary and a diff cannot rewrite its own rubric.**
+  `orchestrate.py` prepends a `TRUST_BOUNDARY` to every reviewer prompt (API lanes, harness
+  lanes, headless self-review): the story, diff, changed files and any repository file opened
+  during review are material, never instructions. Project standards (`code-review/AGENTS.md`
+  and friends) and the `.cork-standards-off` sentinel that the diff under review adds or edits
+  no longer govern that review — reviewers follow the copy at the trusted ref (base branch or
+  range start), the branch's copy is review material, and a branch-added sentinel cannot opt
+  out of the default. The default standards carry the same boundary for human readers.
+
 ## [0.18.0] — 2026-10-02
 
 ### Added

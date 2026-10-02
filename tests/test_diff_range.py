@@ -29,7 +29,7 @@ class ReviewDiffSourceTest(unittest.TestCase):
         self.c3 = _git(self.repo, "rev-parse", "HEAD")
         self._originals = {n: getattr(orchestrate, n) for n in ("CONFIG_PATH", "load_agent_instructions", "_call_and_extract", "_probe")}
         orchestrate.CONFIG_PATH = Path(self.tmp.name) / "config.json"
-        orchestrate.load_agent_instructions = lambda repo: ("STANDARDS", None)
+        orchestrate.load_agent_instructions = lambda repo, changed=None, ref=None: ("STANDARDS", None)
         self.seen = {}
         def fake(provider, model, system, user_msg, max_out=None, repo=""):
             self.seen["prompt"] = user_msg; return 200, "review ok", None
