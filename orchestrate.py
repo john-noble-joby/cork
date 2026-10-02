@@ -2496,18 +2496,25 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     # It is the base branch even for a --diff-range review: a range start is whatever the caller
     # names — in a delta round it is the PR's own previous head — so it can never anchor trust.
     # Only --diff-file has no trusted ref at all.
+    # Refs are pinned to commit ids before the first diff and those ids are reused for the
+    # changed names and the trusted-tree reads, so a ref moving mid-review (a concurrent fetch,
+    # a probe that takes a while) cannot pair a diff from one revision with a rubric or file
+    # selection from another. The symbolic names survive only in the printed scope.
     base_ref: str | None
     patch_names: list[str] = []
     if diff_range is not None:
         require_range(repo, diff_range)
         require_base_ref(repo, base)
-        diff, scope, base_ref = git_diff_range(repo, diff_range), diff_range, base
+        a, b = _split_range(diff_range)
+        pinned_range = f"{pin_ref(repo, a)}{'...' if '...' in diff_range else '..'}{pin_ref(repo, b)}"
+        diff, scope, base_ref = git_diff_range(repo, pinned_range), diff_range, pin_ref(repo, base)
     elif diff_file is not None:
         diff, patch_names = read_diff_file(diff_file)
         scope, base_ref = f"diff file {diff_file}", None
     else:
         require_base_ref(repo, base)
-        diff, scope, base_ref = git_diff_branch(repo, base), base, base
+        base_ref = pin_ref(repo, base)
+        diff, scope = git_diff_branch(repo, base_ref), base
     if not diff.strip():   # before the probe and before listing names: an empty diff needs neither
         fail(f"No diff for {scope} — nothing to review.")
     provider, model = _split_model_ref(model_ref)
@@ -2516,7 +2523,7 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
         if verdict != "ok":
             fail(f"{provider}/{model} not usable on this seat ({verdict}).")
     repo = git_toplevel(repo)   # names, standards and file contents are root-relative from here on
-    names = patch_names if diff_file is not None else _git_changed_names(repo, diff_range or f"{base}...HEAD")
+    names = patch_names if diff_file is not None else _git_changed_names(repo, pinned_range if diff_range is not None else f"{base_ref}...HEAD")
     instructions, instructions_path = load_agent_instructions(repo, set(names), base_ref)
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")

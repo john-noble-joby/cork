@@ -70,6 +70,7 @@ class ReviewDiffTest(unittest.TestCase):
     def test_cmd_review_rejects_empty_diff_before_probe(self):
         with (
             patch.object(orchestrate, "require_base_ref"),
+            patch.object(orchestrate, "pin_ref", side_effect=lambda repo, ref: ref),
             patch.object(orchestrate, "git_diff_branch", return_value="\n"),
             patch.object(orchestrate, "_probe") as probe,
             redirect_stderr(io.StringIO()),

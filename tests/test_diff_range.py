@@ -217,11 +217,12 @@ class ReviewDiffSourceTest(unittest.TestCase):
             with redirect_stdout(out):
                 orchestrate.cmd_review("T-1", str(self.repo), "base", "copilot/model", validate=False, story_text="story", **kw)
             return self.seen["system"], out.getvalue()
+        base_sha = _git(self.repo, "rev-parse", "base")
         for kw in ({}, {"diff_range": f"{weakened}..HEAD"}):
             with self.subTest(source=kw or "base branch"):
                 system, out = system_for(**kw)
                 self.assertIn("BASE RULES", system); self.assertNotIn("BRANCH RULES", system)
-                self.assertIn("code-review/AGENTS.md@base", out)
+                self.assertIn(f"code-review/AGENTS.md@{base_sha}", out)   # the label names the pinned commit
         patch = Path(self.tmp.name) / "work.patch"; patch.write_text(_git(self.repo, "diff", f"{weakened}..HEAD") + "\n")
         system, out = system_for(diff_file=str(patch))
         self.assertIn("UNIVERSAL", system); self.assertNotIn("RULES", system); self.assertIn("no trusted ref", out)
@@ -250,6 +251,22 @@ class ReviewDiffSourceTest(unittest.TestCase):
         self.assertEqual(orchestrate.pin_ref(str(self.repo), "pinme"), self.c2)
         _git(self.repo, "branch", "-f", "pinme", self.c3)          # the name moves; the pin did not
         self.assertNotEqual(orchestrate.pin_ref(str(self.repo), "pinme"), self.c2)
+        # cmd_review pins before the first diff and reuses the ids: a base moved between the
+        # diff and the trusted-tree read cannot change which rubric or names are used
+        _git(self.repo, "branch", "movable", self.c1)
+        orchestrate.load_agent_instructions = self._originals["load_agent_instructions"]
+        orchestrate._DEFAULT_STANDARDS = Path(self.tmp.name) / "default.md"; orchestrate._DEFAULT_STANDARDS.write_text("UNIVERSAL")
+        real_diff = orchestrate.git_diff_branch
+        def diff_then_move(repo, base):
+            out = real_diff(repo, base); _git(self.repo, "branch", "-f", "movable", self.c3); return out
+        orchestrate.git_diff_branch = diff_then_move
+        try:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                orchestrate.cmd_review("T-1", str(self.repo), "movable", "copilot/model", validate=False, story_text="story")
+        finally:
+            orchestrate.git_diff_branch = real_diff
+        self.assertIn("+a = 2", self.seen["prompt"]); self.assertIn("### a.py", self.seen["prompt"])   # names from the pinned c1, not the moved c3
         err = io.StringIO()
         with redirect_stderr(err), self.assertRaises(SystemExit):
             orchestrate.pin_ref(str(self.repo), "origin/nope")
