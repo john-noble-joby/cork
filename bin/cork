@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# `cork` — a thin shim so a human can type `cork preflight` instead of
+# `python3 "$CORK_HOME/orchestrate.py" preflight`.
+#
+# It always runs the orchestrate.py of the checkout this file lives in, with any
+# symlink chain (e.g. ~/.local/bin/cork → <clone>/bin/cork) resolved first, so there
+# is no installed copy to drift from the source: `git pull` is the whole upgrade.
+# Skills keep calling "$CORK_HOME/orchestrate.py" explicitly — the shim is for people.
+set -eu
+
+self="${BASH_SOURCE[0]}"
+# Resolve by hand: `readlink -f` is missing on macOS before 12.3, and the install
+# symlink may be relative to its own directory.
+while [ -L "$self" ]; do
+  target="$(readlink "$self")"
+  case "$target" in
+    /*) self="$target" ;;
+    *)  self="$(dirname "$self")/$target" ;;
+  esac
+done
+root="$(cd "$(dirname "$self")/.." && pwd -P)"
+
+exec python3 "$root/orchestrate.py" "$@"

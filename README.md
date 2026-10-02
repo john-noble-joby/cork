@@ -45,6 +45,13 @@ steps below are manual.
    run it straight from `$CORK_HOME`, so `git pull` updates the engine.) `install.sh` can also
    write `CORK_HOME` into `~/.claude/settings.json` if you clone to a non-default path.
 
+   It also symlinks `~/.local/bin/cork` → `bin/cork`, a shim that execs this clone's
+   `orchestrate.py`, so at a shell you can type `cork preflight` instead of
+   `python3 "$CORK_HOME/orchestrate.py" preflight`. Nothing is copied or packaged — there is
+   no second install to drift from the checkout. If `~/.local/bin` isn't on your `PATH` the
+   installer says so. (The skills keep calling `$CORK_HOME/orchestrate.py` explicitly; the
+   shim is for people.)
+
 3. **Choose providers, then authenticate.** Copilot is the default, but Claude-only reviews
    need only Claude Code's login. Run `config init`, configure your intended rotation (see
    *Harness reviewers* below), then get a Copilot token **only if using Copilot lanes**:
@@ -83,6 +90,9 @@ restart, just say **"set up cork"** and it walks you through the token, models, 
 pause-between-reviews preference, and the status line.
 
 ## Commands
+
+Every command is `python3 "$CORK_HOME/orchestrate.py" <verb> …`; after `install.sh`, `cork <verb> …`
+is the same thing from any directory (`bin/cork` resolves to the clone it was linked from).
 
 | Command | Purpose |
 |---------|---------|

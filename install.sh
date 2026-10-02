@@ -282,6 +282,33 @@ PY
   fi
 fi
 
+# `cork` command: a symlink to this clone's bin/cork, which execs this clone's
+# orchestrate.py. Nothing is copied, so `git pull` is the whole upgrade and the skills'
+# explicit "$CORK_HOME/orchestrate.py" calls and the human-typed `cork …` always agree.
+echo
+shim="$REPO/bin/cork"
+bin_dir="$HOME/.local/bin"
+link="$bin_dir/cork"
+if [ ! -x "$shim" ]; then
+  echo "  ✗ $shim missing or not executable — the cork command was not linked"
+  rc=1
+elif [ -e "$link" ] && [ ! -L "$link" ]; then
+  echo "  ⚠ $link exists and is not a symlink — leaving it alone; link $shim yourself if it is stale"
+elif [ -L "$link" ] && [ "$link" -ef "$shim" ]; then
+  echo "cork command already linked at $link ✓"
+else
+  if [ -L "$link" ]; then
+    echo "  ↪ $link pointed at $(readlink -- "$link") — repointed at this clone"
+  fi
+  mkdir -p -- "$bin_dir"
+  ln -sfn -- "$shim" "$link"
+  echo "  ✓ cork command linked at $link → $shim"
+fi
+case ":$PATH:" in
+  *":$bin_dir:"*) ;;
+  *) echo "    ($bin_dir is not on PATH — add 'export PATH=\"$bin_dir:\$PATH\"' to your shell profile to type \`cork\` directly)" ;;
+esac
+
 echo
 if [ "$rc" -eq 0 ]; then
   echo "Next: restart Claude Code, then say \"set up cork\" to finish configuration."

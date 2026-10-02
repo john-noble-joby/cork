@@ -15,6 +15,7 @@ The pipeline is `3 + 2×N` committed steps (N = number of preflight-selected mod
 
 ```
 orchestrate.py          # single entry point
+bin/cork                # shell shim: execs this clone's orchestrate.py (install.sh symlinks it into ~/.local/bin)
 docs/plan.md            # design decisions and rationale (historical record)
 README.md               # usage and setup
 skills/                 # Claude Code skills: coding-standards, cork, copilot-review-loop, devit, cork-setup
@@ -58,6 +59,7 @@ Copilot auth resolves in priority order: `CORK_COPILOT_TOKEN` → `CORK_AUTH_FIL
 
 ```bash
 python3 orchestrate.py ENG-123 ~/dev/target-repo
+cork ENG-123 ~/dev/target-repo      # same thing via the install.sh symlink
 ```
 
 No third-party dependencies — Python 3.10+ stdlib only (Copilot API calls go
