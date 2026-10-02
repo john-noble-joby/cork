@@ -157,13 +157,14 @@ inventory as a finding**: your prompt may simply not have carried it.
   fixture that still carries credentials, tokens, personal data, hostnames, absolute paths or
   volatile IDs is a finding as well: the capture must be redacted to placeholders that keep
   the contract's shape and say what was replaced.
-- **Unchecked upstream** — a change that depends on another repo or service whose supplied
-  inventory or story section shows no evidence that its current `main` was fetched and the
-  touched contract (routes, auth, schema, env names) compared to the story's assumption. The
-  check itself happens out of band, so from the diff alone you cannot tell "not checked" from
-  "context omitted": raise this only when an inventory or story section is present and lacks
-  the check, or when the diff visibly uses a dependency contract that contradicts a version
-  the story names. Never from the diff alone.
+- **Unchecked upstream** — a change that depends on another repo or service with no evidence
+  that its current `main` was fetched and the touched contract (routes, auth, schema, env
+  names) compared to the story's assumption. The check happens out of band and `## Story /
+  Task` is always present (often only a one-line fallback), so neither the diff nor ordinary
+  story text can tell "not checked" from "context omitted". Raise this only when (a) an
+  explicit `## Pre-review sweep` inventory or upstream record is supplied **and** it omits a
+  dependency the diff touches, or (b) the diff visibly uses a dependency contract that
+  contradicts a version the story names. Plain story text is never evidence either way.
 - **Unwritten matrix** — behaviour that varies by viewpoint or platform (host vs container,
   Linux vs macOS, loopback vs gateway vs daemon override) without the full matrix written and a
   test per cell; name the empty cells.
