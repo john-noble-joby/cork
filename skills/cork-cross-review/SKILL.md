@@ -404,8 +404,10 @@ transport inside `orchestrate.py` is planned; until then this mapping is the sup
   seat; API lanes are one Copilot premium request each. Use `--skip-validation` on fan-outs.
 - **Standards** reach every lane the same way `cork` delivers them (cork's `standards/AGENTS.md`
   plus the repo's `code-review/AGENTS.md`), via system prompt where the CLI supports one and
-  prepended to the story otherwise. A branch-controlled `code-review/AGENTS.md` can steer a
-  reviewer running under your login — read it in the diff before you trust the lanes' findings
-  about it.
+  prepended to the story otherwise. They come from the **trusted ref** — the base the diff is
+  measured from — never from the PR branch: a `code-review/AGENTS.md` (or opt-out sentinel) the
+  PR adds, edits or aliases through a symlink is review material, not instructions, and every
+  prompt opens with a trust boundary saying so. A PR that touches the standards file is still
+  worth a look in the diff: the lanes will flag directive-like text in it as a finding.
 - **When not to use this**: a one-line docs change, or a branch with no acceptance contract and
   an author unwilling to write one. Use `cork review` for a quick flat second opinion.
