@@ -136,7 +136,7 @@ Lower-level detail and the underlying `orchestrate.py` engine.
 | Steps | Who | What |
 |-------|-----|------|
 | 1 | Claude Code | Fetch story, search mem0, implement, **commit** |
-| 2 | Claude Code | Multi-agent self-review |
+| 2 | Claude Code | Isolated single-pass self-review (safe mode, read-only tools, trusted standards as system prompt) |
 | 3 | Claude Code | Apply self-review findings, **commit** |
 | 4, 6, … | Reviewer model (×N) | Blind review — sees current code, not prior findings |
 | 5, 7, … | Claude Code (×N) | Apply findings, **commit** |

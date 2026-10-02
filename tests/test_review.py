@@ -303,6 +303,23 @@ class ReviewDiffTest(unittest.TestCase):
         self.assertNotIn("--model", argv); self.assertNotIn("--print", argv)
         self.assertNotIn("USER PROMPT", argv)               # the prompt travels on stdin, not argv
         self.assertEqual(kw["input"], "USER PROMPT"); self.assertEqual(kw["cwd"], "/repo")
+        self.assertEqual(kw["timeout"], orchestrate.HARNESSES["claude"]["timeout"])
+
+    def test_headless_self_review_fails_cleanly_on_oversized_or_unrunnable_argv(self):
+        # same guards as _harness_call: an over-limit --system-prompt is refused before exec,
+        # and a NUL / missing binary / timeout become a clean fail(), never a traceback
+        err = io.StringIO()
+        with patch.object(orchestrate.subprocess, "run") as run, redirect_stderr(err), self.assertRaises(SystemExit):
+            orchestrate.run_claude_review("x" * orchestrate._MAX_ARG_BYTES, "p", "/repo")
+        run.assert_not_called(); self.assertIn("platform limit", err.getvalue())
+        for exc, needle in ((ValueError("embedded null byte"), "cannot run"),
+                            (OSError(7, "Argument list too long"), "cannot run"),
+                            (orchestrate.subprocess.TimeoutExpired(["claude"], 900), "timed out")):
+            with self.subTest(exc=type(exc).__name__):
+                err = io.StringIO()
+                with patch.object(orchestrate.subprocess, "run", side_effect=exc), redirect_stderr(err), self.assertRaises(SystemExit):
+                    orchestrate.run_claude_review("SYSTEM", "p", "/repo")
+                self.assertIn(needle, err.getvalue())
 
     def test_review_system_prompt_carries_spec_axis_on_both_branches(self):
         for instructions in ("Custom project rules", ""):

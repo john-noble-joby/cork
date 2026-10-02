@@ -4,7 +4,7 @@ orchestrate.py — Multi-model coding pipeline with independent sequential revie
 
 Pipeline (3 + 2*N steps, where N = number of preflight-selected reviewer models):
   1. Claude Code: implement story (branch + commit)
-  2. Claude Code: parallel multi-agent review of own work → findings
+  2. Claude Code: isolated single-pass self-review of own work → findings
   3. Claude Code: apply Claude findings → commit
   4..3+2N. For each reviewer model:
        even step: blind review of current branch state → findings
@@ -1150,7 +1150,20 @@ def run_claude_review(system: str, prompt: str, cwd: str) -> str:
     spec = HARNESSES["claude"]
     argv = ([CLAUDE] + [a for a in spec["argv"] if a not in ("--model", "{model}")]
             + [spec["system_flag"], system] + list(spec["read_only"]))
-    result = subprocess.run(argv, cwd=cwd, input=prompt, capture_output=True, text=True, errors="replace")
+    # Same guards as _harness_call: the standards travel as one argv element, capped at
+    # 128 KiB by the kernel, and a NUL byte in them raises ValueError — neither may surface
+    # as a traceback from the pipeline.
+    largest = max(len(a.encode("utf-8", "replace")) for a in argv)
+    if largest + 1 > _MAX_ARG_BYTES:
+        fail(f"Claude self-review: a single argument is {largest} bytes but the platform limit is "
+             f"{_MAX_ARG_BYTES}; reduce the standards layer")
+    try:
+        result = subprocess.run(argv, cwd=cwd, input=prompt, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=spec["timeout"])
+    except subprocess.TimeoutExpired:
+        fail(f"Claude self-review timed out after {spec['timeout']}s")
+    except (OSError, ValueError) as e:   # binary gone / E2BIG / NUL in an argument
+        fail(f"cannot run {CLAUDE} for the self-review: {e}")
     if result.returncode != 0:
         fail(f"Claude self-review exited {result.returncode}:\n{result.stderr[-2000:]}")
     return result.stdout.strip()
@@ -2800,9 +2813,12 @@ def main() -> None:
             f"     Continuing — but expect reduced review quality.\n"
         )
 
-    # ── Step 2: Claude multi-agent self-review ────────────────────────────────
+    # ── Step 2: Claude isolated self-review ──────────────────────────────────
+    # Deliberately single-pass: the reviewer runs under the `claude` lane's isolation with
+    # read-only tools, so it cannot dispatch subagents — a branch must not be able to shape
+    # any part of its own review. The session-driven `cork` skill keeps its subagent review.
     if rem["self_review"]:
-        step(2, total, "Claude Code: multi-agent self-review", ticket_id=tid)
+        step(2, total, "Claude Code: isolated self-review", ticket_id=tid)
         # Isolated reviewer invocation (no CLAUDE.md/hooks/project settings from the branch),
         # with the trusted standards assembled above as the system prompt — the branch cannot
         # supply any part of its own review rubric.
@@ -2812,9 +2828,9 @@ def main() -> None:
         print(f"  {self_review_out[:300]}…")
         state["done"]["self_review"] = self_review_out
         mark_done_v2(tid, state)
-        step_done(2, total, "Claude Code: multi-agent self-review")
+        step_done(2, total, "Claude Code: isolated self-review")
     else:
-        skip(2, total, "Claude Code: multi-agent self-review")
+        skip(2, total, "Claude Code: isolated self-review")
         self_review_out = state["done"].get("self_review", "")
 
     uncertain_items.append(("Claude self-review", extract_uncertain(self_review_out)))

@@ -57,7 +57,11 @@ procedure in the README's *Versioning* section.
   pipeline loads them after the implementation step, and its self-review now runs under the
   `claude` reviewer lane's isolation (`--safe-mode`, read-only tools: no branch `CLAUDE.md`,
   hooks or project settings) with the trusted standards as its system prompt, instead of a
-  bare `claude --print`. The fix step's prompt carries its own boundary so quoted
+  bare `claude --print`. That step is therefore a deliberate single reviewer pass — the
+  read-only tool allowlist cannot dispatch subagents — and is labelled "isolated
+  self-review"; the session-driven `cork` skill keeps its parallel-subagent self-review. The
+  launcher applies the harness lanes' argv-size and subprocess error guards. The fix step's
+  prompt carries its own boundary so quoted
   directives in findings are not acted on. The default standards carry the same boundary for
   human readers.
 
