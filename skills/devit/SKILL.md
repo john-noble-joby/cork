@@ -276,6 +276,18 @@ adds siblings and restatements, a new tool call needs a probe — then rebuild `
 the snippet above before the next `--review-model` call or self-review dispatch. Otherwise every later
 reviewer sees the latest diff paired with the pre-fix inventory.
 
+Before **each** self-review or model call, save the head and changed-file set that this pass
+will see as `$SWEEP_DIR/last-cork-head` and `$SWEEP_DIR/last-cork-files`:
+
+```bash
+git rev-parse HEAD > "$SWEEP_DIR/last-cork-head"
+git diff --name-only "$BASE_SHA...HEAD" > "$SWEEP_DIR/last-cork-files"
+```
+
+Overwrite these immediately before each later call, after the preceding fix commit. This
+anchors the final-diff freshness check to the actual newest end the last cork pass reviewed,
+including fixes made by that pass.
+
 (Pauses per reviewer when `interactive_review` is on — see Notes.)
 
 **Fewer passes on a large diff.** When the branch is one large commit that no reviewer has
@@ -364,9 +376,20 @@ which lanes actually returned findings and which failed or were skipped—the se
 is not the completed rotation.
 
 If you apply any resulting fixes, record the new head and touched files. Re-run the review-only
-fan-out whenever the fix commits since the last cork pass add more than about 100 diff lines or
-touch a file that pass did not see. Keep doing so until the final diff meets that freshness
-threshold; include any budget stop or pushback in Phase 7.
+fan-out whenever the fix commits since the last cork pass add more than about 100 lines
+(added + deleted) or touch a file that pass did not see. Check the gate with:
+
+```bash
+LAST_CORK_HEAD=$(cat "$SWEEP_DIR/last-cork-head")
+FIX_LINES=$(git diff --numstat "$LAST_CORK_HEAD"..HEAD |
+  awk '$1 ~ /^[0-9]+$/ { added += $1; removed += $2 } END { print added + removed }')
+UNSEEN=$(comm -23 <(git diff --name-only "$BASE_SHA...HEAD" | sort) \
+  <(sort "$SWEEP_DIR/last-cork-files"))
+```
+
+If `FIX_LINES > 100` or `UNSEEN` is non-empty, repeat the fan-out after fixes. Keep doing so
+until the final diff meets that freshness threshold; include any budget stop or pushback in
+Phase 7.
 
 ## Phase 7 — Finish (surface pushbacks)
 

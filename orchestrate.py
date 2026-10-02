@@ -2480,46 +2480,6 @@ def cmd_auth_print_token(as_json: bool = False) -> None:
 def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True,
                story_file: str | None = None, story_text: str | None = None,
                diff_range: str | None = None, diff_file: str | None = None) -> None:
-    if story_file is not None:
-        story_path = Path(story_file)
-        try:
-            story_path = story_path.expanduser()  # RuntimeError for an unknown ~user
-            story = story_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError, RuntimeError) as e:
-            fail(f"Cannot read story file {story_path}: {e}")
-        story_source = f"--story-file {story_path}"
-    elif story_text is not None:
-        story = story_text
-        story_source = "--story"
-    else:
-        default_story_path = Path(git_toplevel(repo)) / ".cork" / "story.md"
-        if default_story_path.is_file():
-            try:
-                story = default_story_path.read_text(encoding="utf-8")
-            except (OSError, UnicodeError) as e:
-                fail(f"Cannot read default story file {default_story_path}: {e}")
-            story_source = f"default story {default_story_path}"
-        else:
-            state = load_state(tid)
-            done_summary = state.get("done", {}).get("summary")
-            checkpoint_summary = state.get("summary")
-            if done_summary:
-                story, story_source = done_summary, "checkpoint done.summary"
-            elif checkpoint_summary:
-                story, story_source = checkpoint_summary, "checkpoint summary"
-            else:
-                story = f"Review the branch changes for {tid}."
-                story_source = "fallback"
-    if not story.strip():
-        fail(f"Story from {story_source} is empty.")
-    if story.strip() == f"Review the branch changes for {tid}.":
-        print(
-            "WARNING: review story is the generic fallback; spec-conformance review "
-            "cannot be reliable. Supply --story-file/--story or .cork/story.md.",
-            file=sys.stderr,
-            flush=True,
-        )
-
     _validate_model_ref(*_split_model_ref(model_ref))  # shape only; independent of --skip-validation
     # The diff under review comes from exactly one source: a commit range (delta rounds), a
     # patch file (a diff produced elsewhere), or — the default — merge-base...HEAD vs the base
@@ -2550,12 +2510,51 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
         diff, scope = git_diff_branch(repo, base_ref), base
     if not diff.strip():   # before the probe and before listing names: an empty diff needs neither
         fail(f"No diff for {scope} — nothing to review.")
+    repo = git_toplevel(repo)   # names, standards, default story and file contents are root-relative
+    if story_file is not None:
+        story_path = Path(story_file)
+        try:
+            story_path = story_path.expanduser()  # RuntimeError for an unknown ~user
+            story = story_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError, RuntimeError) as e:
+            fail(f"Cannot read story file {story_path}: {e}")
+        story_source = f"--story-file {story_path}"
+    elif story_text is not None:
+        story = story_text
+        story_source = "--story"
+    else:
+        default_story_path = Path(repo) / ".cork" / "story.md"
+        if default_story_path.is_file():
+            try:
+                story = default_story_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as e:
+                fail(f"Cannot read default story file {default_story_path}: {e}")
+            story_source = f"default story {default_story_path}"
+        else:
+            state = load_state(tid)
+            done_summary = state.get("done", {}).get("summary")
+            checkpoint_summary = state.get("summary")
+            if done_summary:
+                story, story_source = done_summary, "checkpoint done.summary"
+            elif checkpoint_summary:
+                story, story_source = checkpoint_summary, "checkpoint summary"
+            else:
+                story = f"Review the branch changes for {tid}."
+                story_source = "fallback"
+    if not story.strip():
+        fail(f"Story from {story_source} is empty.")
+    if story.strip() == f"Review the branch changes for {tid}.":
+        print(
+            "WARNING: review story is the generic fallback; spec-conformance review "
+            "cannot be reliable. Supply --story-file/--story or .cork/story.md.",
+            file=sys.stderr,
+            flush=True,
+        )
     provider, model = _split_model_ref(model_ref)
     if validate:
         verdict = _probe(provider, model)
         if verdict != "ok":
             fail(f"{provider}/{model} not usable on this seat ({verdict}).")
-    repo = git_toplevel(repo)   # names, standards and file contents are root-relative from here on
     names = patch_names if diff_file is not None else _git_changed_names(repo, pinned_range if diff_range is not None else f"{base_ref}...HEAD")
     instructions, instructions_path = load_agent_instructions(repo, set(names), base_ref)
     if instructions_path:

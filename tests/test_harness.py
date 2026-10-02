@@ -21,6 +21,7 @@ class HarnessBase(unittest.TestCase):
         self._cfg = orchestrate.CONFIG_PATH
         orchestrate.CONFIG_PATH = Path(self.tmp.name) / "config.json"  # -> DEFAULT_CONFIG
         self._run, self._which = orchestrate.subprocess.run, orchestrate.shutil.which
+        orchestrate.shutil.which = lambda binary: f"/usr/bin/{binary}"
         # never let a test create scratch dirs in the real ~/.local/share/code-orchestrator
         self.addCleanup(setattr, orchestrate, "STATE_DIR", orchestrate.STATE_DIR)
         orchestrate.STATE_DIR = Path(self.tmp.name) / "state"
@@ -842,7 +843,7 @@ class ConfigAndProbeTest(HarnessBase):
             orchestrate._http_post_json = orig
         self.assertEqual([orchestrate._model_key(s) for s in sel],
                          ["codex/gpt-5.6-sol", "claude/claude-opus-4.7"])
-        self.assertIn("codex: live (ChatGPT)", buf.getvalue())
+        self.assertIn("codex: live (ChatGPT; model probe passed)", buf.getvalue())
 
 
 class AuthProbeTest(HarnessBase):
