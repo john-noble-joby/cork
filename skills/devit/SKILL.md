@@ -106,6 +106,10 @@ bug). All work happens in the worktree, not the main checkout.
 
 ```bash
 BASE=develop                   # or what the user said
+# Persist the choice: shell variables do not survive to later tool calls (see Phase 0), and
+# Phase 4/5 must use the same base — a fresh shell would otherwise expand to `origin/`.
+SWEEP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/devit/<TICKET>"
+printf '%s\n' "$BASE" > "$SWEEP_DIR/base"
 # Explicit refspec: update origin/$BASE itself — a bare `git fetch origin $BASE` only guarantees
 # FETCH_HEAD, so an overridden base with no remote-tracking ref would fail here and an existing
 # one could start from stale code. Phase 4's --base-branch and the docs sweep use the same ref.
@@ -225,9 +229,12 @@ makes:
 
 ```bash
 SWEEP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/devit/<TICKET>"; SWEEP="$SWEEP_DIR/pre-review-sweep.md"   # recomputed
+BASE=$(cat "$SWEEP_DIR/base")   # persisted in Phase 2; never rely on the variable surviving to here
 # story.txt: Phase 0, rewritten in Phase 1 after a split. pre-review-sweep.md: Phase 3.5. Refuse without both.
-[ -s "$SWEEP_DIR/story.txt" ] && [ -s "$SWEEP" ] || { echo "missing story.txt or sweep in $SWEEP_DIR"; exit 1; }
-cat "$SWEEP_DIR/story.txt" "$SWEEP" > "$SWEEP_DIR/story.md"
+[ -s "$SWEEP_DIR/story.txt" ] && [ -s "$SWEEP" ] && [ -n "$BASE" ] || { echo "missing story.txt, sweep or base in $SWEEP_DIR"; exit 1; }
+# one cat (fails on a missing file); stdin supplies a blank line so a story.txt without a trailing
+# newline cannot fuse its last line onto the "## Pre-review sweep" heading
+printf '\n' | cat "$SWEEP_DIR/story.txt" - "$SWEEP" > "$SWEEP_DIR/story.md"
 python3 "$CORK_HOME/orchestrate.py" <TICKET> . --review-model <MODEL> --base-branch "origin/$BASE" --story-file "$SWEEP_DIR/story.md"
 ```
 
@@ -240,7 +247,7 @@ land before the next model runs. After applying a model's findings — and commi
 the next reviewer diffs the committed range — update the sweep items
 those fixes touched — a new validation adds rows to the input table, a new or changed message
 adds siblings and restatements, a new tool call needs a probe — then rebuild `story.md` with
-the two-line snippet above before the next `--review-model` call. Otherwise every later
+the snippet above before the next `--review-model` call. Otherwise every later
 reviewer sees the latest diff paired with the pre-fix inventory.
 
 (Pauses per reviewer when `interactive_review` is on — see Notes.)
@@ -263,7 +270,8 @@ Push the branch and open a PR with `gh`:
   touched — or the whole sweep if several models changed messages or docs — and update the
   draft with its findings. Follow with a short bullet list of what each review pass caught,
   and the Linear ticket URL at the bottom.
-- Base branch: `$BASE` (`develop` unless the user overrode it in Phase 2). Not a draft.
+- Base branch: the one persisted in Phase 2 (`cat "$SWEEP_DIR/base"` — `develop` unless the user
+  overrode it). Not a draft.
 
 ## Phase 6 — Copilot review loop
 
