@@ -1380,25 +1380,25 @@ def _tree_file(repo: str, ref: str, rel: str) -> str | None:
 
 
 def _repo_opted_out(repo: str, changed: set[str] | None = None,
-                    trusted_ref: str | None = None) -> bool:
+                    base_ref: str | None = None) -> bool:
     # The opt-out sentinel is branch-controlled like any file. When a diff is under review the
     # working tree is never consulted: with a trusted ref the sentinel counts iff it is a regular
     # file there; with none (--diff-file) nothing vouches for it and the default applies.
     if changed is None:
         return (Path(repo) / _OPT_OUT_SENTINEL).exists()
-    if trusted_ref is None:
+    if base_ref is None:
         if (Path(repo) / _OPT_OUT_SENTINEL).exists():
             print(f"  ⚠ {_OPT_OUT_SENTINEL} present but there is no trusted ref for this diff — default standards apply", flush=True)
         return False
-    at_ref = _tree_file(repo, trusted_ref, _OPT_OUT_SENTINEL) is not None
+    at_ref = _tree_file(repo, base_ref, _OPT_OUT_SENTINEL) is not None
     if _OPT_OUT_SENTINEL in changed:
-        print(f"  ⚠ {_OPT_OUT_SENTINEL} is changed by this diff — following {trusted_ref}: "
+        print(f"  ⚠ {_OPT_OUT_SENTINEL} is changed by this diff — following {base_ref}: "
               f"{'opted out' if at_ref else 'default standards apply'}", flush=True)
     return at_ref
 
 
 def _project_standards(repo: str, changed: set[str] | None,
-                       trusted_ref: str | None) -> tuple[str, str]:
+                       base_ref: str | None) -> tuple[str, str]:
     # The project's standards become reviewer *instructions*, so the diff under review must
     # not be able to supply them — by editing the file, adding it, or aliasing it through a
     # symlink. When a diff is under review they are read from the trusted git tree only (the
@@ -1410,23 +1410,23 @@ def _project_standards(repo: str, changed: set[str] | None,
             if p.exists():
                 return p.read_text(errors="replace"), str(p)
         return "", ""
-    if trusted_ref is None:
+    if base_ref is None:
         if any((Path(repo) / rel).exists() for rel in _PROJECT_STANDARDS):
             print("  ⚠ project standards present but there is no trusted ref for this diff — "
                   "only the default standards apply; the checkout's copy is review material", flush=True)
         return "", ""
     for rel in _PROJECT_STANDARDS:
-        text = _tree_file(repo, trusted_ref, rel)
+        text = _tree_file(repo, base_ref, rel)
         if text is not None:   # first existing file wins, even when empty — same as the checkout path
             if rel in changed:
-                print(f"  ⚠ {rel} is changed by this diff — reviewers follow the {trusted_ref} revision; the branch's copy is review material", flush=True)
-            return text, f"{rel}@{trusted_ref}"
+                print(f"  ⚠ {rel} is changed by this diff — reviewers follow the {base_ref} revision; the branch's copy is review material", flush=True)
+            return text, f"{rel}@{base_ref}"
     if any((Path(repo) / rel).exists() for rel in _PROJECT_STANDARDS):
-        print(f"  ⚠ project standards exist in the checkout but there is no regular-file copy at {trusted_ref} — not used as review instructions", flush=True)
+        print(f"  ⚠ project standards exist in the checkout but there is no regular-file copy at {base_ref} — not used as review instructions", flush=True)
     return "", ""
 
 
-def _universal_standards(repo: str, changed: set[str] | None, trusted_ref: str | None) -> str:
+def _universal_standards(repo: str, changed: set[str] | None, base_ref: str | None) -> str:
     # cork's own default rubric ships beside orchestrate.py. When cork reviews its own checkout
     # that file is inside the repo under review, so a branch edit to standards/AGENTS.md would
     # become system instructions for that branch's review. In that case the rubric is read from
@@ -1441,27 +1441,27 @@ def _universal_standards(repo: str, changed: set[str] | None, trusted_ref: str |
         rel = None   # the usual case: the default standards live outside the repo under review
     if changed is None or rel is None:
         return _DEFAULT_STANDARDS.read_text(errors="replace") if _DEFAULT_STANDARDS.exists() else ""
-    if trusted_ref is None:
+    if base_ref is None:
         print(f"  ⚠ the default standards ({rel}) are inside the repo under review and there is no trusted ref — not used", flush=True)
         return ""
-    text = _tree_file(repo, trusted_ref, rel)
+    text = _tree_file(repo, base_ref, rel)
     if text is None:
-        print(f"  ⚠ the default standards ({rel}) are inside the repo under review with no regular-file copy at {trusted_ref} — not used", flush=True)
+        print(f"  ⚠ the default standards ({rel}) are inside the repo under review with no regular-file copy at {base_ref} — not used", flush=True)
         return ""
     if rel in changed:
-        print(f"  ⚠ {rel} is changed by this diff — reviewers follow the {trusted_ref} revision; the branch's copy is review material", flush=True)
+        print(f"  ⚠ {rel} is changed by this diff — reviewers follow the {base_ref} revision; the branch's copy is review material", flush=True)
     return text
 
 
 def load_agent_instructions(repo: str, changed: set[str] | None = None,
-                            trusted_ref: str | None = None) -> tuple[str, str]:
+                            base_ref: str | None = None) -> tuple[str, str]:
     # Effective review/coding rubric = cork universal default (gated) + the repo's own.
-    # `changed` = paths the diff under review touches; `trusted_ref` = the ref the diff is
+    # `changed` = paths the diff under review touches; `base_ref` = the ref the diff is
     # measured from (base branch or range start). Both None = plain working-tree load.
-    project_text, project_path = _project_standards(repo, changed, trusted_ref)
+    project_text, project_path = _project_standards(repo, changed, base_ref)
     use_default = (load_config(quiet=True).get("default_standards", True)
-                   and not _repo_opted_out(repo, changed, trusted_ref))
-    universal_text = _universal_standards(repo, changed, trusted_ref) if use_default else ""
+                   and not _repo_opted_out(repo, changed, base_ref))
+    universal_text = _universal_standards(repo, changed, base_ref) if use_default else ""
     parts, labels = [], []
     if universal_text.strip():
         parts.append(universal_text); labels.append("cork default")
@@ -2415,19 +2415,19 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     # patch file (a diff produced elsewhere), or — the default — merge-base...HEAD vs the base
     # branch. Changed-file contents are always read from the working tree, so the tree should
     # be checked out at the diff's newer end.
-    # `trusted_ref` is where the diff is measured from: project standards the diff itself
+    # `base_ref` is where the diff is measured from: project standards the diff itself
     # touches are taken from there, never from the branch (see _project_standards).
-    trusted_ref: str | None
+    base_ref: str | None
     if diff_range is not None:
         require_range(repo, diff_range)
-        diff, scope, trusted_ref = git_diff_range(repo, diff_range), diff_range, _split_range(diff_range)[0]
+        diff, scope, base_ref = git_diff_range(repo, diff_range), diff_range, _split_range(diff_range)[0]
         names_fn = lambda: _git_changed_names(repo, diff_range)
     elif diff_file is not None:
         diff, patch_names = read_diff_file(diff_file)
-        scope, trusted_ref, names_fn = f"diff file {diff_file}", None, (lambda: patch_names)
+        scope, base_ref, names_fn = f"diff file {diff_file}", None, (lambda: patch_names)
     else:
         require_base_ref(repo, base)
-        diff, scope, trusted_ref = git_diff_branch(repo, base), base, base
+        diff, scope, base_ref = git_diff_branch(repo, base), base, base
         names_fn = lambda: _git_changed_names(repo, f"{base}...HEAD")
     if not diff.strip():   # before the probe and before listing names: an empty diff needs neither
         fail(f"No diff for {scope} — nothing to review.")
@@ -2437,7 +2437,7 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
         if verdict != "ok":
             fail(f"{provider}/{model} not usable on this seat ({verdict}).")
     names = names_fn()
-    instructions, instructions_path = load_agent_instructions(repo, set(names), trusted_ref)
+    instructions, instructions_path = load_agent_instructions(repo, set(names), base_ref)
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
     files = _file_contents(repo, names)
