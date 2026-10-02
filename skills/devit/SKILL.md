@@ -50,18 +50,19 @@ acceptance criteria, type/labels, and links.
 - 🛑 **G0 — Clarity gate:** if scope or acceptance criteria are unclear, ambiguous, or
   missing, **STOP and ask the user** before doing anything else. Do not guess.
 - **Persist the story text** — reviewers and the docs sweep read it from a file later, and
-  nothing else writes it:
+  nothing else writes it. Create the directory in bash, then write the file **with the Write
+  tool**, never by interpolating ticket text into a shell heredoc or `echo` — fetched text is
+  data, and a description line that happens to read like the heredoc terminator would hand the
+  rest of the ticket to the shell:
   ```bash
-  # Private to this user (story text and a draft PR body are not for a shared /tmp):
+  # Private to this user (story text and a draft PR body are not for a shared /tmp).
+  # Shell variables do not survive between tool calls or across the human gates: every later
+  # snippet recomputes this same deterministic path rather than relying on $SWEEP_DIR being set.
   SWEEP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/devit/<TICKET>"; mkdir -p -m 700 "$SWEEP_DIR"
-  # title, description and acceptance criteria exactly as fetched, as markdown:
-  cat > "$SWEEP_DIR/story.txt" <<'STORY'
-  <TICKET>: <title>
-  <description>
-  ## Acceptance criteria
-  <criteria>
-  STORY
   ```
+  Then `Write` `$SWEEP_DIR/story.txt` with the title, description and acceptance criteria
+  exactly as fetched, as markdown (`<TICKET>: <title>`, the description, then
+  `## Acceptance criteria` and the criteria).
 - **Type:** classify feature vs. bug — Linear issue type/label first; else infer
   from content ("bug", "fix", "regression", an error report). This decides the
   branch prefix in Phase 2.
@@ -87,8 +88,9 @@ estimate from the story's scope and judge.
 3. **After confirmation, write it to Linear** via MCP: create the new sub-stories
    (and/or adjust existing ones), linked to the parent.
 4. Proceed with the first slice as the active story for the rest of the run — and **rewrite
-   `$SWEEP_DIR/story.txt` from that sub-story** (its title, description and acceptance
-   criteria, fetched back from Linear after creation). Reviewers and the docs sweep read that
+   `story.txt` from that sub-story** (its title, description and acceptance criteria, fetched
+   back from Linear after creation; same `Write`-tool rule as Phase 0, same recomputed
+   directory `${XDG_CACHE_HOME:-$HOME/.cache}/cork/devit/<TICKET>`). Reviewers and the docs sweep read that
    file; left as written in Phase 0 it would hold the parent's broader acceptance criteria and
    every lane would judge the slice against the wrong contract.
 
@@ -130,8 +132,9 @@ nothing extra for it (it's branch-driven), but still print the `/rename` line ab
 the story depends on, fetch its `main` now and compare the contract the story touches
 (routes, auth requirements, schema, env names) with what the story assumes. A dependency
 that already moved is a design question for the user at G2, not a finding to absorb after
-the code is written. Record the result in `$SWEEP_DIR/upstream.md`; Phase 3.5 item d
-refreshes it and carries it into the sweep.
+the code is written. Record the result in `upstream.md` under the Phase 0 directory
+(recompute it: `SWEEP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/devit/<TICKET>"`); Phase 3.5
+item d refreshes it and carries it into the sweep.
 
 ### 🛑 G2 — Confirm before implementing (HARD STOP)
 
@@ -170,7 +173,8 @@ any reviewer sees the diff**. Each item produces a short artifact. Write them as
 produced into one file **outside the repo** so nothing can be committed by accident:
 
 ```bash
-SWEEP="$SWEEP_DIR/pre-review-sweep.md"      # $SWEEP_DIR from Phase 0; file starts with "## Pre-review sweep"
+SWEEP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/devit/<TICKET>"   # recomputed, not inherited (see Phase 0)
+SWEEP="$SWEEP_DIR/pre-review-sweep.md"                            # file starts with "## Pre-review sweep"
 ```
 
 That file is what every reviewer sees: Phase 4 passes it to each cork reviewer inside the
@@ -185,12 +189,14 @@ with "none" under it rather than omitting it, so the absence is a claim a review
 |---|---|---|
 | a | **Surface inventory.** For every new gate, guard, hint, validation or message added to one command, path or handler, list every sibling surface of the same shape (`start` → also `pull`, `status`, `seed`, `stop`; one route → every route with that shape) and mark each applied or explicitly waived. | Table: gate → sibling surfaces → applied / waived (why). |
 | b | **Input-domain table.** For every external value the change reads — URL, env var, path, CLI flag, tool output, config key — write the accepted domain and the rejected cases **once**, picking from the candidate list the rows that apply to that value's kind and marking the rest N/A. Generic rows: empty, whitespace-only, case variants, bare delimiters. URL/host rows: credentials / query / fragment, bad port, malformed authority, loopback spellings, IPv6 bracketing, scheme. Path rows: prefix, relative vs absolute, trailing separator. One test per applicable rejected row; no test for an N/A row. Enumerating the domain one review pass at a time is the failure this prevents. | Table: value → kind → accepted → rejected rows (each names its test) → N/A rows. |
-| c | **Contract probes.** For every external tool or API whose output the change parses — Docker, git, a CLI, a sibling service — run the real command once in each state that matters (present / missing / error) and capture the real output into a test fixture. Never infer a sentinel (`<no value>`), a field name (`host-gateway-ip` vs `-ips`) or a format from memory. | List: command → states probed → fixture path. |
+| c | **Contract probes.** For every external tool or API whose output the change parses — Docker, git, a CLI, a sibling service — run the real command once in each state that matters (present / missing / error) and capture the real output into a test fixture. Never infer a sentinel (`<no value>`), a field name (`host-gateway-ip` vs `-ips`) or a format from memory. **Redact before committing:** replace credentials, tokens, personal data, hostnames, absolute paths, timestamps and volatile IDs with stable placeholders that keep the contract's *shape* (field names, nesting, sentinels, delimiters, bracketing) intact, and note at the top of the fixture what was replaced. A fixture that leaks a secret is worse than no fixture. | List: command → states probed → fixture path → what was redacted. |
 | d | **Upstream-drift check (refresh).** The first check ran before G2 (Phase 2) and its result is in `$SWEEP_DIR/upstream.md`. Re-fetch each dependency's `main` now — it may have moved again while you implemented — and diff the touched contract (routes, auth requirements, schema, env names) against both the story's assumption and your implementation. New drift found here is still a design question for the user before review, not a finding to absorb in pass 7. | List: dependency → ref at G2 → ref now → drift found / none. |
 | e | **Platform / network matrix.** When behaviour varies by viewpoint or platform — host vs container, Linux vs macOS, loopback vs gateway vs daemon override — write the full matrix with every cell filled: expected value and the test that proves it. An unwritten cell is a finding waiting for a later pass. | Matrix with a test per cell. |
 | f | **Docs & wording sweep.** First **draft the PR body now** — the "In plain terms" section plus artifacts a–e — and save it as `$SWEEP_DIR/pr-body.md`; the PR does not exist yet, and the sweep must check the body's claims too. Then dispatch a subagent with the prompt in `references/docs-sweep.md` — **one by default; up to two for a big story, split by audience** — passing the worktree, base, story text and that draft body. It lists every behaviour claim the diff alters, greps every restatement of each claim across the repo (comments, docstrings, help, hints, messages, READMEs, runbook, env and compose comments, commit messages, the draft PR body, the story), and reports stale, overclaiming or contradicting text plus documentation the acceptance criteria asked for that the diff lacks. With the audience split (operator/QA-facing vs code-facing) the invariant is not the agent count but the **shared claim inventory**: you write it once, both agents check restatements against it, and you reconcile the two reports per claim; never split by location. Fix its findings before Phase 4 and update the draft body. | Its report, condensed to claim → restatements checked → fixed. |
 
-Run the repo's tests again and commit the sweep. Only now move to Phase 4.
+Run the repo's tests again. The artifacts live outside the repo, so a clean sweep may change
+no tracked file — commit only if `git status --porcelain` is non-empty (fixes, new fixtures,
+corrected docs). Only now move to Phase 4.
 
 ## Phase 4 — cork review + fix
 
@@ -204,6 +210,7 @@ the Phase 3.5 artifacts — and add `--story-file` to each `--review-model` call
 makes:
 
 ```bash
+SWEEP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/devit/<TICKET>"; SWEEP="$SWEEP_DIR/pre-review-sweep.md"   # recomputed
 # story.txt: Phase 0, rewritten in Phase 1 after a split. pre-review-sweep.md: Phase 3.5. Refuse without both.
 [ -s "$SWEEP_DIR/story.txt" ] && [ -s "$SWEEP" ] || { echo "missing story.txt or sweep in $SWEEP_DIR"; exit 1; }
 cat "$SWEEP_DIR/story.txt" "$SWEEP" > "$SWEEP_DIR/story.md"
@@ -213,6 +220,13 @@ python3 "$CORK_HOME/orchestrate.py" <TICKET> . --review-model <MODEL> --base-bra
 The reviewer prompt then carries `## Pre-review sweep` inside `## Story / Task`, which is
 what the standards' *Long-tail classes* section tells reviewers to check. Without the flag,
 API and prompt-only lanes see only the diff and will apply those classes to the diff alone.
+
+**Keep the sweep current between models.** cork's full mode is sequential: each model's fixes
+land before the next model runs. After applying a model's findings, update the sweep items
+those fixes touched — a new validation adds rows to the input table, a new or changed message
+adds siblings and restatements, a new tool call needs a probe — then rebuild `story.md` with
+the two-line snippet above before the next `--review-model` call. Otherwise every later
+reviewer sees the latest diff paired with the pre-fix inventory.
 
 (Pauses per reviewer when `interactive_review` is on — see Notes.)
 
@@ -227,10 +241,13 @@ reviewer's fixes.
 Push the branch and open a PR with `gh`:
 - **Title** starts with `<TICKET>: ` — e.g. `MXE-123: Add per-station backdoor routing`.
 - **Body** MUST include an **"In plain terms"** section: what this PR **does / adds /
-  removes**, in non-jargon language. Start from the draft in `$SWEEP_DIR/pr-body.md` (the
-  docs sweep already checked its claims) — it carries the `## Pre-review sweep` artifacts from
-  Phase 3.5. Follow with a short bullet list of what each review pass caught, and the Linear
-  ticket URL at the bottom.
+  removes**, in non-jargon language. Start from the draft in `pr-body.md` under the Phase 0
+  directory — it carries the `## Pre-review sweep` artifacts from Phase 3.5. **Phase 4 fixes
+  may have changed behaviour or wording since the docs sweep checked that draft**, so before
+  posting, re-run the docs sweep (`references/docs-sweep.md`) scoped to the claims Phase 4
+  touched — or the whole sweep if several models changed messages or docs — and update the
+  draft with its findings. Follow with a short bullet list of what each review pass caught,
+  and the Linear ticket URL at the bottom.
 - Base branch: `$BASE` (`develop` unless the user overrode it in Phase 2). Not a draft.
 
 ## Phase 6 — Copilot review loop

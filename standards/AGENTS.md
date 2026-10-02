@@ -142,7 +142,10 @@ inventory as a finding**: your prompt may simply not have carried it.
   applicable row it marks N/A or omits.
 - **Unprobed tool contract** — code that parses another tool's or service's output (sentinels,
   field names, formats, image names, "needs a checkout") with no captured real output as a
-  fixture. Inferred contracts are findings even when they happen to be right.
+  fixture. Inferred contracts are findings even when they happen to be right. A captured
+  fixture that still carries credentials, tokens, personal data, hostnames, absolute paths or
+  volatile IDs is a finding as well: the capture must be redacted to placeholders that keep
+  the contract's shape and say what was replaced.
 - **Unchecked upstream** — a change that depends on another repo or service with no evidence its
   current `main` was fetched and the touched contract (routes, auth, schema, env names) compared
   to the story's assumption.
