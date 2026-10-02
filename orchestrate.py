@@ -1147,9 +1147,11 @@ def run_claude_review(system: str, prompt: str, cwd: str) -> str:
     # the prompt and so let a branch rewrite its own review rubric. Reuse the `claude` reviewer
     # lane's isolation (--safe-mode: no CLAUDE.md/hooks/MCP; --restricted + read-only tools)
     # with the trusted standards as the system prompt. The user's default model is kept.
-    spec = HARNESSES["claude"]
-    argv = ([CLAUDE] + [a for a in spec["argv"] if a not in ("--model", "{model}")]
-            + [spec["system_flag"], system] + list(spec["read_only"]))
+    # Isolation flags, configured extra_args and the timeout come from the `claude` reviewer
+    # lane; the binary stays CLAUDE_BIN, the same one the implement and fix steps run.
+    spec = _harness_settings("claude")
+    argv = ([CLAUDE] + [a for a in spec["argv"] if a != "--model" and "{model}" not in a]
+            + [spec["system_flag"], system] + list(spec["extra_args"]) + list(spec["read_only"]))
     # Same guards as _harness_call: the standards travel as one argv element, capped at
     # 128 KiB by the kernel, and a NUL byte in them raises ValueError — neither may surface
     # as a traceback from the pipeline.
@@ -1398,7 +1400,9 @@ def _tree_file(repo: str, ref: str, rel: str) -> str | None:
     # `git show ref:path` would happily return a symlink's *target string*, and the working
     # tree can alias any path through a symlinked parent, so provenance is checked in the
     # trusted tree itself: only a blob with a regular-file mode counts.
-    entry = subprocess.run(["git", "ls-tree", ref, "--", rel], cwd=repo, capture_output=True, text=True, errors="replace")
+    # --full-tree: `ls-tree` paths are cwd-relative by default while `show ref:path` is
+    # root-relative; both must name the same blob or the regular-file check guards nothing.
+    entry = subprocess.run(["git", "ls-tree", "--full-tree", ref, "--", rel], cwd=repo, capture_output=True, text=True, errors="replace")
     if entry.returncode != 0 or not entry.stdout.startswith(("100644 ", "100755 ")):
         return None
     # replacement decoding, like the checkout and default-standards reads: a stray non-UTF-8
@@ -1416,7 +1420,7 @@ def _repo_opted_out(repo: str, changed: set[str] | None = None,
         return (Path(repo) / _OPT_OUT_SENTINEL).exists()
     if base_ref is None:
         if (Path(repo) / _OPT_OUT_SENTINEL).exists():
-            print(f"  ⚠ {_OPT_OUT_SENTINEL} present but there is no trusted ref for this diff — default standards apply", flush=True)
+            print(f"  ⚠ {_OPT_OUT_SENTINEL} present but there is no trusted ref for this diff — it cannot opt this review out", flush=True)
         return False
     at_ref = _tree_file(repo, base_ref, _OPT_OUT_SENTINEL) is not None
     if _OPT_OUT_SENTINEL in changed:
@@ -1441,7 +1445,7 @@ def _project_standards(repo: str, changed: set[str] | None,
     if base_ref is None:
         if any((Path(repo) / rel).exists() for rel in _PROJECT_STANDARDS):
             print("  ⚠ project standards present but there is no trusted ref for this diff — "
-                  "only the default standards apply; the checkout's copy is review material", flush=True)
+                  "the project layer is dropped; the checkout's copy is review material", flush=True)
         return "", ""
     for rel in _PROJECT_STANDARDS:
         text = _tree_file(repo, base_ref, rel)
@@ -1465,8 +1469,7 @@ def _universal_standards(repo: str, changed: set[str] | None, base_ref: str | No
     # false) or swap the `standards/` parent for a symlink (`standards -> .`, redirecting the
     # lookup to another blob) to escape or redirect the trusted read. The shipped path is
     # compared as written against the repo root, both as given and resolved.
-    nominal = Path(os.path.normpath(_DEFAULT_STANDARDS if _DEFAULT_STANDARDS.is_absolute()
-                                    else Path.cwd() / _DEFAULT_STANDARDS))
+    nominal = Path(os.path.normpath(_DEFAULT_STANDARDS))   # built from Path(__file__).resolve(): absolute
     rel = None   # the usual case: the default standards live outside the repo under review
     for root in {Path(os.path.normpath(Path(repo).absolute())), Path(repo).resolve()}:
         try:
@@ -2131,14 +2134,17 @@ def prompt_initial(ticket_id: str) -> str:
     )
 
 
-def prompt_claude_review(base: str, summary: str) -> str:
-    # User message for the headless self-review; the standards, trust boundary and spec axis
-    # travel in the system prompt (_review_system), exactly as for an API lane.
+def prompt_claude_review(base: str, summary: str, diff: str, files: dict[str, str]) -> str:
+    # User message for the headless self-review. The reviewer runs with read-only file tools
+    # and no shell, so it cannot run `git diff` itself: the diff and the changed files are
+    # delivered in the message exactly as for an API lane. The standards, trust boundary and
+    # spec axis travel in the system prompt (_review_system).
+    file_block, _ = _budget_files(files, max(0, _DEFAULT_CHAR_BUDGET - len(summary) - len(diff) - 1_000))
     return (
         f"## Story / Task\n{summary}\n\n"
-        f"Review the current feature branch against {base}. "
-        f"The full branch diff is available via: git diff {base}...HEAD\n"
-        "Follow the review standards in your system prompt.\n\n"
+        f"## Changed Files (current state)\n{file_block}\n\n"
+        f"## Branch Diff (vs {base})\n```diff\n{diff}\n```\n\n"
+        "Follow the review standards in your system prompt. "
         "Output ONLY a structured findings report. "
         "Do NOT apply any fixes. Do NOT edit any files."
     )
@@ -2451,12 +2457,15 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     # patch file (a diff produced elsewhere), or — the default — merge-base...HEAD vs the base
     # branch. Changed-file contents are always read from the working tree, so the tree should
     # be checked out at the diff's newer end.
-    # `base_ref` is where the diff is measured from: project standards the diff itself
-    # touches are taken from there, never from the branch (see _project_standards).
+    # `base_ref` is the trusted ref the review standards are read from (see _project_standards).
+    # It is the base branch even for a --diff-range review: a range start is whatever the caller
+    # names — in a delta round it is the PR's own previous head — so it can never anchor trust.
+    # Only --diff-file has no trusted ref at all.
     base_ref: str | None
     if diff_range is not None:
         require_range(repo, diff_range)
-        diff, scope, base_ref = git_diff_range(repo, diff_range), diff_range, _split_range(diff_range)[0]
+        require_base_ref(repo, base)
+        diff, scope, base_ref = git_diff_range(repo, diff_range), diff_range, base
         names_fn = lambda: _git_changed_names(repo, diff_range)
     elif diff_file is not None:
         diff, patch_names = read_diff_file(diff_file)
@@ -2679,8 +2688,8 @@ def main() -> None:
         # Otherwise a forgotten --review-model silently turns an intended review into a full
         # implementation run that ignores the supplied story or diff.
         parser.error(f"{'/'.join(review_only_flags)} are review-only flags: add --review-model MODEL")
-    if (args.diff_range is not None or args.diff_file is not None) and args.base_branch is not None:
-        parser.error("--diff-range/--diff-file replace the base-branch diff; drop --base-branch")
+    if args.diff_file is not None and args.base_branch is not None:
+        parser.error("--diff-file has no base: drop --base-branch (with --diff-range it stays the trusted ref for the standards)")
 
     if args.status:
         cmd_status(args.ticket_id)
@@ -2830,7 +2839,7 @@ def main() -> None:
         # with the trusted standards assembled above as the system prompt — the branch cannot
         # supply any part of its own review rubric.
         self_review_out = run_claude_review(
-            _review_system(instructions), prompt_claude_review(base, summary), cwd=repo
+            _review_system(instructions), prompt_claude_review(base, summary, diff, files), cwd=repo
         )
         print(f"  {self_review_out[:300]}…")
         state["done"]["self_review"] = self_review_out

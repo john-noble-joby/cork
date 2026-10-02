@@ -172,12 +172,14 @@ The **effective** rubric for a repo is:
 - **Opt a repo out:** `standards init <repo> --opt-out` (writes `code-review/.cork-standards-off`).
 - **A diff cannot rewrite its own rubric:** the project standards file and the opt-out
   sentinel become reviewer *instructions*, so whenever a diff is under review they are read
-  from the **trusted git tree** — the base branch, or a `--diff-range` start — never from the
-  checkout, and only a regular-file blob there counts (a symlink, committed or in the working
-  tree, cannot alias them). The branch's copy is reviewed like any other file. With no trusted
-  ref (`--diff-file`) the project layer is dropped for that review and a warning says so; a
-  branch-added sentinel never disables the default. Plain `standards status` still reads the
-  checkout.
+  from the **trusted git tree** at the base branch (`--base-branch`, also alongside
+  `--diff-range` — a range start such as a delta round's old head is the PR's own commit and
+  never anchors trust) — never from the checkout, and only a regular-file blob there counts
+  (a symlink, committed or in the working tree, cannot alias them). The branch's copy is
+  reviewed like any other file. The same holds for cork's own `standards/AGENTS.md` when cork
+  reviews its own checkout. With no trusted ref (`--diff-file`) the project layer is dropped
+  for that review and a warning says so; a branch-added sentinel never disables the default.
+  Plain `standards status` still reads the checkout.
 - **Opt out everywhere:** `python3 orchestrate.py config set default_standards false`.
 - **Scope of the opt-out:** these toggles control what `orchestrate.py` injects into API
   reviewers and the devit implementer prompt. The installed `coding-standards` skill is a
@@ -206,9 +208,11 @@ Story precedence is `--story-file` → `--story` → checkpoint `done.summary` �
 the review starts; explicit stories are not written to the checkpoint.
 
 The diff under review comes from exactly one source — `--diff-range`, `--diff-file`, or the
-default merge-base diff vs `--base-branch` (the three are mutually exclusive). Changed-file
-contents are always read from the working tree, so check the tree out at the diff's newer end.
-Every source applies the same empty-diff guard.
+default merge-base diff vs `--base-branch`. `--base-branch` may accompany `--diff-range`: the
+range is the diff, the base is the trusted ref the review standards are read from (default
+`origin/develop`, and it must resolve). `--diff-file` takes no base. Changed-file contents are
+always read from the working tree, so check the tree out at the diff's newer end. Every source
+applies the same empty-diff guard.
 
 | Flag | Review-only behavior |
 |------|----------------------|
@@ -216,7 +220,7 @@ Every source applies the same empty-diff guard.
 | `--story-file PATH` | Read the story/acceptance contract from a UTF-8 file. |
 | `--story TEXT` | Supply the story inline; use `--story=TEXT` if it starts with `-`. |
 | `--base-branch BRANCH` | Diff `merge-base(BRANCH, HEAD)...HEAD` (default `origin/develop`). |
-| `--diff-range A..B` | Review `git diff A..B` (or `A...B`) instead — e.g. `old-head..new-head` so a fix round reviews only its delta. Both endpoints must resolve. |
+| `--diff-range A..B` | Review `git diff A..B` (or `A...B`) instead — e.g. `old-head..new-head` so a fix round reviews only its delta. Both endpoints must resolve; standards still come from `--base-branch`. |
 | `--diff-file PATH` | Review a unified diff read from PATH; changed files come from its `+++ b/<path>` headers. Paths must carry git's `a/`/`b/` prefixes (`git diff`, or `diff -urN a b`); `diff --git` lines are optional and an unprefixed header is refused. |
 | `--skip-validation` | Skip the model availability probe. |
 

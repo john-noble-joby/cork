@@ -253,13 +253,19 @@ class ReviewDiffTest(unittest.TestCase):
         preflight.assert_not_called()
 
     def test_review_prompts_use_merge_base_and_fix_spec_findings(self):
-        review_prompt = orchestrate.prompt_claude_review("origin/main", "Implement the requested widget")
+        review_prompt = orchestrate.prompt_claude_review(
+            "origin/main", "Implement the requested widget",
+            "diff --git a/w.py b/w.py\n+widget = 1", {"w.py": "widget = 1"})
         fix_prompt = orchestrate.prompt_fix("summary", "origin/main", "review", "TEST-1")
 
         self.assertIn(
             "## Story / Task\nImplement the requested widget\n\n", review_prompt
         )
-        self.assertIn("git diff origin/main...HEAD", review_prompt)
+        # the isolated reviewer has no shell: the diff and files must be IN the message, and
+        # nothing may tell it to run git; boundary and spec axis live in the system prompt
+        self.assertIn("+widget = 1", review_prompt); self.assertIn("### w.py", review_prompt)
+        self.assertNotIn("git diff", review_prompt)
+        self.assertNotIn("Trust boundary", review_prompt); self.assertNotIn(orchestrate.SPEC_CONFORMANCE_SUFFIX, review_prompt)
         self.assertIn("git diff origin/main...HEAD", fix_prompt)
         self.assertIn("Spec conformance sections", fix_prompt)
         self.assertIn("do NOT delete behaviour flagged as unrequested", fix_prompt)
@@ -289,27 +295,39 @@ class ReviewDiffTest(unittest.TestCase):
         # bare `claude --print` would load the branch's CLAUDE.md, hooks and project settings,
         # which outrank the prompt; the self-review must use the reviewer lane's isolation and
         # carry the trusted standards as the system prompt, prompt on stdin, default model
-        with patch.object(orchestrate.subprocess, "run",
+        with patch.object(orchestrate, "load_config", return_value={}), \
+             patch.object(orchestrate.subprocess, "run",
                           return_value=Mock(returncode=0, stdout="findings\n", stderr="")) as run:
             out = orchestrate.run_claude_review("SYSTEM TEXT", "USER PROMPT", "/repo")
         self.assertEqual(out, "findings")
         argv = run.call_args.args[0]; kw = run.call_args.kwargs
-        self.assertEqual(argv[0], orchestrate.CLAUDE)
-        for flag in ("-p", "--safe-mode", "--restricted", "--no-session-persistence"):
-            self.assertIn(flag, argv)
-        self.assertEqual(argv[argv.index("--system-prompt") + 1], "SYSTEM TEXT")
-        self.assertEqual(argv[argv.index("--tools") + 1], "Read,Grep,Glob")
-        self.assertEqual(argv[argv.index("--permission-mode") + 1], "plan")
-        self.assertNotIn("--model", argv); self.assertNotIn("--print", argv)
-        self.assertNotIn("USER PROMPT", argv)               # the prompt travels on stdin, not argv
+        # exact shape: a stray `{model}` positional under -p would BECOME the prompt
+        self.assertEqual(argv, [orchestrate.CLAUDE, "-p", "--no-session-persistence", "--output-format", "text",
+                                "--system-prompt", "SYSTEM TEXT",
+                                "--safe-mode", "--restricted", "--tools", "Read,Grep,Glob", "--permission-mode", "plan"])
         self.assertEqual(kw["input"], "USER PROMPT"); self.assertEqual(kw["cwd"], "/repo")
         self.assertEqual(kw["timeout"], orchestrate.HARNESSES["claude"]["timeout"])
+        # configured lane extra_args are honoured, before the read-only flags
+        cfg = {"providers": {"claude": {"extra_args": ["--verbose"]}}}
+        with patch.object(orchestrate, "load_config", return_value=cfg), \
+             patch.object(orchestrate.subprocess, "run", return_value=Mock(returncode=0, stdout="", stderr="")) as run:
+            orchestrate.run_claude_review("S", "P", "/repo")
+        argv = run.call_args.args[0]
+        self.assertLess(argv.index("--verbose"), argv.index("--safe-mode"))
+        # a non-zero exit is a clean fail(), not silently empty output
+        err = io.StringIO()
+        with patch.object(orchestrate, "load_config", return_value={}), \
+             patch.object(orchestrate.subprocess, "run", return_value=Mock(returncode=1, stdout="", stderr="boom")), \
+             redirect_stderr(err), self.assertRaises(SystemExit):
+            orchestrate.run_claude_review("S", "P", "/repo")
+        self.assertIn("exited 1", err.getvalue())
 
     def test_headless_self_review_fails_cleanly_on_oversized_or_unrunnable_argv(self):
         # same guards as _harness_call: an over-limit --system-prompt is refused before exec,
         # and a NUL / missing binary / timeout become a clean fail(), never a traceback
         err = io.StringIO()
-        with patch.object(orchestrate.subprocess, "run") as run, redirect_stderr(err), self.assertRaises(SystemExit):
+        with patch.object(orchestrate, "load_config", return_value={}), \
+             patch.object(orchestrate.subprocess, "run") as run, redirect_stderr(err), self.assertRaises(SystemExit):
             orchestrate.run_claude_review("x" * orchestrate._MAX_ARG_BYTES, "p", "/repo")
         run.assert_not_called(); self.assertIn("platform limit", err.getvalue())
         for exc, needle in ((ValueError("embedded null byte"), "cannot run"),
@@ -317,7 +335,8 @@ class ReviewDiffTest(unittest.TestCase):
                             (orchestrate.subprocess.TimeoutExpired(["claude"], 900), "timed out")):
             with self.subTest(exc=type(exc).__name__):
                 err = io.StringIO()
-                with patch.object(orchestrate.subprocess, "run", side_effect=exc), redirect_stderr(err), self.assertRaises(SystemExit):
+                with patch.object(orchestrate, "load_config", return_value={}), \
+                     patch.object(orchestrate.subprocess, "run", side_effect=exc), redirect_stderr(err), self.assertRaises(SystemExit):
                     orchestrate.run_claude_review("SYSTEM", "p", "/repo")
                 self.assertIn(needle, err.getvalue())
 

@@ -357,7 +357,9 @@ missed, run another lane on it.
   # … Step 8 cleanup, then Step 1 (new $OUT/$WT/$TID, fetches the pushed head into pr.json) …
   NEW_HEAD=$(jq -r .headRefOid "$OUT/pr.json")
   ROUND_RANGE="$OLD_HEAD..$NEW_HEAD"                 # Step 3 slice patches cover the same delta
-  DIFF_ARGS=(--diff-range "$ROUND_RANGE")            # replaces --base-branch for this round
+  # The range is the DIFF; the base stays the trusted ref the standards are read from. OLD_HEAD
+  # is the PR's own earlier commit and must never anchor trust.
+  DIFF_ARGS=(--diff-range "$ROUND_RANGE" --base-branch "origin/$BASE")
   ```
 
   Step 2 checks the trees out at `$NEW_HEAD`, so changed-file contents are current. Write a new

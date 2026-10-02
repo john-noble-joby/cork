@@ -133,7 +133,7 @@ class BranchControlledStandardsTest(unittest.TestCase):
         # without a trusted ref (--diff-file) a sentinel cannot opt out, listed in the patch or not
         for changed in ({"code-review/.cork-standards-off"}, {"a.py"}):
             text, _, out = self._load(changed, ref=None)
-            self.assertIn("UNIVERSAL", text); self.assertIn("no trusted ref", out)
+            self.assertIn("UNIVERSAL", text); self.assertIn(".cork-standards-off present", out)
 
     def test_symlink_aliases_cannot_supply_standards_or_opt_out(self):
         # (1) a symlinked parent in the checkout: code-review -> alias/ holding a sentinel; git
@@ -211,6 +211,39 @@ class BranchControlledStandardsTest(unittest.TestCase):
         _git(self.repo, "commit", "-qam", "latin-1 byte in standards")
         text, _, _ = self._load({"a.py"})
         self.assertIn("BASE RULES caf\ufffd", text)
+
+    def test_trusted_tree_paths_are_root_relative_even_from_a_subdirectory(self):
+        # `git ls-tree` is cwd-relative, `git show ref:path` is root-relative: with repo naming a
+        # subdirectory the mode check and the read must still look at the same blob
+        (self.repo / "sub").mkdir()
+        text, label, _ = orchestrate.load_agent_instructions(str(self.repo / "sub"), {"a.py"}, "main")[0], None, None
+        self.assertIn("BASE RULES", text)
+
+    def test_executable_standards_blob_and_tag_or_remote_refs_are_accepted(self):
+        _git(self.repo, "checkout", "-q", "main")
+        (self.repo / "code-review" / "AGENTS.md").chmod(0o755)
+        _git(self.repo, "add", "--chmod=+x", "code-review/AGENTS.md"); _git(self.repo, "commit", "-qm", "exec mode")
+        _git(self.repo, "tag", "-a", "v1", "-m", "v1"); _git(self.repo, "update-ref", "refs/remotes/origin/main", "main")
+        for ref in ("main", "v1", "origin/main"):
+            with self.subTest(ref=ref):
+                text, label, _ = self._load({"a.py"}, ref=ref)
+                self.assertIn("BASE RULES", text); self.assertIn(f"@{ref}", label)
+
+    def test_default_rubric_inside_repo_but_absent_at_ref_is_dropped_and_symlinked_repo_path_resolves(self):
+        # the rubric path lies inside the repo (cork reviewing itself) but main never shipped it
+        orchestrate._DEFAULT_STANDARDS = self.repo / "standards" / "AGENTS.md"
+        text, _, out = self._load({"a.py"})
+        self.assertNotIn("UNIVERSAL", text); self.assertIn("no regular-file copy at main", out)
+        # the repo reached through a symlinked path: containment still resolves (resolved root)
+        _git(self.repo, "checkout", "-q", "main")
+        (self.repo / "standards").mkdir(); (self.repo / "standards" / "AGENTS.md").write_text("BASE UNIVERSAL")
+        _git(self.repo, "add", "-A"); _git(self.repo, "commit", "-qm", "ship rubric")
+        link = self.root / "link"; link.symlink_to(self.repo)
+        orchestrate._DEFAULT_STANDARDS = link / "standards" / "AGENTS.md"
+        import io, contextlib
+        with contextlib.redirect_stdout(io.StringIO()):
+            text, _ = orchestrate.load_agent_instructions(str(self.repo), {"a.py"}, "main")
+        self.assertIn("BASE UNIVERSAL", text)
 
     def test_trusted_ref_opt_out_survives_branch_deleting_or_editing_the_sentinel(self):
         # the base opted out; the branch deletes (or rewrites) the sentinel — the base decides
