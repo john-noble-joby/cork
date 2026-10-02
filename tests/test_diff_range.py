@@ -270,6 +270,14 @@ class ReviewDiffSourceTest(unittest.TestCase):
         _, out = self._review()                                  # a story given: no fallback warning
         self.assertNotIn("no story supplied", out)
 
+    def test_stale_local_base_warning_covers_diff_range_reviews(self):
+        # the range is the diff but the base anchors the standards: local main is 2 ahead of origin/main here
+        out = io.StringIO()
+        with redirect_stdout(out):
+            orchestrate.cmd_review("T-1", str(self.repo), "main", "copilot/model", validate=False, story_text="story",
+                                   diff_range=f"{self.c2}..{self.c3}")
+        self.assertIn("local base 'main' is ahead", out.getvalue())
+
     def test_stale_local_base_warns_behind_ahead_diverged_and_not_otherwise(self):
         _git(self.repo, "checkout", "-q", "-b", "topic", self.c3); (self.repo / "t.py").write_text("t = 1\n")
         _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "topic")   # HEAD differs from every base below

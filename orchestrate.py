@@ -2135,20 +2135,6 @@ def review(provider: str, model: str, instructions: str, story: str,
     # Required context is never silently dropped: that is the whole point of naming it. Without
     # any, an over-budget diff behaves as before — a diff-only prompt (API lanes) or the lane's
     # own 413 skip (harness lanes); the manifest says no changed file fit.
-    if required:
-        fixed_chars = len(system) + len(story) + len(diff) + len(required_section) + 500
-        if fixed_chars > char_budget:
-            fail(f"review input exceeds the {char_budget:,}-char budget by {fixed_chars - char_budget:,} before any "
-                 f"changed file fits ({_budget_breakdown(system, story, diff, required_section, len, 'chars')}) — "
-                 f"review a narrower diff, drop a --context-file, or raise review_budget_chars in config.json")
-        if spec and spec["prompt_via"] == "arg":   # the real limit for this lane is the argv cap, in bytes
-            prefix = "" if spec["system_flag"] else system + _STANDARDS_SEPARATOR
-            fixed_bytes = _utf8_len(prefix) + _utf8_len(story) + _utf8_len(diff) + _utf8_len(required_section) + 500
-            if fixed_bytes >= _MAX_ARG_BYTES:
-                fail(f"review input for {provider} exceeds the {_MAX_ARG_BYTES:,}-byte argument limit by "
-                     f"{fixed_bytes - _MAX_ARG_BYTES:,} before any changed file fits "
-                     f"({_budget_breakdown(prefix, story, diff, required_section, _utf8_len, 'bytes')}) — "
-                     f"review a narrower diff, drop a --context-file, or use a stdin-prompt lane")
     effective_budget, unit, size = char_budget, "chars", len
 
     def build(budget: int, size: Callable[[str], int] = len) -> tuple[str, list[str]]:
@@ -2158,6 +2144,24 @@ def review(provider: str, model: str, instructions: str, story: str,
                 f"{required_section}"
                 f"## Changed Files (current state)\n{file_block}\n\n"
                 f"## Branch Diff\n```diff\n{diff}\n```"), names
+
+    if required:
+        # Measured on the prompt as actually built with no changed file in it — the exact
+        # scaffolding, not the 500-char packing reserve, which would reject inputs that fit.
+        scaffold, _ = build(0)
+        fixed_chars = len(system) + len(scaffold)
+        if fixed_chars > char_budget:
+            fail(f"review input exceeds the {char_budget:,}-char budget by {fixed_chars - char_budget:,} before any "
+                 f"changed file fits ({_budget_breakdown(system, story, diff, required_section, len, 'chars')}) — "
+                 f"review a narrower diff, drop a --context-file, or raise review_budget_chars in config.json")
+        if spec and spec["prompt_via"] == "arg":   # the real limit for this lane is the argv cap, in bytes
+            prefix = "" if spec["system_flag"] else system + _STANDARDS_SEPARATOR
+            fixed_bytes = _utf8_len(prefix) + _utf8_len(scaffold)
+            if fixed_bytes >= _MAX_ARG_BYTES:
+                fail(f"review input for {provider} exceeds the {_MAX_ARG_BYTES:,}-byte argument limit by "
+                     f"{fixed_bytes - _MAX_ARG_BYTES:,} before any changed file fits "
+                     f"({_budget_breakdown(prefix, story, diff, required_section, _utf8_len, 'bytes')}) — "
+                     f"review a narrower diff, drop a --context-file, or use a stdin-prompt lane")
 
     user_msg, included = build(char_budget)
     if spec and spec["prompt_via"] == "arg":
@@ -2708,6 +2712,7 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     if diff_range is not None:
         require_range(repo, diff_range)
         require_base_ref(repo, base)
+        _warn_stale_local_base(repo, base)   # the base still anchors the standards for a range review
         a, b = _split_range(diff_range)
         pinned_range = f"{pin_ref(repo, a)}{'...' if '...' in diff_range else '..'}{pin_ref(repo, b)}"
         diff, scope, base_ref = git_diff_range(repo, pinned_range), diff_range, pin_ref(repo, base)

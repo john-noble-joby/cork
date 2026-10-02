@@ -319,6 +319,20 @@ class ReviewDiffTest(unittest.TestCase):
             result = orchestrate.review("codex", "m", "", "story", "x" * 60_000, {}, char_budget=50_000, repo="/repo")
         self.assertIn("skipped", result)
 
+    def test_required_context_guard_measures_the_real_scaffolding_not_the_packing_reserve(self):
+        # Copilot on PR #33: counting the 500-char reserve as content rejected inputs that fit.
+        # An assembled prompt 300 chars under the budget must pass; 200 over it must fail.
+        budget, story, diff = 50_000, "story", "diff"
+        overhead = len(orchestrate._required_section({"ctx.py": ""})) + len(orchestrate._review_system(""))
+        fits = "r" * (budget - 300 - len(story) - len(diff) - overhead)
+        with patch.object(orchestrate, "load_config", return_value={}), \
+             patch.object(orchestrate, "_call_and_extract", return_value=(200, "review ok", None)), redirect_stdout(io.StringIO()):
+            orchestrate.review("copilot", "m", "", story, diff, {}, char_budget=budget, required={"ctx.py": fits})
+            err = io.StringIO()
+            with redirect_stderr(err), self.assertRaises(SystemExit):
+                orchestrate.review("copilot", "m", "", story, diff, {}, char_budget=budget, required={"ctx.py": fits + "r" * 500})
+        self.assertIn("exceeds the 50,000-char budget", err.getvalue())
+
     def test_required_context_is_checked_in_bytes_on_arg_lanes_and_manifest_names_the_byte_budget(self):
         # opencode carries the whole prompt as one argv element capped in BYTES; a required
         # section that fits the char budget but not the arg cap must fail with the breakdown,
