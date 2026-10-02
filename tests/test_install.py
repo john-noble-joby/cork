@@ -42,6 +42,8 @@ class InstallSafetyTest(unittest.TestCase):
             shutil.copytree(ROOT / "skills" / skill, skills / skill)
         shutil.copy(ROOT / "statusline.py", repo / "statusline.py")
         shutil.copy(ROOT / "orchestrate.py", repo / "orchestrate.py")
+        (repo / "bin").mkdir()
+        shutil.copy(ROOT / "bin" / "cork", repo / "bin" / "cork")   # copy() keeps the executable bit
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
         subprocess.run(
             [

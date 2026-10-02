@@ -30,6 +30,13 @@ procedure in the README's *Versioning* section.
 ## [Unreleased]
 
 ### Added
+- **`cork` command.** `bin/cork` is a six-line shim that resolves its own symlink chain and
+  execs the `orchestrate.py` of the clone it lives in; `install.sh` links it at
+  `~/.local/bin/cork` (repointing a link to another cork clone, present or deleted; never
+  replacing a regular file or a symlink to anything else)
+  and prints a hint when that directory is not on `PATH`. No package, no venv, no second
+  copy — `git pull` stays the whole upgrade, and skills keep calling
+  `$CORK_HOME/orchestrate.py` explicitly. Closes #28.
 - **Review-only mode takes an explicit diff.** `--diff-range A..B` (or `A...B`) reviews
   `git diff A..B` and `--diff-file PATH` reviews a unified diff read from a file (git-style
   `a/`/`b/` paths, `diff --git` lines optional; changed submodules are skipped, not read as
