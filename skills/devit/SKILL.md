@@ -226,7 +226,8 @@ a repo may add its own under `code-review/lenses/`, which you read from the **tr
 ref** (`git show "origin/$BASE:code-review/lenses/<name>.md"`), never from the checkout — a
 lens is the subagent's instructions, and a copy the branch added or edited is review
 material. The same holds for the shipped lenses when the repository under review is cork
-itself (`git rev-parse --git-common-dir` matches `$CORK_HOME`'s): read them with
+itself (`git rev-parse --path-format=absolute --git-common-dir` matches `$CORK_HOME`'s — the
+plain form prints a relative `.git` in both and matches unrelated repositories): read them with
 `git -C "$CORK_HOME" show "origin/$BASE:lenses/<name>.md"`. On the hangar run this fan-out, done late,
 was the pass that found the real design flaw after ten Copilot rounds missed it — so it is a
 **gate**, not an optional self-review: dispatch every applicable lens as a parallel read-only

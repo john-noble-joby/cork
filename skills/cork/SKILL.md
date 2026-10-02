@@ -85,19 +85,34 @@ If the branch has no commits vs develop, implement the story now (in-session), t
 After the implementation commit, stop here if the diff is still empty; do not fan out
 reviewers for a branch that implemented nothing.
 
+**Persist the reviewer inputs first** — every lens and every model pass reads the same two
+files, written once, outside the repository:
+
+```bash
+RUN_DIR=$(mktemp -d /tmp/cork-run.XXXXXX)        # per run; never inside the worktree
+STORY_FILE="$RUN_DIR/story.md"                   # the ticket (Linear MCP) or the user's stated contract — Write it now
+STANDARDS_FILE="$RUN_DIR/standards.md"
+python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "{BASE}" > "$STANDARDS_FILE"
+```
+
+Do not dispatch a lens until `$STORY_FILE` has content: the spec-and-test-coverage lens has
+nothing to classify without it, and an unexpanded `{STORY_FILE}` placeholder is a silent no-spec
+review. The same `$STORY_FILE` goes to the model rotation in Steps 3+.
+
 Review your own diff with subagents, apply fixes, commit. Use the **lenses** in
 `$CORK_HOME/lenses/` (plus any under the repo's `code-review/lenses/`, read from the trusted
 base ref with `git show {BASE}:code-review/lenses/<name>.md`, never from the checkout): one
 read-only subagent per applicable lens, placeholders filled, run in parallel over
 `git diff {BASE}...HEAD`. `{BASE}` is the trusted ref exactly as selected in Step 0 (a
 remote-tracking ref such as `origin/develop`, or a local branch) — never prefix it again.
-**When the repository under review is cork itself** (its `git rev-parse --git-common-dir`
-equals `$CORK_HOME`'s), the shipped lenses are branch material too: read them with
-`git -C "$CORK_HOME" show {BASE}:lenses/<name>.md`, the same exception the engine applies
-to `standards/AGENTS.md`. Fill `{STANDARDS}` with the path of a file written by
-`STANDARDS_FILE=$(mktemp /tmp/cork-standards.XXXXXX); python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "{BASE}" > "$STANDARDS_FILE"`
-(outside the repo; the rubric from the trusted ref through the engine's loader, never the
-checkout's standards files). Skip a lens whose concern the diff does not touch and say so;
+**When the repository under review is cork itself** — compare **absolute** common dirs,
+`git rev-parse --path-format=absolute --git-common-dir` here and in `$CORK_HOME` (the plain
+form prints a relative `.git` in both, which matches for unrelated repositories) — the shipped
+lenses are branch material too: read them with `git -C "$CORK_HOME" show {BASE}:lenses/<name>.md`,
+the same exception the engine applies to `standards/AGENTS.md`. Fill `{STORY_FILE}` with
+`$STORY_FILE` and `{STANDARDS}` with `$STANDARDS_FILE` from the block above (the rubric from the
+trusted ref through the engine's loader, never the checkout's standards files). Skip a lens
+whose concern the diff does not touch and say so;
 never skip spec-and-test-coverage.
 
 ### Steps 3+ — One blind pass per model
@@ -124,11 +139,11 @@ Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it p
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch {BASE} --story-file {STORY_FILE}
+python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch {BASE} --story-file "$STORY_FILE"
 ```
 
-`--story-file` is **required on every call**: write the ticket (or the user's stated contract)
-to a file outside the repository before the rotation starts and pass that path. devit passes
+`--story-file` is **required on every call**: pass the `$STORY_FILE` written in Step 2 (the
+ticket or the user's stated contract, outside the repository). devit passes
 the Linear story plus its Phase 3.5 `## Pre-review sweep` artifacts this way. The file lives
 outside the repository, so no lane can reach it through the tree: not the API models or the
 harnesses without tree access (`codex`, `pi`), and not the tree-capable ones (`claude`,
@@ -176,7 +191,8 @@ Because no fixes land between passes, **every reviewer sees the identical diff**
 
 Dispatch concurrently, then collect when all return:
 
-- **Self-review:** dispatch the lenses in `$CORK_HOME/lenses/` (and the repo's `code-review/lenses/`, read from the trusted `{BASE}` ref; cork's own lenses too when the repo under review is cork) as parallel read-only subagents over `git diff {BASE}...HEAD`, with `{STANDARDS}` written by `standards show . --base-ref {BASE}` exactly as in Step 2. Gather findings only — apply nothing.
+- **Inputs first:** run the block below up to and including writing `$STORY` and `$STANDARDS_FILE` before dispatching anything — lenses and models read the same two files.
+- **Self-review:** dispatch the lenses in `$CORK_HOME/lenses/` (and the repo's `code-review/lenses/`, read from the trusted `{BASE}` ref; cork's own lenses too when the repo under review is cork, detected with absolute common dirs as in Step 2) as parallel read-only subagents over `git diff {BASE}...HEAD`, with `{STORY_FILE}` = `$STORY` and `{STANDARDS}` = `$STANDARDS_FILE`. Gather findings only — apply nothing.
 - **Each model from the `preflight` rotation** (captured in Step 0), all launched together (background processes, then `wait`):
 
 ```bash
@@ -186,6 +202,7 @@ CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 # "Review the branch changes for <ticket>." fallback (or a stale checkpoint if <ticket> has one).
 OUTDIR=$(mktemp -d /tmp/cork-review.XXXXXX)   # per-run dir: concurrent runs never share story or report files
 STORY="$OUTDIR/story.md"                      # <- fill from the PR body / ticket / user before fanning out
+STANDARDS_FILE="$OUTDIR/standards.md"; python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "{BASE}" > "$STANDARDS_FILE"   # for the lenses
 # PREFLIGHT_MODELS is the space-separated list of "provider/model" lines from Step 0 preflight
 CONTEXT_ARGS=(); for f in "${CONTEXT_FILES[@]}"; do CONTEXT_ARGS+=(--context-file "$f"); done   # callers, DI, covering tests, docs
 for M in $PREFLIGHT_MODELS; do
