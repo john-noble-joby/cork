@@ -153,10 +153,12 @@ inventory as a finding**: your prompt may simply not have carried it.
   Linux vs macOS, loopback vs gateway vs daemon override) without the full matrix written and a
   test per cell; name the empty cells.
 - **Restatement inventory** — a behaviour change has N restatements: code comments, docstrings,
-  CLI help, hints and error messages, READMEs, runbook, env-file and compose comments, the PR
-  body, the story. Report every stale, overclaiming or contradicting restatement in one finding
-  per claim, and documentation the acceptance criteria asked for that the diff lacks. This is
-  the sweep form of *Doc/comment freshness* above.
+  CLI help, hints and error messages, READMEs, runbook, env-file and compose comments, commit
+  messages, the PR body. Report every stale, overclaiming or contradicting restatement in one
+  finding per claim, and documentation the acceptance criteria asked for that the diff lacks.
+  The story is **not** a restatement — it is the contract; code that disagrees with an
+  acceptance criterion belongs on the spec-conformance axis, and the criteria are never
+  "stale" to be edited toward the code. This is the sweep form of *Doc/comment freshness* above.
 
 ## Tests
 - Happy path: assert the actual produced values, not just "not null".
