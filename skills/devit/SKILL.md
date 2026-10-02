@@ -236,7 +236,10 @@ fixes touched, and only then start the model rotation.
 Write the standards the lenses apply **once, from the trusted ref, through the engine's loader**:
 
 ```bash
-python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "origin/$BASE" > "$SWEEP_DIR/standards.md"
+SWEEP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/devit/<TICKET>"   # recomputed after tool calls and gates
+BASE=$(cat "$SWEEP_DIR/base") || exit 1
+[ -n "$BASE" ] || { echo "missing base in $SWEEP_DIR"; exit 1; }
+python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "origin/$BASE" > "$SWEEP_DIR/standards.md" || exit 1
 ```
 
 That is the same text and the same rules the API lanes get (universal default gated by the

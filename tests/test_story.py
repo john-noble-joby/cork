@@ -5,8 +5,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 import orchestrate
 
@@ -118,6 +119,55 @@ class ReviewStoryTest(unittest.TestCase):
         self.assertEqual(cm.exception.code, 99)
         self.assertEqual(seen["story_args"][1], str(self.story_file))
         self.assertTrue(seen["preflight"])
+
+    def _headless_until_review(self, extra: list[str], expect_warning: bool = False) -> str:
+        output = io.StringIO()
+        rotation = [{"provider": "copilot", "model": "model"}]
+
+        def preflight(*args: object, **kwargs: object) -> list[dict]:
+            self.assertEqual("no story supplied" in output.getvalue(), expect_warning)
+            return rotation
+
+        with ExitStack() as stack:
+            stack.enter_context(redirect_stdout(output))
+            stack.enter_context(patch.object(sys, "argv", [
+                "orchestrate.py", "TASK-1", self.tmp.name, "--base-branch", "origin/main", *extra]))
+            for name, value in {
+                "_state_path": Path(self.tmp.name) / "absent-state.json",
+                "load_config": orchestrate.DEFAULT_CONFIG,
+                "_eligible_rotation": rotation,
+                "run_claude": "fresh implementation summary",
+                "mark_done_v2": None, "git_commit_all": None, "step": None, "step_done": None,
+            }.items():
+                stack.enter_context(patch.object(orchestrate, name, return_value=value))
+            probe = stack.enter_context(patch.object(orchestrate, "preflight", side_effect=preflight))
+            stack.enter_context(patch.object(orchestrate, "load_agent_instructions", side_effect=SystemExit(99)))
+            with self.assertRaises(SystemExit) as raised:
+                orchestrate.main()
+            self.assertEqual(raised.exception.code, 99)
+            probe.assert_called_once()
+        return output.getvalue()
+
+    def test_headless_fallback_warns_before_preflight_and_summary_replacement(self) -> None:
+        output = self._headless_until_review([], expect_warning=True)
+        self.assertEqual(output.count("no story supplied"), 1)
+        self.assertIn("Story: checkpoint done.summary", output)
+
+    def test_headless_supplied_contract_does_not_warn(self) -> None:
+        self.story_file.write_text("ticket contract", encoding="utf-8")
+        for extra in (["--story", "inline contract"], ["--story-file", str(self.story_file)]):
+            with self.subTest(flag=extra[0]):
+                output = self._headless_until_review(extra)
+                self.assertNotIn("no story supplied", output)
+                self.assertIn(f"Story: {extra[0]}", output)
+
+    def test_headless_counts_large_and_deleted_changed_files(self) -> None:
+        (Path(self.tmp.name) / "large.py").write_text("line\n" * 600, encoding="utf-8")
+        for names in (["large.py"], ["deleted.py"], ["large.py", "deleted.py"]):
+            with self.subTest(names=names):
+                orchestrate._git_changed_names = lambda *args: names
+                output = self._headless_until_review(["--story", "contract"])
+                self.assertIn(f"  {len(names)} files, 2 diff lines vs origin/main", output)
 
     def _api_prompt(self, **kwargs) -> tuple[str, str]:
         seen = {}

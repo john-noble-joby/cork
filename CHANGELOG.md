@@ -29,6 +29,12 @@ procedure in the README's *Versioning* section.
 
 ## [Unreleased]
 
+### Fixed
+- Lens gates use a unique flat temporary standards path and reload devit's persisted base
+  after tool-call boundaries; the standards lens applies only the supplied trusted rubric.
+  Headless runs warn about a missing story before preflight and before implementation replaces
+  the fallback with a summary, and report all changed filenames, including omitted files.
+
 ### Added
 - **Review-input manifest, required context and a configurable budget.** Every API review prints
   what the model actually saw: the budget split (standards / story / diff / file contents), the

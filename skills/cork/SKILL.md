@@ -94,10 +94,18 @@ remote-tracking ref such as `origin/develop`, or a local branch) — never prefi
 **When the repository under review is cork itself** (its `git rev-parse --git-common-dir`
 equals `$CORK_HOME`'s), the shipped lenses are branch material too: read them with
 `git -C "$CORK_HOME" show {BASE}:lenses/<name>.md`, the same exception the engine applies
-to `standards/AGENTS.md`. Fill `{STANDARDS}` with the path of a file written by
-`python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref {BASE} > /tmp/cork-standards-{BRANCH}.md`
-(outside the repo; the rubric from the trusted ref through the engine's loader, never the
-checkout's standards files). Skip a lens whose concern the diff does not touch and say so;
+to `standards/AGENTS.md`. Write the rubric to a unique flat temporary file outside the repo:
+
+```bash
+STANDARDS=$(mktemp /tmp/cork-standards.XXXXXX) || exit 1
+python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "{BASE}" > "$STANDARDS" || { rm -f "$STANDARDS"; exit 1; }
+printf '%s\n' "$STANDARDS"
+```
+
+Fill `{STANDARDS}` with the printed absolute path (not a shell variable carried across tool
+calls), and remove the file after all lens subagents finish. This is the rubric from the
+trusted ref through the engine's loader, never the checkout's standards files.
+Skip a lens whose concern the diff does not touch and say so;
 never skip spec-and-test-coverage.
 
 ### Steps 3+ — One blind pass per model
