@@ -1431,14 +1431,16 @@ def _universal_standards(repo: str, changed: set[str] | None, trusted_ref: str |
     # that file is inside the repo under review, so a branch edit to standards/AGENTS.md would
     # become system instructions for that branch's review. In that case the rubric is read from
     # the trusted git tree like the project layer; with no trusted ref it is dropped.
-    if not _DEFAULT_STANDARDS.exists():
-        return ""
+    # Containment is decided without following the leaf: the checkout controls that path when
+    # cork reviews itself, so a branch could replace the file with a symlink (making the target
+    # look "external") or delete it (making exists() false) to escape the trusted read.
+    nominal = _DEFAULT_STANDARDS.parent.resolve() / _DEFAULT_STANDARDS.name
     try:
-        rel = _DEFAULT_STANDARDS.resolve().relative_to(Path(repo).resolve()).as_posix()
+        rel = nominal.relative_to(Path(repo).resolve()).as_posix()
     except ValueError:
         rel = None   # the usual case: the default standards live outside the repo under review
     if changed is None or rel is None:
-        return _DEFAULT_STANDARDS.read_text(errors="replace")
+        return _DEFAULT_STANDARDS.read_text(errors="replace") if _DEFAULT_STANDARDS.exists() else ""
     if trusted_ref is None:
         print(f"  ⚠ the default standards ({rel}) are inside the repo under review and there is no trusted ref — not used", flush=True)
         return ""
