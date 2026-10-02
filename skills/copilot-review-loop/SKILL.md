@@ -262,7 +262,11 @@ Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it p
 
 Read the comment body and the file + line it references.
 
-**Fix** — if correct: implement the change in the worktree, run tests, commit, push. Then:
+**Fix** — if correct: implement the change in the worktree, run tests, commit, push. The commit
+message names the **defect class** the finding belongs to and why the fix closes the class, and
+records the **mutation check** for each new conditional (guard reverted or inverted → filtered
+test fails → restored). If this is the second fix to the same area in this PR, stop and propose
+a design change instead of a third patch. Then:
 
 ```bash
 # Reply — the endpoint is PR-scoped; the {pr} number is REQUIRED in the path.
@@ -329,7 +333,18 @@ Update loop prompt with `iteration={N+1}` and reschedule.
 - **Run tests** after every fix commit before pushing. Don't push broken builds.
 - **Worktree:** all edits go in the PR's worktree, not the main checkout.
 - **Re-request works** once Copilot has completed a review — same POST endpoint.
-- **Default max:** 3 passes unless the user specifies otherwise.
+- **Default max:** 3 passes unless the user specifies otherwise. `max` caps passes that
+  **found something**: a clean pass always ends the loop early, and reaching `max` with findings
+  still arriving is a **budget stop**, reported as such in the final summary — never as "done".
+  devit passes `max=4` and treats a budget stop as a missed defect class to sweep in one commit.
+- **Auto-review on push does not replace the request.** Repos with Copilot auto-review still
+  post a review per push, but a new pass is only guaranteed by an explicit request after each
+  push; verify the assignment each tick (Step 2's GraphQL check), since a request can also lapse
+  silently with no review posted.
+- **The overview is a per-review snapshot.** Copilot's "Open (N)" list belongs to the review it
+  was written in and does not change when you resolve the threads; it reads clean only in the
+  next review. Judge state from `review-classify`'s line and the unresolved-thread count, not
+  from the overview of an older review.
 - **Copilot's login is `copilot-pull-request-reviewer[bot]`** (display login `Copilot`, type `Bot`). Request it with that exact login, and match submitted reviews / threads with `.startswith('copilot-pull-request-reviewer')` so the `[bot]` suffix (or any future change to it) doesn't break detection. **Do not request with the display name `Copilot`** — it returns `200 OK` but silently assigns nobody (confirmed on joby/edge-fmt, 2026-05); only the `[bot]` login returns `201 Created` and actually assigns. Always verify the assignment stuck (Step 2, via GraphQL — REST `requested_reviewers` never lists bots) rather than trusting the POST not to error.
 - **Reply endpoint is PR-scoped:** use `repos/{owner}/{repo}/pulls/{pr}/comments/{comment_id}/replies` — the `{pr}` number is required. The shorter `repos/{repo}/pulls/comments/{id}/replies` form returns `404 Not Found` (confirmed on joby/edge-fmt, 2026-05).
 - **Reply-POST parsing:** the replies response can carry extra data or omit keys like `in_reply_to_id` — parse it defensively (`.get(...)`), and treat the `resolveReviewThread` GraphQL mutation as the reliable success signal, not the reply parse.

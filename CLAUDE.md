@@ -19,6 +19,7 @@ bin/cork                # shell shim: execs this clone's orchestrate.py (install
 docs/plan.md            # design decisions and rationale (historical record)
 README.md               # usage and setup
 skills/                 # Claude Code skills: coding-standards, cork, copilot-review-loop, devit, cork-setup
+lenses/                 # narrow-concern reviewer prompts dispatched as read-only subagents (devit lens gate, cork self-review)
 ```
 
 No frameworks. No classes. No abstractions beyond what the task requires.

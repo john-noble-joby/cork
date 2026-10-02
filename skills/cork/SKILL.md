@@ -85,7 +85,10 @@ If the branch has no commits vs develop, implement the story now (in-session), t
 After the implementation commit, stop here if the diff is still empty; do not fan out
 reviewers for a branch that implemented nothing.
 
-Review your own diff with subagents (dispatch parallel reviewers), apply fixes, commit.
+Review your own diff with subagents, apply fixes, commit. Use the **lenses** in
+`$CORK_HOME/lenses/` (plus any under the repo's `code-review/lenses/`): one read-only subagent
+per applicable lens, placeholders filled, run in parallel over `git diff {BASE}...HEAD`. Skip a
+lens whose concern the diff does not touch and say so; never skip spec-and-test-coverage.
 
 ### Steps 3+ — One blind pass per model
 
@@ -134,7 +137,14 @@ Pi harness refs retain the inner provider: `pi/openai-codex/gpt-6-sol`. Pi uses 
 login and `--thinking` effort, with no tools, session persistence or ambient resources.
 As with other harnesses, preflight verifies the binary and its login (`pi auth check … --no-refresh`), not model availability.
 
-Read the findings from stdout. For each: apply the fix in the worktree (run tests before committing), or push back with reasoning if wrong. Commit after each model's fixes with message `fix: apply {MODEL} review [{TICKET}]`.
+Pass the story on every call: write the ticket (or the user's contract) to a file outside the
+repo and add `--story-file PATH`; a call whose output says `Story: fallback` reviewed with no
+spec and must be re-run. Read the **review-input manifest** each call prints: when a file the
+story depends on was seen diff-only, run a focused packet (`--context-file` for exactly those
+files) before trusting the verdict, and name callers, DI wiring, covering tests and restating
+docs with `--context-file` from the start.
+
+Read the findings from stdout. For each: apply the fix in the worktree (run tests before committing), or push back with reasoning if wrong. Commit after each model's fixes with message `fix: apply {MODEL} review [{TICKET}]`, plus one line naming the defect class the fixes closed and the mutation check run for each new conditional. If the same area needs fixing a second time in this run, stop and propose a design change instead of a third patch.
 
 ### Step 6 — Push + PR
 
@@ -154,7 +164,7 @@ Because no fixes land between passes, **every reviewer sees the identical diff**
 
 Dispatch concurrently, then collect when all return:
 
-- **Self-review:** dispatch your own parallel review subagents over `git diff {BASE}...HEAD`. Gather findings only — apply nothing.
+- **Self-review:** dispatch the lenses in `$CORK_HOME/lenses/` (and the repo's `code-review/lenses/`) as parallel read-only subagents over `git diff {BASE}...HEAD`. Gather findings only — apply nothing.
 - **Each model from the `preflight` rotation** (captured in Step 0), all launched together (background processes, then `wait`):
 
 ```bash
@@ -187,12 +197,18 @@ Merge the self-review and every model's findings into a single markdown report:
 - **Per finding:** `path:line` · description · suggested fix · **flagged by** (which reviewers — e.g. `gpt-4.1, opus, self`). Keep overlap as a confidence signal: something 4/5 reviewers caught is high-confidence; a lone flag is weaker.
 - **Dedupe:** merge near-identical findings across models into one entry rather than repeating them.
 - **Uncertain / needs human judgment:** a trailing section aggregating items reviewers flagged as judgment calls or out of scope.
+- **Lanes and inputs — first, not last:** the rotation that **actually completed** (a lane whose
+  file holds the `[… — skipped]` sentinel reviewed nothing; preflight's probe can pass hours
+  before the seat drops a model) and, per lane, the review-input manifest's omissions. A
+  "no findings" from a lane that saw 15 of 29 files diff-only is evidence about 15 files.
+  Say what was inspected versus executed, and keep coverage gaps apart from current defects.
 
 Print the report and stop. If the user then wants fixes applied, that's a separate full-mode (or manual) pass.
 
 ## Notes
 
-- **Base branch** is `develop` for edge-fmt. Pass `--base-branch develop` (local and origin are kept in sync; if in doubt `git fetch origin && git merge --ff-only origin/develop`).
+- **Base branch** is `develop` for edge-fmt. Prefer `--base-branch origin/develop` after a `git fetch`: cork warns when a local base is behind its remote (the diff would then cover the base's own catch-up — 49 files instead of 10 on one run).
+- **Budget and context:** API lanes get `review_budget_chars` of prompt (default 192k chars ≈ 48k tokens) and nothing outside the changed set; the manifest shows what fell off, `--context-file` adds what must not, and tree-capable harness lanes (`claude`, `opencode`) read the rest themselves — prefer one of those on the roster when the change's blast radius is the question.
 - **Run tests** after each fix before committing — don't commit a broken build. (Full mode only — review-only never writes code.)
 - **Review-only mode** is side-effect-free: parallel reviews → one consolidated report, nothing applied. Reach for it to review someone else's branch.
 - **Copilot token**: `--review-model` resolves a token in priority order — `CORK_COPILOT_TOKEN` env var → cork's own `~/.config/cork/auth.json` (`CORK_AUTH_FILE`) → opencode (`~/.local/share/opencode/auth.json`). Run `python3 "$CORK_HOME/orchestrate.py" auth status` to see the source, expiry, refreshability, and probe result. Preflight warns when it is using the non-refreshable opencode fallback or a token-only credential. To give cork its own refreshable token, run `python3 "$CORK_HOME/orchestrate.py" login` (GitHub device flow, writes the auth file automatically). Re-run `login` only if the refresh token itself expires (~6 months), is revoked, or status reports a non-refreshable source.
