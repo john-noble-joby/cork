@@ -133,11 +133,13 @@ inventory as a finding**: your prompt may simply not have carried it.
   path or handler whose siblings of the same shape (`start` but not `pull`/`status`/`stop`; one
   route but not its peers) are untouched and not explicitly waived. Ask for the surface inventory.
 - **Unenumerated input domain** — an external value (URL, env var, path, flag, tool output,
-  config key) validated against a few cases with no stated domain: missing rows for empty,
-  whitespace, case, bare delimiters, credentials/query/fragment, bad port, malformed authority,
-  loopback spellings, IPv6 brackets, scheme, prefix. One finding naming the missing rows, not
-  one finding per row per pass. Ask for the inventory or table only when the diff shows the
-  class and the story section does not already carry it.
+  config key) validated against a few cases with no stated domain. Name only the rows that
+  apply to that value's kind: generic (empty, whitespace, case, bare delimiters); URL/host
+  (credentials/query/fragment, bad port, malformed authority, loopback spellings, IPv6
+  brackets, scheme); path (prefix, relative vs absolute, trailing separator). Never flag a
+  URL row for a flag or a config key. One finding naming the applicable missing rows, not one
+  finding per row per pass; when a table with explicit N/A rows is present, flag only an
+  applicable row it marks N/A or omits.
 - **Unprobed tool contract** — code that parses another tool's or service's output (sentinels,
   field names, formats, image names, "needs a checkout") with no captured real output as a
   fixture. Inferred contracts are findings even when they happen to be right.

@@ -14,8 +14,8 @@ session) write first by running step 1 of the procedure yourself and passing it 
 
 1. **Operator / QA-facing** — READMEs, runbook, CLI `--help`, hints, error and status messages,
    env-file and compose comments.
-2. **Code-facing** — code comments, docstrings, commit messages, the draft PR body, the Linear
-   story.
+2. **Code-facing** — code comments, docstrings, the branch's commit messages, the draft PR
+   body, the Linear story.
 
 Then **you reconcile**: for every claim, put the two agents' restatement lists side by side and
 check that the operator-facing wording and the code-facing wording agree with each other, not
@@ -35,7 +35,8 @@ and every piece of text that claims to describe it**.
 ## Inputs
 
 - Repository: `{WORKTREE}` (the branch is checked out; the base is `{BASE}`).
-- The change: `git diff {BASE}...HEAD` — run it yourself.
+- The change: `git diff {BASE}...HEAD` — run it yourself. The branch's commit messages:
+  `git log --format='%h%n%B' {BASE}..HEAD` — they are restatements too.
 - The story / acceptance criteria:
 
   ```
@@ -70,6 +71,8 @@ and every piece of text that claims to describe it**.
    - `README*`, `docs/**`, runbooks, `CHANGELOG`, ADRs;
    - `.env*`, `*.env.example`, compose and config files and their comments;
    - test names and test fixture comments that describe behaviour;
+   - every commit message on the branch (`git log --format='%h%n%B' {BASE}..HEAD`) — a
+     message that describes an earlier shape of the change is stale like any comment;
    - the draft PR body and the Linear story text given above (treat both as restatements;
      they are not authoritative over the code).
 
@@ -95,7 +98,9 @@ and every piece of text that claims to describe it**.
 
 ## Restatements
 ### Claim 1
-- path:line — "<quoted text>" — stale | overclaiming | contradicting (with claim K) | consistent
+- <location> — "<quoted text>" — stale | overclaiming | contradicting (with claim K) | consistent
+  (location is `path:line` for files, `commit:<short sha>` for a commit message, `pr-body` or
+  `story` for the two inputs above)
 ...
 
 ## Missing (asked for by the story, absent from the diff)
@@ -108,6 +113,6 @@ and every piece of text that claims to describe it**.
 <stale: N · overclaiming: N · contradicting: N · missing: N · consistent: N>
 ```
 
-Quote text exactly as it appears so the implementer can grep for it. Report every restatement
+Quote text exactly as it appears so the implementer can grep for it (a stale commit message is reported for the record — it is not rewritten on a pushed branch). Report every restatement
 you checked, including the consistent ones; the list of what was checked is as valuable as
 the list of what was wrong.

@@ -49,6 +49,18 @@ acceptance criteria, type/labels, and links.
 
 - 🛑 **G0 — Clarity gate:** if scope or acceptance criteria are unclear, ambiguous, or
   missing, **STOP and ask the user** before doing anything else. Do not guess.
+- **Persist the story text** — reviewers and the docs sweep read it from a file later, and
+  nothing else writes it:
+  ```bash
+  SWEEP_DIR="${TMPDIR:-/tmp}/devit-<TICKET>"; mkdir -p "$SWEEP_DIR"
+  # title, description and acceptance criteria exactly as fetched, as markdown:
+  cat > "$SWEEP_DIR/story.txt" <<'STORY'
+  <TICKET>: <title>
+  <description>
+  ## Acceptance criteria
+  <criteria>
+  STORY
+  ```
 - **Type:** classify feature vs. bug — Linear issue type/label first; else infer
   from content ("bug", "fix", "regression", an error report). This decides the
   branch prefix in Phase 2.
@@ -107,12 +119,19 @@ automatically: it reads the branch of the current dir, so the moment you're in t
 `/resume` picker; the status line is the always-visible indicator — devit needs to do
 nothing extra for it (it's branch-driven), but still print the `/rename` line above.
 
+**Upstream-drift check — before G2, not after implementation.** For every repo or service
+the story depends on, fetch its `main` now and compare the contract the story touches
+(routes, auth requirements, schema, env names) with what the story assumes. A dependency
+that already moved is a design question for the user at G2, not a finding to absorb after
+the code is written. Record the result in `$SWEEP_DIR/upstream.md`; Phase 3.5 item d
+refreshes it and carries it into the sweep.
+
 ### 🛑 G2 — Confirm before implementing (HARD STOP)
 
 **Do NOT begin Phase 3 until the user explicitly replies.** Invoking devit does not pass
 this gate; creating the worktree does not pass it. Post exactly this line and then wait:
 
-`devit: <TICKET> | <BR> | worktree .worktrees/<BR> | base develop — start? (split needed: yes/no)`
+`devit: <TICKET> | <BR> | worktree .worktrees/<BR> | base develop | upstream drift: none / <what moved> — start? (split needed: yes/no)`
 
 If you catch yourself about to edit a file or dispatch an implementer before the user has
 answered this line — STOP. That is the exact failure this gate exists to prevent.
@@ -144,8 +163,7 @@ any reviewer sees the diff**. Each item produces a short artifact. Write them as
 produced into one file **outside the repo** so nothing can be committed by accident:
 
 ```bash
-SWEEP_DIR="${TMPDIR:-/tmp}/devit-<TICKET>"; mkdir -p "$SWEEP_DIR"
-SWEEP="$SWEEP_DIR/pre-review-sweep.md"      # starts with the line "## Pre-review sweep"
+SWEEP="$SWEEP_DIR/pre-review-sweep.md"      # $SWEEP_DIR from Phase 0; file starts with "## Pre-review sweep"
 ```
 
 That file is what every reviewer sees: Phase 4 passes it to each cork reviewer inside the
@@ -159,9 +177,9 @@ with "none" under it rather than omitting it, so the absence is a claim a review
 | # | Sweep | Artifact in the PR body |
 |---|---|---|
 | a | **Surface inventory.** For every new gate, guard, hint, validation or message added to one command, path or handler, list every sibling surface of the same shape (`start` → also `pull`, `status`, `seed`, `stop`; one route → every route with that shape) and mark each applied or explicitly waived. | Table: gate → sibling surfaces → applied / waived (why). |
-| b | **Input-domain table.** For every external value the change reads — URL, env var, path, CLI flag, tool output, config key — write the accepted domain and the rejected cases **once**: empty, whitespace-only, case variants, bare delimiters, credentials / query / fragment in a URL, bad port, malformed authority, loopback spellings, IPv6 bracketing, scheme, path prefix. One test per rejected row. Enumerating the domain one review pass at a time is the failure this prevents. | Table: value → accepted → rejected rows (each names its test). |
+| b | **Input-domain table.** For every external value the change reads — URL, env var, path, CLI flag, tool output, config key — write the accepted domain and the rejected cases **once**, picking from the candidate list the rows that apply to that value's kind and marking the rest N/A. Generic rows: empty, whitespace-only, case variants, bare delimiters. URL/host rows: credentials / query / fragment, bad port, malformed authority, loopback spellings, IPv6 bracketing, scheme. Path rows: prefix, relative vs absolute, trailing separator. One test per applicable rejected row; no test for an N/A row. Enumerating the domain one review pass at a time is the failure this prevents. | Table: value → kind → accepted → rejected rows (each names its test) → N/A rows. |
 | c | **Contract probes.** For every external tool or API whose output the change parses — Docker, git, a CLI, a sibling service — run the real command once in each state that matters (present / missing / error) and capture the real output into a test fixture. Never infer a sentinel (`<no value>`), a field name (`host-gateway-ip` vs `-ips`) or a format from memory. | List: command → states probed → fixture path. |
-| d | **Upstream-drift check.** For every repo or service the story depends on, fetch its `main` now and diff the contract the change touches — routes, auth requirements, schema, env names — against what the story assumed. A dependency that moved before the branch was cut is a design change to raise with the user, not a finding to absorb in pass 7. | List: dependency → ref fetched → drift found / none. |
+| d | **Upstream-drift check (refresh).** The first check ran before G2 (Phase 2) and its result is in `$SWEEP_DIR/upstream.md`. Re-fetch each dependency's `main` now — it may have moved again while you implemented — and diff the touched contract (routes, auth requirements, schema, env names) against both the story's assumption and your implementation. New drift found here is still a design question for the user before review, not a finding to absorb in pass 7. | List: dependency → ref at G2 → ref now → drift found / none. |
 | e | **Platform / network matrix.** When behaviour varies by viewpoint or platform — host vs container, Linux vs macOS, loopback vs gateway vs daemon override — write the full matrix with every cell filled: expected value and the test that proves it. An unwritten cell is a finding waiting for a later pass. | Matrix with a test per cell. |
 | f | **Docs & wording sweep.** First **draft the PR body now** — the "In plain terms" section plus artifacts a–e — and save it as `$SWEEP_DIR/pr-body.md`; the PR does not exist yet, and the sweep must check the body's claims too. Then dispatch **one** subagent with the prompt in `references/docs-sweep.md`, passing the worktree, base, story text and that draft body. It lists every behaviour claim the diff alters, greps every restatement of each claim across the repo (comments, docstrings, help, hints, messages, READMEs, runbook, env and compose comments, the draft PR body, the story), and reports stale, overclaiming or contradicting text plus documentation the acceptance criteria asked for that the diff lacks. For a big story the prompt file describes the **audience** split (operator/QA-facing vs code-facing) — you write the claim inventory once, both agents check restatements against it, and you reconcile the two reports per claim; never split by location. Fix its findings before Phase 4 and update the draft body. | Its report, condensed to claim → restatements checked → fixed. |
 
@@ -179,7 +197,9 @@ the Phase 3.5 artifacts — and add `--story-file` to each `--review-model` call
 makes:
 
 ```bash
-{ cat "$SWEEP_DIR/story.txt"; echo; cat "$SWEEP"; } > "$SWEEP_DIR/story.md"   # story.txt = the Linear story text
+# story.txt was written in Phase 0, pre-review-sweep.md in Phase 3.5; refuse to review without both
+[ -s "$SWEEP_DIR/story.txt" ] && [ -s "$SWEEP" ] || { echo "missing story.txt or sweep in $SWEEP_DIR"; exit 1; }
+cat "$SWEEP_DIR/story.txt" "$SWEEP" > "$SWEEP_DIR/story.md"
 python3 "$CORK_HOME/orchestrate.py" <TICKET> . --review-model <MODEL> --base-branch develop --story-file "$SWEEP_DIR/story.md"
 ```
 
@@ -218,8 +238,8 @@ re-request up to its max passes.)
 **Pass budget: four.** If Copilot is still finding items when the loop stops at four, do not
 restart it one item at a time. A run of single-item passes means a Phase 3.5 class was
 missed, not that the reviewer is thorough: name the class, sweep it in one commit (siblings,
-the rest of the input domain, the unprobed tool, the unwritten matrix cells, the other
-restatements), and re-request once. Push back on items outside the story instead of fixing
+the applicable rows of the input domain still untested, the unprobed tool, the unwritten
+matrix cells, the other restatements), and re-request once. Push back on items outside the story instead of fixing
 them to make a pass come out clean. Record a budget stop, and the class it exposed, in Phase 7.
 
 (Pauses per reviewer when `interactive_review` is on — see Notes.)
