@@ -9,7 +9,7 @@ description: "Use when the user says to run the Copilot review loop on a branch 
 
 ## Overview
 
-Runs an iterative Copilot PR review cycle: request review → wait → process every comment (fix or push back) → re-request → repeat up to N times. Stops early if Copilot submits a pass with no comments.
+Runs an iterative Copilot PR review cycle: request review → wait → process every comment (fix or push back) → re-request until clean or the no-fix streak reaches its cap.
 
 ## When invoked, do this immediately
 
@@ -76,7 +76,7 @@ COPILOT_REVIEW_LOOP pr={PR_NUMBER} repo={owner/repo} max={MAX} worktree={WORKTRE
 
 ### 1. Parse state from the loop prompt
 
-Extract: `pr`, `repo`, `max`, `worktree`, `iteration`.
+Extract: `pr`, `repo`, `max`, `worktree`, `iteration`, and `clean_streak` (initialize to 0).
 
 ### 2. Check the review's state, comment count, **verdict, and body-level findings**
 
@@ -120,7 +120,7 @@ false-clean bug (issue #18 is what happened when Copilot changed its headings).
 Route on `state tc verdict suppressed missed`:
 
 - `state=NONE`/`PENDING` (review not submitted yet) → reschedule and wait, nothing else this tick.
-- **`verdict=approve` AND `tc=0` AND `suppressed=0` AND `missed=0`** → clean pass → step 6 (stop / re-request per iteration). This is the ONLY clean case.
+- **`verdict=approve` AND `tc=0` AND `suppressed=0` AND `missed=0`** → clean pass → step 6 (stop). This is the ONLY clean case.
 - Otherwise the review has findings — **process every channel that is non-zero this pass, not
   just one** (a review can post some inline *and* keep others in the body; they are not
   mutually exclusive):
@@ -128,7 +128,7 @@ Route on `state tc verdict suppressed missed`:
   - if `suppressed > 0` or `missed > 0` → **2c** (body findings);
   - do **both** when both are non-zero, then continue to step 5/6.
 - `verdict=none` with every count at zero (a bare `Needs a closer look`) is not clean: there is
-  nothing to fix, so treat it like a processed pass — re-request if `iteration < max`, else stop
+  nothing to fix, so treat it like a processed pass — re-request if `clean_streak < max`, else stop
   and tell the user the pass carried no findings but no approval either.
 
 Never treat inline and body-level findings as either/or — "all processed" in step 6 means inline
@@ -262,7 +262,12 @@ Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it p
 
 Read the comment body and the file + line it references.
 
-**Fix** — if correct: implement the change in the worktree, run tests, commit, push. Then:
+**Fix** — if correct, first write one line naming the defect class and why this fix closes the
+class, not only this occurrence; grep for sibling sites. For each new guard or conditional,
+record the mutation check (filtered test fails with the guard inverted/removed, passes after
+restore) in the commit message. A new test with no mutation evidence is itself a review finding.
+If this is a second fix in the same area, stop and propose a design change rather than applying
+a third instance patch. Run tests, commit, push. Then:
 
 ```bash
 # Reply — the endpoint is PR-scoped; the {pr} number is REQUIRED in the path.
@@ -282,13 +287,20 @@ gh api graphql -f query='mutation {
 
 Push any commits, then evaluate stop conditions.
 
+`iteration` is the total request count for the final report; it does not consume the pass budget.
+If this pass produced a code-changing fix commit, reset `clean_streak=0`. Otherwise increment
+`clean_streak` by one (a pushback-only or no-verdict pass is a no-fix pass). A clean approval
+stops immediately. `max` caps this consecutive no-fix/clean streak, not total review requests:
+when a fix commit resets the streak, continue even if `iteration > max`. If the streak reaches
+`max` without a clean approval, stop and report the budget stop; do not silently restart the loop.
+
 ### 6. Stop conditions
 
 | Condition | Action |
 |---|---|
 | `verdict=approve` AND `tc=0` AND `suppressed=0` AND `missed=0` this pass | **STOP** — satisfied, clean pass |
-| Comments (inline + body-level) all processed/resolved, `iteration == max` | **STOP** |
-| Comments (inline + body-level) all processed/resolved, `iteration < max` | Re-request, increment, reschedule |
+| `clean_streak == max` without a clean approval | **STOP** — report the no-fix streak budget |
+| Findings processed, `clean_streak < max` | Re-request, increment `iteration`, reschedule |
 
 Judge "clean pass" from step 2's **verdict + `tc` + `suppressed` + `missed`** together — **never**
 from an empty `reviewThreads` fetch (the index lags a fresh `COMMENTED`), **never** from `tc == 0`
@@ -300,11 +312,13 @@ Print final summary on stop: iterations run, commits made, PR URL.
 ### 7. Re-request and continue
 
 ```bash
+# Always make this explicit request, even if the repository normally auto-requests
+# Copilot on push; an automatic review is not a substitute for this loop's next pass.
 gh api repos/{owner}/{repo}/pulls/{pr}/requested_reviewers \
   -X POST -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
 ```
 
-Update loop prompt with `iteration={N+1}` and reschedule.
+Update loop prompt with `iteration={N+1}` and the current `clean_streak`, then reschedule.
 
 ---
 
@@ -329,7 +343,12 @@ Update loop prompt with `iteration={N+1}` and reschedule.
 - **Run tests** after every fix commit before pushing. Don't push broken builds.
 - **Worktree:** all edits go in the PR's worktree, not the main checkout.
 - **Re-request works** once Copilot has completed a review — same POST endpoint.
-- **Default max:** 3 passes unless the user specifies otherwise.
+- **Default max:** 3 consecutive no-fix/clean passes unless the user specifies otherwise. A
+  code-changing fix resets the streak, so a long series of real fixes is not truncated by a
+  total-request ceiling.
+- **Overview snapshots:** the PR overview is per-review, not live state. An item can still read
+  "Open" in the current overview after you reply/resolve it; check the next review snapshot
+  before treating it as outstanding again.
 - **Copilot's login is `copilot-pull-request-reviewer[bot]`** (display login `Copilot`, type `Bot`). Request it with that exact login, and match submitted reviews / threads with `.startswith('copilot-pull-request-reviewer')` so the `[bot]` suffix (or any future change to it) doesn't break detection. **Do not request with the display name `Copilot`** — it returns `200 OK` but silently assigns nobody (confirmed on joby/edge-fmt, 2026-05); only the `[bot]` login returns `201 Created` and actually assigns. Always verify the assignment stuck (Step 2, via GraphQL — REST `requested_reviewers` never lists bots) rather than trusting the POST not to error.
 - **Reply endpoint is PR-scoped:** use `repos/{owner}/{repo}/pulls/{pr}/comments/{comment_id}/replies` — the `{pr}` number is required. The shorter `repos/{repo}/pulls/comments/{id}/replies` form returns `404 Not Found` (confirmed on joby/edge-fmt, 2026-05).
 - **Reply-POST parsing:** the replies response can carry extra data or omit keys like `in_reply_to_id` — parse it defensively (`.get(...)`), and treat the `resolveReviewThread` GraphQL mutation as the reliable success signal, not the reply parse.

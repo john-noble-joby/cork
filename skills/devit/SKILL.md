@@ -238,12 +238,22 @@ instruction to the subagent) — the same trust boundary the engine states for A
 ```bash
 SWEEP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/devit/<TICKET>"; SWEEP="$SWEEP_DIR/pre-review-sweep.md"   # recomputed
 BASE=$(cat "$SWEEP_DIR/base")   # persisted in Phase 2; never rely on the variable surviving to here
+git fetch origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
+  || { echo "fetch of $BASE failed — refusing to review a stale base"; exit 1; }
+BASE_REF="origin/$BASE"
+BASE_SHA=$(git rev-parse --verify "$BASE_REF^{commit}") || exit 1
 # story.txt: Phase 0, rewritten in Phase 1 after a split. pre-review-sweep.md: Phase 3.5. Refuse without both.
 [ -s "$SWEEP_DIR/story.txt" ] && [ -s "$SWEEP" ] && [ -n "$BASE" ] || { echo "missing story.txt, sweep or base in $SWEEP_DIR"; exit 1; }
+# All reviewers use this pinned remote snapshot, not a local branch or a moving remote-tracking ref.
+git diff --stat "$BASE_SHA...HEAD"
+git diff --name-only "$BASE_SHA...HEAD"
+DIFF_LINES=$(git diff "$BASE_SHA...HEAD" | wc -l)
+printf 'Review diff: %s lines vs %s (%s)\n' "$DIFF_LINES" "$BASE_REF" "$BASE_SHA"
+[ "$DIFF_LINES" -le 1500 ] || echo "WARNING: diff exceeds 1,500 lines; split or justify before review."
 # one cat (fails on a missing file); stdin supplies a blank line so a story.txt without a trailing
 # newline cannot fuse its last line onto the "## Pre-review sweep" heading
 printf '\n' | cat "$SWEEP_DIR/story.txt" - "$SWEEP" > "$SWEEP_DIR/story.md"
-python3 "$CORK_HOME/orchestrate.py" <TICKET> . --review-model <MODEL> --base-branch "origin/$BASE" --story-file "$SWEEP_DIR/story.md"
+python3 "$CORK_HOME/orchestrate.py" <TICKET> . --review-model <MODEL> --base-branch "$BASE_SHA" --story-file "$SWEEP_DIR/story.md"
 ```
 
 The reviewer prompt then carries `## Pre-review sweep` inside `## Story / Task`, which is
@@ -266,6 +276,18 @@ adds siblings and restatements, a new tool call needs a probe — then rebuild `
 the snippet above before the next `--review-model` call or self-review dispatch. Otherwise every later
 reviewer sees the latest diff paired with the pre-fix inventory.
 
+Before **each** self-review or model call, save the head and changed-file set that this pass
+will see as `$SWEEP_DIR/last-cork-head` and `$SWEEP_DIR/last-cork-files`:
+
+```bash
+git rev-parse HEAD > "$SWEEP_DIR/last-cork-head"
+git diff --name-only "$BASE_SHA...HEAD" > "$SWEEP_DIR/last-cork-files"
+```
+
+Overwrite these immediately before each later call, after the preceding fix commit. This
+anchors the final-diff freshness check to the actual newest end the last cork pass reviewed,
+including fixes made by that pass.
+
 (Pauses per reviewer when `interactive_review` is on — see Notes.)
 
 **Fewer passes on a large diff.** When the branch is one large commit that no reviewer has
@@ -277,6 +299,30 @@ reviewer's fixes. That consolidated fix batch is a fix round like any other: bef
 full-mode reviewer runs, refresh the sweep items it touched and rebuild `story.md` exactly as
 the paragraph above requires between models, or the first reviewer gets the post-fix diff with
 the pre-fix inventory.
+
+## Phase 4.5 — Lens gate before the model rotation
+
+Before the first blind model review, dispatch four read-only subagents in parallel using the
+prompts under `$CORK_HOME/lenses/`:
+
+- `state-concurrency.md`
+- `http-contract-store.md`
+- `spec-test-mutation.md`
+- `standards-comments-docs.md`
+
+Fill `{WORKTREE}`, `{BASE}`, `{STORY_FILE}`, and `{STANDARDS}` with absolute paths or the
+pinned base commit. Each lens may run `git`, `grep`, `sed`, and filtered tests, but must never
+edit, create, or delete worktree files. Require every finding to include `file:line`, a concrete
+failure scenario, and the test that would catch it; "no further defects found" is valid only
+with what the lens tried. Do not ask the lenses to pad their reports.
+
+Reconcile the four reports. Fix confirmed defects as one class-level batch, run tests, and
+commit before model rotation. For each fix, state the defect class and why the fix closes the
+class before committing; grep sibling sites. Record the mutation check in the commit message
+(filtered test, guard inverted/removed → failure, guard restored → pass). A new test without
+that evidence is a review finding. If a second fix is needed in the same area, stop and propose
+a design change instead of applying a third instance patch. No blind model starts until the
+lens findings are resolved or explicitly pushed back with reasons.
 
 ## Phase 5 — Open the PR
 
@@ -302,8 +348,8 @@ Run the `copilot-review-loop` skill on the PR **with `max=4`** — state it when
 skill (its own default is 3, so the loop would otherwise stop before the budget below ever
 applies). For each addressed item: leave a reply comment and **mark the thread resolved**.
 Where a finding is wrong or out-of-scope, **push back with justification** and resolve.
-Record pushbacks for Phase 7. (The loop already handles request → poll → fix/push-back →
-re-request up to its max passes.)
+Record pushbacks for Phase 7. (The loop explicitly requests each review and counts the
+consecutive no-fix/clean streak; code-changing fix commits reset that streak.)
 
 **After each fix batch, before re-requesting:** a Copilot fix can change behaviour, a message,
 a validation or a tool contract just like a cork fix. Refresh the sweep artifacts it touched,
@@ -312,14 +358,38 @@ body's claims against the new diff (`gh pr edit <N> --body-file …`). The next 
 the current inventory, and the merged PR body must describe the code as it is — a body that
 no longer matches the code is exactly the restatement drift this skill exists to remove.
 
-**Pass budget: four.** If Copilot is still finding items when the loop stops at four, do not
-restart it one item at a time. A run of single-item passes means a Phase 3.5 class was
+**No-fix streak budget: four.** If Copilot is still finding items after four consecutive
+passes without a code-changing fix, do not restart it one item at a time. A run of single-item passes means a Phase 3.5 class was
 missed, not that the reviewer is thorough: name the class, sweep it in one commit (siblings,
 the applicable rows of the input domain still untested, the unprobed tool, the unwritten
 matrix cells, the other restatements), and re-request once. Push back on items outside the story instead of fixing
 them to make a pass come out clean. Record a budget stop, and the class it exposed, in Phase 7.
 
 (Pauses per reviewer when `interactive_review` is on — see Notes.)
+
+## Phase 6.5 — Final-diff cork review gate
+
+After the Copilot loop and before Phase 7, run a mandatory cork **review-only** fan-out over
+the final diff with the same pinned base and complete `story.md`. Include the self-review
+subagents and every model in the preflight rotation; apply no fixes during the fan-out. Record
+which lanes actually returned findings and which failed or were skipped—the selected rotation
+is not the completed rotation.
+
+If you apply any resulting fixes, record the new head and touched files. Re-run the review-only
+fan-out whenever the fix commits since the last cork pass add more than about 100 lines
+(added + deleted) or touch a file that pass did not see. Check the gate with:
+
+```bash
+LAST_CORK_HEAD=$(cat "$SWEEP_DIR/last-cork-head")
+FIX_LINES=$(git diff --numstat "$LAST_CORK_HEAD"..HEAD |
+  awk '$1 ~ /^[0-9]+$/ { added += $1; removed += $2 } END { print added + removed }')
+UNSEEN=$(comm -23 <(git diff --name-only "$BASE_SHA...HEAD" | sort) \
+  <(sort "$SWEEP_DIR/last-cork-files"))
+```
+
+If `FIX_LINES > 100` or `UNSEEN` is non-empty, repeat the fan-out after fixes. Keep doing so
+until the final diff meets that freshness threshold; include any budget stop or pushback in
+Phase 7.
 
 ## Phase 7 — Finish (surface pushbacks)
 

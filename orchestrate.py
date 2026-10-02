@@ -1860,13 +1860,29 @@ def _harness_auth_probe(provider: str, model: str) -> dict:
 def _probe(provider: str, model: str, details: dict | None = None) -> str:
     if provider in HARNESSES:
         result = _harness_auth_probe(provider, model)
+        if result["status"] == "ok":
+            try:
+                cwd = _probe_cwd()
+            except OSError as e:
+                result["status"] = "error"
+                result["detail"] = f"cannot create {STATE_DIR}: {e}"
+            else:
+                status, text = _harness_call(
+                    provider, model, _review_system(""), "Reply with exactly: OK",
+                    cwd, timeout=60)
+                if status == 200 and text:
+                    result["model_probe"] = "ok"
+                else:
+                    result["status"] = "timeout" if status == 504 else "error"
+                    result["detail"] = text[:300] or "model probe returned no output"
         if details is not None:
             details.update(result)
         return result["status"]
     # A cheap availability probe — cap output hard so it can't burn review-sized
-    # quota (the classification only needs the HTTP status, not the content).
+    # quota while still making a real, model-specific request through the review transport.
     try:
-        status, text, _ = _call_and_extract(provider, model, "", "ok", max_out=16)
+        status, text, _ = _call_and_extract(
+            provider, model, _review_system(""), "Reply with exactly: OK", max_out=16)
     except (TimeoutError, socket.timeout):
         return "timeout"
     except urllib.error.URLError as e:
@@ -1929,6 +1945,8 @@ def preflight(rotation: list[dict], count: int) -> list[dict]:
                 selected.append({"provider": provider, "model": model})
             if provider in HARNESSES:
                 detail = probe.get("detail") or "authenticated"
+                if probe.get("model_probe") == "ok":
+                    detail += "; model probe passed"
                 selection_note = "" if was_selected else " (not selected — count reached)"
                 print(f"  ✓ {provider}: live ({detail}{env_note}){selection_note}", flush=True)
             else:
@@ -2462,31 +2480,6 @@ def cmd_auth_print_token(as_json: bool = False) -> None:
 def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True,
                story_file: str | None = None, story_text: str | None = None,
                diff_range: str | None = None, diff_file: str | None = None) -> None:
-    if story_file is not None:
-        story_path = Path(story_file)
-        try:
-            story_path = story_path.expanduser()  # RuntimeError for an unknown ~user
-            story = story_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError, RuntimeError) as e:
-            fail(f"Cannot read story file {story_path}: {e}")
-        story_source = f"--story-file {story_path}"
-    elif story_text is not None:
-        story = story_text
-        story_source = "--story"
-    else:
-        state = load_state(tid)
-        done_summary = state.get("done", {}).get("summary")
-        checkpoint_summary = state.get("summary")
-        if done_summary:
-            story, story_source = done_summary, "checkpoint done.summary"
-        elif checkpoint_summary:
-            story, story_source = checkpoint_summary, "checkpoint summary"
-        else:
-            story = f"Review the branch changes for {tid}."
-            story_source = "fallback"
-    if (story_file is not None or story_text is not None) and not story.strip():
-        fail(f"Story from {story_source} is empty.")
-
     _validate_model_ref(*_split_model_ref(model_ref))  # shape only; independent of --skip-validation
     # The diff under review comes from exactly one source: a commit range (delta rounds), a
     # patch file (a diff produced elsewhere), or — the default — merge-base...HEAD vs the base
@@ -2517,20 +2510,74 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
         diff, scope = git_diff_branch(repo, base_ref), base
     if not diff.strip():   # before the probe and before listing names: an empty diff needs neither
         fail(f"No diff for {scope} — nothing to review.")
+    repo = git_toplevel(repo)   # names, standards, default story and file contents are root-relative
+    if story_file is not None:
+        story_path = Path(story_file)
+        try:
+            story_path = story_path.expanduser()  # RuntimeError for an unknown ~user
+            story = story_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError, RuntimeError) as e:
+            fail(f"Cannot read story file {story_path}: {e}")
+        story_source = f"--story-file {story_path}"
+    elif story_text is not None:
+        story = story_text
+        story_source = "--story"
+    else:
+        default_story_path = Path(repo) / ".cork" / "story.md"
+        if default_story_path.is_file():
+            try:
+                story = default_story_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as e:
+                fail(f"Cannot read default story file {default_story_path}: {e}")
+            story_source = f"default story {default_story_path}"
+        else:
+            state = load_state(tid)
+            done_summary = state.get("done", {}).get("summary")
+            checkpoint_summary = state.get("summary")
+            if done_summary:
+                story, story_source = done_summary, "checkpoint done.summary"
+            elif checkpoint_summary:
+                story, story_source = checkpoint_summary, "checkpoint summary"
+            else:
+                story = f"Review the branch changes for {tid}."
+                story_source = "fallback"
+    if not story.strip():
+        fail(f"Story from {story_source} is empty.")
+    if story.strip() == f"Review the branch changes for {tid}.":
+        print(
+            "WARNING: review story is the generic fallback; spec-conformance review "
+            "cannot be reliable. Supply --story-file/--story or .cork/story.md.",
+            file=sys.stderr,
+            flush=True,
+        )
     provider, model = _split_model_ref(model_ref)
     if validate:
         verdict = _probe(provider, model)
         if verdict != "ok":
             fail(f"{provider}/{model} not usable on this seat ({verdict}).")
-    repo = git_toplevel(repo)   # names, standards and file contents are root-relative from here on
     names = patch_names if diff_file is not None else _git_changed_names(repo, pinned_range if diff_range is not None else f"{base_ref}...HEAD")
     instructions, instructions_path = load_agent_instructions(repo, set(names), base_ref)
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
     files = _file_contents(repo, names)
     print(f"Story: {story_source} ({len(story)} chars)")
+    diff_lines = len(diff.splitlines())
     print(f"\n── Review: {provider}/{model} — {len(files)} files, "
-          f"{len(diff.splitlines())} diff lines vs {scope}\n", flush=True)
+          f"{diff_lines} diff lines vs {scope}")
+    print("Changed files:")
+    for name in names:
+        print(f"  - {name}")
+    print(f"⚠ Scope check: confirm every changed file belongs to {tid}.", flush=True)
+    if not names:
+        print("  (none)")
+    if diff_lines > 1500:
+        print(
+            f"WARNING: review diff is {diff_lines} lines (over the 1,500-line "
+            "review-size threshold). Consider splitting the change.",
+            file=sys.stderr,
+            flush=True,
+        )
+    print(flush=True)
     print(review(provider, model, instructions, story, diff, files, _DEFAULT_CHAR_BUDGET,
                  repo=repo))
 
