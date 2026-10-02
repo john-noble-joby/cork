@@ -123,8 +123,12 @@ Each recurs across real review history; when a diff fixes one instance, verify t
 ## Long-tail classes (pre-review)
 Review history (edge-fmt #534/#537: 6 and 11 Copilot passes, five single-item passes after a
 "clean" one) shows the items that surface late belong to a few classes that are checkable in
-pass 1 from the diff plus the PR body. Flag these as findings in the **first** pass; do not wait
-for the instance to show up:
+pass 1 from the diff. Flag these as findings in the **first** pass; do not wait for the instance
+to show up. If the `## Story / Task` section carries a `## Pre-review sweep` inventory (devit
+writes one and passes it through `--story-file`), verify its claims against the diff instead of
+rebuilding them, and flag a sibling, input row, probe, upstream or matrix cell it omits. If no
+inventory is present, apply each class to the diff directly — **never report the absence of the
+inventory as a finding**: your prompt may simply not have carried it.
 - **Unswept sibling** — a new gate, guard, hint, validation or message applied to one command,
   path or handler whose siblings of the same shape (`start` but not `pull`/`status`/`stop`; one
   route but not its peers) are untouched and not explicitly waived. Ask for the surface inventory.
@@ -132,7 +136,8 @@ for the instance to show up:
   config key) validated against a few cases with no stated domain: missing rows for empty,
   whitespace, case, bare delimiters, credentials/query/fragment, bad port, malformed authority,
   loopback spellings, IPv6 brackets, scheme, prefix. One finding naming the missing rows, not
-  one finding per row per pass.
+  one finding per row per pass. Ask for the inventory or table only when the diff shows the
+  class and the story section does not already carry it.
 - **Unprobed tool contract** — code that parses another tool's or service's output (sentinels,
   field names, formats, image names, "needs a checkout") with no captured real output as a
   fixture. Inferred contracts are findings even when they happen to be right.

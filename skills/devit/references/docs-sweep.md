@@ -7,14 +7,22 @@ body, the Linear story — and every restatement that still describes the old be
 a review finding later. One agent that holds every claim and checks every restatement is the
 only arrangement that catches drift *between* locations.
 
-**For big stories, split by AUDIENCE, never by location.** Two agents at most:
+**For big stories, split by AUDIENCE, never by location — and keep one claim inventory.**
+Two agents at most, both working from the **same numbered claim list**, which you (the devit
+session) write first by running step 1 of the procedure yourself and passing it as
+`{CLAIM_INVENTORY}`:
 
 1. **Operator / QA-facing** — READMEs, runbook, CLI `--help`, hints, error and status messages,
    env-file and compose comments.
-2. **Code-facing** — code comments, docstrings, commit messages, the PR body, the Linear story.
+2. **Code-facing** — code comments, docstrings, commit messages, the draft PR body, the Linear
+   story.
 
-Splitting by location (one agent for `README.md`, one for `src/`) recreates exactly the
-drift between locations this sweep exists to remove.
+Then **you reconcile**: for every claim, put the two agents' restatement lists side by side and
+check that the operator-facing wording and the code-facing wording agree with each other, not
+only with the code. A CLI hint that matches the code while a comment or the PR body says
+otherwise is a cross-audience contradiction only this step can see. Splitting by location (one
+agent for `README.md`, one for `src/`) recreates exactly the drift this sweep exists to remove;
+splitting by audience without the shared inventory and the reconciliation does the same.
 
 Fill the `{…}` fields, then dispatch.
 
@@ -34,7 +42,16 @@ and every piece of text that claims to describe it**.
   {STORY_OR_ACCEPTANCE_TEXT}
   ```
 
+- The **draft PR body** (the PR does not exist yet; this text will become it):
+
+  ```
+  {DRAFT_PR_BODY}
+  ```
+
 - Audience scope: `{all | operator/QA-facing | code-facing}`.
+- Claim inventory: `{CLAIM_INVENTORY or "none — build it in step 1"}`. When one is supplied,
+  use its numbering verbatim and do not add, merge or renumber claims; report any claim you
+  believe is missing from it under `## Inventory gaps` instead.
 
 ## Procedure
 
@@ -53,7 +70,8 @@ and every piece of text that claims to describe it**.
    - `README*`, `docs/**`, runbooks, `CHANGELOG`, ADRs;
    - `.env*`, `*.env.example`, compose and config files and their comments;
    - test names and test fixture comments that describe behaviour;
-   - the PR body and the Linear story text given above.
+   - the draft PR body and the Linear story text given above (treat both as restatements;
+     they are not authoritative over the code).
 
 3. **Classify each restatement** against the claim as it now stands in the code:
    - **stale** — describes the old behaviour;
@@ -82,6 +100,9 @@ and every piece of text that claims to describe it**.
 
 ## Missing (asked for by the story, absent from the diff)
 - <acceptance line quoted> — where it should live
+
+## Inventory gaps (only when a claim inventory was supplied)
+- <claim the diff alters that the inventory does not list>
 
 ## Summary
 <stale: N · overclaiming: N · contradicting: N · missing: N · consistent: N>

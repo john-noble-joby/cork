@@ -140,9 +140,18 @@ Evidence from edge-fmt PRs #534 and #537 (2026-10): Copilot ran 6 and 11 passes,
 clean pass five more passes *each* found one or two real items. Every late item belonged to a
 class that could have been swept before the first review, and about a third of all findings
 were stale docs, comments, hints or help text. This phase sweeps those classes **once, before
-any reviewer sees the diff**. Each item produces a short artifact; paste all six into the PR
-body (Phase 5) under `## Pre-review sweep`, so reviewers check an inventory instead of
-rediscovering it one item per pass.
+any reviewer sees the diff**. Each item produces a short artifact. Write them as they are
+produced into one file **outside the repo** so nothing can be committed by accident:
+
+```bash
+SWEEP_DIR="${TMPDIR:-/tmp}/devit-<TICKET>"; mkdir -p "$SWEEP_DIR"
+SWEEP="$SWEEP_DIR/pre-review-sweep.md"      # starts with the line "## Pre-review sweep"
+```
+
+That file is what every reviewer sees: Phase 4 passes it to each cork reviewer inside the
+story file (cork reviewers receive only story + diff + changed files + standards — the
+session's artifacts never reach them any other way), and Phase 5 pastes it into the PR body.
+Reviewers then check an inventory instead of rediscovering it one item per pass.
 
 Skip an item only when the diff genuinely has none of that kind of change — write the heading
 with "none" under it rather than omitting it, so the absence is a claim a reviewer can check.
@@ -154,7 +163,7 @@ with "none" under it rather than omitting it, so the absence is a claim a review
 | c | **Contract probes.** For every external tool or API whose output the change parses — Docker, git, a CLI, a sibling service — run the real command once in each state that matters (present / missing / error) and capture the real output into a test fixture. Never infer a sentinel (`<no value>`), a field name (`host-gateway-ip` vs `-ips`) or a format from memory. | List: command → states probed → fixture path. |
 | d | **Upstream-drift check.** For every repo or service the story depends on, fetch its `main` now and diff the contract the change touches — routes, auth requirements, schema, env names — against what the story assumed. A dependency that moved before the branch was cut is a design change to raise with the user, not a finding to absorb in pass 7. | List: dependency → ref fetched → drift found / none. |
 | e | **Platform / network matrix.** When behaviour varies by viewpoint or platform — host vs container, Linux vs macOS, loopback vs gateway vs daemon override — write the full matrix with every cell filled: expected value and the test that proves it. An unwritten cell is a finding waiting for a later pass. | Matrix with a test per cell. |
-| f | **Docs & wording sweep.** Dispatch **one** subagent with the prompt in `references/docs-sweep.md`. It lists every behaviour claim the diff alters, greps every restatement of each claim across the repo (comments, docstrings, help, hints, messages, READMEs, runbook, env and compose comments, PR body, Linear), and reports stale, overclaiming or contradicting text plus documentation the acceptance criteria asked for that the diff lacks. For a big story split by **audience** (operator/QA-facing vs code-facing), never by location. Fix its findings before Phase 4. | Its report, condensed to claim → restatements checked → fixed. |
+| f | **Docs & wording sweep.** First **draft the PR body now** — the "In plain terms" section plus artifacts a–e — and save it as `$SWEEP_DIR/pr-body.md`; the PR does not exist yet, and the sweep must check the body's claims too. Then dispatch **one** subagent with the prompt in `references/docs-sweep.md`, passing the worktree, base, story text and that draft body. It lists every behaviour claim the diff alters, greps every restatement of each claim across the repo (comments, docstrings, help, hints, messages, READMEs, runbook, env and compose comments, the draft PR body, the story), and reports stale, overclaiming or contradicting text plus documentation the acceptance criteria asked for that the diff lacks. For a big story the prompt file describes the **audience** split (operator/QA-facing vs code-facing) — you write the claim inventory once, both agents check restatements against it, and you reconcile the two reports per claim; never split by location. Fix its findings before Phase 4 and update the draft body. | Its report, condensed to claim → restatements checked → fixed. |
 
 Run the repo's tests again and commit the sweep. Only now move to Phase 4.
 
@@ -164,6 +173,19 @@ Run the usual cork **full** review→fix flow on the branch (invoke/follow the `
 skill): per-model blind review → apply the valid findings or **push back with
 justification** → commit after each model. Record every pushback for the Phase 7
 summary. cork's `preflight` picks the models available on this seat.
+
+**Give every reviewer the sweep.** Write the story file once — the story text followed by
+the Phase 3.5 artifacts — and add `--story-file` to each `--review-model` call the cork skill
+makes:
+
+```bash
+{ cat "$SWEEP_DIR/story.txt"; echo; cat "$SWEEP"; } > "$SWEEP_DIR/story.md"   # story.txt = the Linear story text
+python3 "$CORK_HOME/orchestrate.py" <TICKET> . --review-model <MODEL> --base-branch develop --story-file "$SWEEP_DIR/story.md"
+```
+
+The reviewer prompt then carries `## Pre-review sweep` inside `## Story / Task`, which is
+what the standards' *Long-tail classes* section tells reviewers to check. Without the flag,
+API and prompt-only lanes see only the diff and will apply those classes to the diff alone.
 
 (Pauses per reviewer when `interactive_review` is on — see Notes.)
 
@@ -178,20 +200,23 @@ reviewer's fixes.
 Push the branch and open a PR with `gh`:
 - **Title** starts with `<TICKET>: ` — e.g. `MXE-123: Add per-station backdoor routing`.
 - **Body** MUST include an **"In plain terms"** section: what this PR **does / adds /
-  removes**, in non-jargon language. Follow with the `## Pre-review sweep` artifacts from
-  Phase 3.5, a short bullet list of what each review pass caught, and the Linear ticket URL
-  at the bottom.
+  removes**, in non-jargon language. Start from the draft in `$SWEEP_DIR/pr-body.md` (the
+  docs sweep already checked its claims) — it carries the `## Pre-review sweep` artifacts from
+  Phase 3.5. Follow with a short bullet list of what each review pass caught, and the Linear
+  ticket URL at the bottom.
 - Base branch: `develop`. Not a draft.
 
 ## Phase 6 — Copilot review loop
 
-Run the `copilot-review-loop` skill on the PR. For each addressed item: leave a reply
-comment and **mark the thread resolved**. Where a finding is wrong or out-of-scope,
-**push back with justification** and resolve. Record pushbacks for Phase 7. (The loop
-already handles request → poll → fix/push-back → re-request up to its max passes.)
+Run the `copilot-review-loop` skill on the PR **with `max=4`** — state it when invoking the
+skill (its own default is 3, so the loop would otherwise stop before the budget below ever
+applies). For each addressed item: leave a reply comment and **mark the thread resolved**.
+Where a finding is wrong or out-of-scope, **push back with justification** and resolve.
+Record pushbacks for Phase 7. (The loop already handles request → poll → fix/push-back →
+re-request up to its max passes.)
 
-**Pass budget: about four.** If Copilot is still finding items after four passes, stop
-re-requesting one item at a time. A run of single-item passes means a Phase 3.5 class was
+**Pass budget: four.** If Copilot is still finding items when the loop stops at four, do not
+restart it one item at a time. A run of single-item passes means a Phase 3.5 class was
 missed, not that the reviewer is thorough: name the class, sweep it in one commit (siblings,
 the rest of the input domain, the unprobed tool, the unwritten matrix cells, the other
 restatements), and re-request once. Push back on items outside the story instead of fixing
