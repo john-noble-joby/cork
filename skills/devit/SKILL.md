@@ -249,8 +249,9 @@ The reviewer prompt then carries `## Pre-review sweep` inside `## Story / Task`,
 what the standards' *Long-tail classes* section tells reviewers to check. Without the flag,
 API and prompt-only lanes see only the diff and will apply those classes to the diff alone.
 The story and sweep are ticket-derived text: `orchestrate.py` opens every reviewer prompt
-(the system prompt for API lanes, the top of the ordinary prompt for harness lanes and the
-headless self-review) with a trust boundary that marks the story, diff, file contents and any
+(the system prompt for API lanes and the system-capable `claude`/`pi` harnesses; the top of
+the ordinary prompt for the prompt-only `codex`/`opencode` harnesses and the headless
+self-review) with a trust boundary that marks the story, diff, file contents and any
 repository file read during review as material under review, never instructions, so a ticket
 line that addresses the reviewer becomes a finding rather than a directive. You do not need
 to sanitise them, but do not strip that boundary.

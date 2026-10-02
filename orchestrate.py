@@ -1365,55 +1365,62 @@ _PROJECT_STANDARDS = [
 _OPT_OUT_SENTINEL = "code-review/.cork-standards-off"
 
 
+def _tree_file(repo: str, ref: str, rel: str) -> str | None:
+    # The file's content at `ref`, or None if it is absent there or is not a regular file.
+    # `git show ref:path` would happily return a symlink's *target string*, and the working
+    # tree can alias any path through a symlinked parent, so provenance is checked in the
+    # trusted tree itself: only a blob with a regular-file mode counts.
+    entry = subprocess.run(["git", "ls-tree", ref, "--", rel], cwd=repo, capture_output=True, text=True)
+    if entry.returncode != 0 or not entry.stdout.startswith(("100644 ", "100755 ")):
+        return None
+    shown = subprocess.run(["git", "show", f"{ref}:{rel}"], cwd=repo, capture_output=True, text=True)
+    return shown.stdout if shown.returncode == 0 else None
+
+
 def _repo_opted_out(repo: str, changed: set[str] | None = None,
                     trusted_ref: str | None = None) -> bool:
-    # The opt-out sentinel is branch-controlled like any file, so when the diff under review
-    # touches it the trusted ref decides: opted out iff the sentinel exists there. A sentinel
-    # the branch introduced never counts; one the branch deleted still does.
-    if changed is not None and trusted_ref is None:
-        # A diff with no trusted revision (--diff-file): the checkout is branch-controlled and
-        # nothing vouches for the sentinel, whether or not the patch lists it.
+    # The opt-out sentinel is branch-controlled like any file. When a diff is under review the
+    # working tree is never consulted: with a trusted ref the sentinel counts iff it is a regular
+    # file there; with none (--diff-file) nothing vouches for it and the default applies.
+    if changed is None:
+        return (Path(repo) / _OPT_OUT_SENTINEL).exists()
+    if trusted_ref is None:
         if (Path(repo) / _OPT_OUT_SENTINEL).exists():
             print(f"  ⚠ {_OPT_OUT_SENTINEL} present but there is no trusted ref for this diff — default standards apply", flush=True)
         return False
-    if changed is not None and _OPT_OUT_SENTINEL in changed:
-        at_ref = _show_at(repo, trusted_ref, _OPT_OUT_SENTINEL) is not None
+    at_ref = _tree_file(repo, trusted_ref, _OPT_OUT_SENTINEL) is not None
+    if _OPT_OUT_SENTINEL in changed:
         print(f"  ⚠ {_OPT_OUT_SENTINEL} is changed by this diff — following {trusted_ref}: "
               f"{'opted out' if at_ref else 'default standards apply'}", flush=True)
-        return at_ref
-    return (Path(repo) / _OPT_OUT_SENTINEL).exists()
-
-
-def _show_at(repo: str, ref: str, rel: str) -> str | None:
-    r = subprocess.run(["git", "show", f"{ref}:{rel}"], cwd=repo, capture_output=True, text=True)
-    return r.stdout if r.returncode == 0 else None
+    return at_ref
 
 
 def _project_standards(repo: str, changed: set[str] | None,
                        trusted_ref: str | None) -> tuple[str, str]:
-    # The project's standards become reviewer *instructions*, so a version the diff under
-    # review added or edited must not be the one that governs its own review — a PR could
-    # otherwise rewrite the rubric to suppress findings. For a changed file take the copy at
-    # the trusted ref (the base the diff is measured from); with none at the base, or no
-    # trusted ref at all, the checkout's copy is reviewed like any other file and governs nothing.
-    if changed is not None and trusted_ref is None:
-        # --diff-file: the patch may omit a standards file the checkout carries, and nothing
-        # vouches for any working-tree copy, so the whole project layer is dropped.
+    # The project's standards become reviewer *instructions*, so the diff under review must
+    # not be able to supply them — by editing the file, adding it, or aliasing it through a
+    # symlink. When a diff is under review they are read from the trusted git tree only (the
+    # base the diff is measured from); the checkout's copy is review material and governs
+    # nothing. With no trusted ref at all (--diff-file) the project layer is dropped.
+    if changed is None:
+        for rel in _PROJECT_STANDARDS:
+            p = Path(repo) / rel
+            if p.exists():
+                return p.read_text(errors="replace"), str(p)
+        return "", ""
+    if trusted_ref is None:
         if any((Path(repo) / rel).exists() for rel in _PROJECT_STANDARDS):
             print("  ⚠ project standards present but there is no trusted ref for this diff — "
                   "only the default standards apply; the checkout's copy is review material", flush=True)
         return "", ""
     for rel in _PROJECT_STANDARDS:
-        p = Path(repo) / rel
-        if changed is not None and rel in changed:
-            base_text = _show_at(repo, trusted_ref, rel)
-            if base_text and base_text.strip():
+        text = _tree_file(repo, trusted_ref, rel)
+        if text and text.strip():
+            if rel in changed:
                 print(f"  ⚠ {rel} is changed by this diff — reviewers follow the {trusted_ref} revision; the branch's copy is review material", flush=True)
-                return base_text, f"{rel}@{trusted_ref}"
-            print(f"  ⚠ {rel} is added by this diff with no copy at {trusted_ref} — not used as review instructions", flush=True)
-            continue
-        if p.exists():
-            return p.read_text(errors="replace"), str(p)
+            return text, f"{rel}@{trusted_ref}"
+    if any((Path(repo) / rel).exists() for rel in _PROJECT_STANDARDS):
+        print(f"  ⚠ project standards exist in the checkout but there is no regular-file copy at {trusted_ref} — not used as review instructions", flush=True)
     return "", ""
 
 

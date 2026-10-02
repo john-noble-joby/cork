@@ -54,7 +54,7 @@ class LayeringTest(unittest.TestCase):
         self.assertEqual((text, label), ("", ""))
 
 
-def _git(repo, *args):
+def _git(repo: Path, *args: str) -> str:
     import subprocess
     return subprocess.run(["git", "-c", "user.name=T", "-c", "user.email=t@example.com", *args],
                           cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
@@ -84,7 +84,7 @@ class BranchControlledStandardsTest(unittest.TestCase):
         orchestrate._DEFAULT_STANDARDS = self._std
         self.tmp.cleanup()
 
-    def _load(self, changed, ref="main"):
+    def _load(self, changed: set[str], ref: str | None = "main") -> tuple[str, str, str]:
         import io, contextlib
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -97,9 +97,10 @@ class BranchControlledStandardsTest(unittest.TestCase):
         text, label, out = self._load({"code-review/AGENTS.md", "a.py"})
         self.assertIn("BASE RULES", text); self.assertNotIn("BRANCH RULES", text)
         self.assertIn("@main", label); self.assertIn("review material", out)
-        # untouched by the diff: the working-tree copy governs as before
+        # with a trusted ref the working tree is never consulted, even when the diff does not
+        # list the file: an uncommitted or aliased copy cannot slip in either
         text, label, _ = self._load({"a.py"})
-        self.assertIn("BRANCH RULES", text); self.assertNotIn("@main", label)
+        self.assertIn("BASE RULES", text); self.assertNotIn("BRANCH RULES", text); self.assertIn("@main", label)
 
     def test_standards_added_by_the_branch_govern_nothing(self):
         _git(self.repo, "rm", "-q", "code-review/AGENTS.md"); _git(self.repo, "commit", "-qm", "drop")
@@ -111,7 +112,7 @@ class BranchControlledStandardsTest(unittest.TestCase):
         (self.repo / "code-review" / "AGENTS.md").write_text("BRANCH RULES"); _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "add rules")
         text, label, out = self._load({"code-review/AGENTS.md"})
         self.assertEqual(text, "UNIVERSAL"); self.assertNotIn("BRANCH RULES", text)
-        self.assertIn("no copy at main", out)
+        self.assertIn("no regular-file copy at main", out)
 
     def test_without_a_trusted_ref_the_whole_project_layer_is_dropped(self):
         # --diff-file: nothing vouches for the checkout, whether or not the patch lists the file
@@ -127,12 +128,33 @@ class BranchControlledStandardsTest(unittest.TestCase):
         (self.repo / "code-review" / ".cork-standards-off").write_text("")
         text, _, out = self._load({"code-review/.cork-standards-off"})
         self.assertIn("UNIVERSAL", text); self.assertIn("default standards apply", out)
-        text, _, _ = self._load({"a.py"})   # sentinel not part of the diff: honoured as before
-        self.assertNotIn("UNIVERSAL", text)
+        text, _, _ = self._load({"a.py"})   # not listed by the diff either: only the trusted ref counts
+        self.assertIn("UNIVERSAL", text)
         # without a trusted ref (--diff-file) a sentinel cannot opt out, listed in the patch or not
         for changed in ({"code-review/.cork-standards-off"}, {"a.py"}):
             text, _, out = self._load(changed, ref=None)
             self.assertIn("UNIVERSAL", text); self.assertIn("no trusted ref", out)
+
+    def test_symlink_aliases_cannot_supply_standards_or_opt_out(self):
+        # (1) a symlinked parent in the checkout: code-review -> alias/ holding a sentinel; git
+        # lists only "code-review", never the logical sentinel path
+        import shutil
+        shutil.rmtree(self.repo / "code-review")
+        (self.repo / "alias").mkdir(); (self.repo / "alias" / ".cork-standards-off").write_text("")
+        (self.repo / "alias" / "AGENTS.md").write_text("ALIASED RULES")
+        (self.repo / "code-review").symlink_to("alias")
+        text, label, _ = self._load({"code-review", "alias/.cork-standards-off", "alias/AGENTS.md"})
+        self.assertIn("UNIVERSAL", text); self.assertIn("BASE RULES", text); self.assertNotIn("ALIASED RULES", text)
+        # (2) a symlink committed at the trusted ref is not a regular file and never counts
+        (self.repo / "code-review").unlink(); shutil.rmtree(self.repo / "alias")
+        _git(self.repo, "checkout", "-q", "--", "."); _git(self.repo, "checkout", "-q", "main")
+        _git(self.repo, "rm", "-rq", "code-review")
+        (self.repo / "rules.md").write_text("TARGET RULES")
+        (self.repo / "code-review").mkdir(); (self.repo / "code-review" / "AGENTS.md").symlink_to("../rules.md")
+        _git(self.repo, "add", "-A"); _git(self.repo, "commit", "-qm", "symlinked standards at base")
+        text, label, out = self._load({"rules.md"})
+        self.assertEqual(text, "UNIVERSAL"); self.assertNotIn("TARGET RULES", text)
+        self.assertIn("no regular-file copy at main", out)
 
     def test_trusted_ref_opt_out_survives_branch_deleting_or_editing_the_sentinel(self):
         # the base opted out; the branch deletes (or rewrites) the sentinel — the base decides
