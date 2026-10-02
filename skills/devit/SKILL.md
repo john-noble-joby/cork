@@ -58,11 +58,14 @@ acceptance criteria, type/labels, and links.
   # Private to this user (story text and a draft PR body are not for a shared /tmp).
   # Shell variables do not survive between tool calls or across the human gates: every later
   # snippet recomputes this same deterministic path rather than relying on $SWEEP_DIR being set.
-  SWEEP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/devit/<TICKET>"; mkdir -p -m 700 "$SWEEP_DIR"
+  SWEEP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/devit/<TICKET>"
+  mkdir -p "$SWEEP_DIR" && chmod 700 "$SWEEP_DIR"   # chmod, not -m: an existing dir keeps its old mode otherwise
+  printf '%s\n' "$SWEEP_DIR"                         # the Write tool gets a literal path — use this printed one
   ```
-  Then `Write` `$SWEEP_DIR/story.txt` with the title, description and acceptance criteria
+  Then `Write` `<printed path>/story.txt` with the title, description and acceptance criteria
   exactly as fetched, as markdown (`<TICKET>: <title>`, the description, then
-  `## Acceptance criteria` and the criteria).
+  `## Acceptance criteria` and the criteria). The Write tool does not expand shell variables,
+  so pass the absolute path the snippet printed, never `$SWEEP_DIR/…`.
 - **Type:** classify feature vs. bug — Linear issue type/label first; else infer
   from content ("bug", "fix", "regression", an error report). This decides the
   branch prefix in Phase 2.

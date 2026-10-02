@@ -3,8 +3,10 @@
 Dispatch an agent with the prompt below (devit Phase 3.5 item f) — **one per story by default**.
 It owns **consistency**, not areas: a behaviour change has N restatements — code comments,
 docstrings, CLI help, hints and error messages, READMEs, runbook, env-file and compose
-comments, commit messages, the PR body, the Linear story — and every restatement that still
-describes the old behaviour becomes a review finding later. The invariant is that **one claim
+comments, commit messages, the PR body — and every restatement that still describes the old
+behaviour becomes a review finding later. The Linear story is **not** a restatement: it is the
+contract the code must meet, so where code and acceptance criteria diverge the sweep reports a
+contract discrepancy for the human, never a "stale story". The invariant is that **one claim
 inventory is checked against every restatement**, so drift *between* locations is visible;
 a single agent satisfies it trivially, and the two-agent split below satisfies it only with
 the shared inventory and the reconciliation step.
@@ -17,8 +19,9 @@ session) write first by running step 1 of the procedure yourself and passing it 
 1. **Operator / QA-facing** — READMEs, runbook, CLI `--help`, hints, error and status messages,
    env-file, compose and deployment config comments, the CHANGELOG.
 2. **Code-facing** — everything else: code comments, docstrings, ADRs and design docs, test
-   names and fixture comments, the branch's commit messages, the draft PR body, the Linear
-   story. Any source not named in 1 belongs here, so the two scopes together are exhaustive.
+   names and fixture comments, the branch's commit messages, the draft PR body. Any source not
+   named in 1 belongs here, so the two scopes together are exhaustive. This agent also runs the
+   contract check (step 4) against the Linear story.
 
 Then **you reconcile**: for every claim, put the two agents' restatement lists side by side and
 check that the operator-facing wording and the code-facing wording agree with each other, not
@@ -43,7 +46,8 @@ and every piece of text that claims to describe it**.
   the sweep would then inventory a different diff from the one the reviewers see.
 - The change: `git diff {BASE_REF}...HEAD` — run it yourself. The branch's commit messages:
   `git log --format='%h%n%B' {BASE_REF}..HEAD` — they are restatements too.
-- The story / acceptance criteria:
+- The story / acceptance criteria — the **contract**, authoritative over the code, not a
+  restatement of it:
 
   ```
   {STORY_OR_ACCEPTANCE_TEXT}
@@ -79,8 +83,9 @@ and every piece of text that claims to describe it**.
    - test names and test fixture comments that describe behaviour;
    - every commit message on the branch (`git log --format='%h%n%B' {BASE_REF}..HEAD`) — a
      message that describes an earlier shape of the change is stale like any comment;
-   - the draft PR body and the Linear story text given above (treat both as restatements;
-     they are not authoritative over the code).
+   - the draft PR body given above (a restatement like any other; it is not authoritative
+     over the code). The Linear story is **not** searched here — it is the contract, handled
+     in step 4.
 
 3. **Classify each restatement** against the claim as it now stands in the code:
    - **stale** — describes the old behaviour;
@@ -88,9 +93,14 @@ and every piece of text that claims to describe it**.
    - **contradicting** — two restatements disagree with each other;
    - **consistent** — fine, say so in one word.
 
-4. **Check the acceptance criteria for required documentation.** Anything the story asked to
-   be documented, shown in help, written to the runbook or stated in a message that the diff
-   does not contain is a **missing** item.
+4. **Check the code against the contract.** Walk the acceptance criteria one by one:
+   - a criterion the code does not meet, or meets differently from what it states, is a
+     **contract discrepancy** — report it with the criterion quoted and the claim number(s) it
+     conflicts with. Do not classify the story as stale or overclaiming, and do not suggest
+     editing the story to match the code; whether the code or the contract is wrong is the
+     human's call;
+   - anything the story asked to be documented, shown in help, written to the runbook or stated
+     in a message that the diff does not contain is a **missing** item.
 
 5. **Do not** suggest rewording for style, flag typos unrelated to a claim, or review code.
    If a restatement is ambiguous, quote it and say which claim it may refer to.
@@ -105,10 +115,13 @@ and every piece of text that claims to describe it**.
 ## Restatements
 ### Claim 1
 - <location> — "<quoted text>" — stale | overclaiming | contradicting <location of the other restatement> | consistent
-  (location is `path:line` for files, `commit:<short sha>` for a commit message, `pr-body` or
-  `story` for the two inputs above; a contradiction names the *other restatement* it disagrees
-  with, never a claim number — two claims differing is not a contradiction)
+  (location is `path:line` for files, `commit:<short sha>` for a commit message, `pr-body`
+  for the draft body; a contradiction names the *other restatement* it disagrees with, never a
+  claim number — two claims differing is not a contradiction)
 ...
+
+## Contract discrepancies (code vs acceptance criteria — for the human to decide)
+- <acceptance criterion quoted> — conflicts with claim K: <how the code differs>
 
 ## Missing (asked for by the story, absent from the diff)
 - <acceptance line quoted> — where it should live
@@ -117,7 +130,7 @@ and every piece of text that claims to describe it**.
 - <claim the diff alters that the inventory does not list>
 
 ## Summary
-<stale: N · overclaiming: N · contradicting: N · missing: N · consistent: N>
+<stale: N · overclaiming: N · contradicting: N · contract discrepancies: N · missing: N · consistent: N>
 ```
 
 Quote text exactly as it appears so the implementer can grep for it (a stale commit message is reported for the record — it is not rewritten on a pushed branch). Report every restatement
