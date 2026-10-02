@@ -52,7 +52,8 @@ acceptance criteria, type/labels, and links.
 - **Persist the story text** — reviewers and the docs sweep read it from a file later, and
   nothing else writes it:
   ```bash
-  SWEEP_DIR="${TMPDIR:-/tmp}/devit-<TICKET>"; mkdir -p "$SWEEP_DIR"
+  # Private to this user (story text and a draft PR body are not for a shared /tmp):
+  SWEEP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/devit/<TICKET>"; mkdir -p -m 700 "$SWEEP_DIR"
   # title, description and acceptance criteria exactly as fetched, as markdown:
   cat > "$SWEEP_DIR/story.txt" <<'STORY'
   <TICKET>: <title>
@@ -85,18 +86,24 @@ estimate from the story's scope and judge.
 2. **STOP — wait for the user to verify/adjust. Do not write to Linear yet.**
 3. **After confirmation, write it to Linear** via MCP: create the new sub-stories
    (and/or adjust existing ones), linked to the parent.
-4. Proceed with the first slice as the active story for the rest of the run.
+4. Proceed with the first slice as the active story for the rest of the run — and **rewrite
+   `$SWEEP_DIR/story.txt` from that sub-story** (its title, description and acceptance
+   criteria, fetched back from Linear after creation). Reviewers and the docs sweep read that
+   file; left as written in Phase 0 it would hold the parent's broader acceptance criteria and
+   every lane would judge the slice against the wrong contract.
 
 ## Phase 2 — Setup (worktree + branch)
 
-Base is `develop` (override if the user says otherwise). Derive `<slug>` as short
+Base is `develop` (override if the user says otherwise — set `BASE` once here and use it
+everywhere below, including the Phase 4 reviewer calls). Derive `<slug>` as short
 kebab-case from the story title. Prefix `feature/` (or `bugfix/` if Phase 0 found a
 bug). All work happens in the worktree, not the main checkout.
 
 ```bash
-git fetch origin develop
+BASE=develop                   # or what the user said
+git fetch origin "$BASE"
 BR="feature/<TICKET>-<slug>"   # or bugfix/<TICKET>-<slug>
-git worktree add ".worktrees/$BR" -b "$BR" origin/develop
+git worktree add ".worktrees/$BR" -b "$BR" "origin/$BASE"
 cd ".worktrees/$BR"
 ```
 
@@ -131,7 +138,7 @@ refreshes it and carries it into the sweep.
 **Do NOT begin Phase 3 until the user explicitly replies.** Invoking devit does not pass
 this gate; creating the worktree does not pass it. Post exactly this line and then wait:
 
-`devit: <TICKET> | <BR> | worktree .worktrees/<BR> | base develop | upstream drift: none / <what moved> — start? (split needed: yes/no)`
+`devit: <TICKET> | <BR> | worktree .worktrees/<BR> | base <BASE> | upstream drift: none / <what moved> — start? (split needed: yes/no)`
 
 If you catch yourself about to edit a file or dispatch an implementer before the user has
 answered this line — STOP. That is the exact failure this gate exists to prevent.
@@ -197,10 +204,10 @@ the Phase 3.5 artifacts — and add `--story-file` to each `--review-model` call
 makes:
 
 ```bash
-# story.txt was written in Phase 0, pre-review-sweep.md in Phase 3.5; refuse to review without both
+# story.txt: Phase 0, rewritten in Phase 1 after a split. pre-review-sweep.md: Phase 3.5. Refuse without both.
 [ -s "$SWEEP_DIR/story.txt" ] && [ -s "$SWEEP" ] || { echo "missing story.txt or sweep in $SWEEP_DIR"; exit 1; }
 cat "$SWEEP_DIR/story.txt" "$SWEEP" > "$SWEEP_DIR/story.md"
-python3 "$CORK_HOME/orchestrate.py" <TICKET> . --review-model <MODEL> --base-branch develop --story-file "$SWEEP_DIR/story.md"
+python3 "$CORK_HOME/orchestrate.py" <TICKET> . --review-model <MODEL> --base-branch "origin/$BASE" --story-file "$SWEEP_DIR/story.md"
 ```
 
 The reviewer prompt then carries `## Pre-review sweep` inside `## Story / Task`, which is
@@ -224,7 +231,7 @@ Push the branch and open a PR with `gh`:
   docs sweep already checked its claims) — it carries the `## Pre-review sweep` artifacts from
   Phase 3.5. Follow with a short bullet list of what each review pass caught, and the Linear
   ticket URL at the bottom.
-- Base branch: `develop`. Not a draft.
+- Base branch: `$BASE` (`develop` unless the user overrode it in Phase 2). Not a draft.
 
 ## Phase 6 — Copilot review loop
 
