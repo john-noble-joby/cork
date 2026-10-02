@@ -1459,14 +1459,21 @@ def _universal_standards(repo: str, changed: set[str] | None, base_ref: str | No
     # that file is inside the repo under review, so a branch edit to standards/AGENTS.md would
     # become system instructions for that branch's review. In that case the rubric is read from
     # the trusted git tree like the project layer; with no trusted ref it is dropped.
-    # Containment is decided without following the leaf: the checkout controls that path when
-    # cork reviews itself, so a branch could replace the file with a symlink (making the target
-    # look "external") or delete it (making exists() false) to escape the trusted read.
-    nominal = _DEFAULT_STANDARDS.parent.resolve() / _DEFAULT_STANDARDS.name
-    try:
-        rel = nominal.relative_to(Path(repo).resolve()).as_posix()
-    except ValueError:
-        rel = None   # the usual case: the default standards live outside the repo under review
+    # Containment is decided lexically, following no symlink at all: the checkout controls
+    # every path component under the repo when cork reviews itself, so a branch could replace
+    # the file with a symlink (making the target look "external"), delete it (making exists()
+    # false) or swap the `standards/` parent for a symlink (`standards -> .`, redirecting the
+    # lookup to another blob) to escape or redirect the trusted read. The shipped path is
+    # compared as written against the repo root, both as given and resolved.
+    nominal = Path(os.path.normpath(_DEFAULT_STANDARDS if _DEFAULT_STANDARDS.is_absolute()
+                                    else Path.cwd() / _DEFAULT_STANDARDS))
+    rel = None   # the usual case: the default standards live outside the repo under review
+    for root in {Path(os.path.normpath(Path(repo).absolute())), Path(repo).resolve()}:
+        try:
+            rel = nominal.relative_to(root).as_posix()
+            break
+        except ValueError:
+            continue
     if changed is None or rel is None:
         return _DEFAULT_STANDARDS.read_text(errors="replace") if _DEFAULT_STANDARDS.exists() else ""
     if base_ref is None:
