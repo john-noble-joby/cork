@@ -29,6 +29,8 @@ procedure in the README's *Versioning* section.
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-10-02
+
 ### Added
 - **`cork` command.** `bin/cork` is a six-line shim that resolves its own symlink chain and
   execs the `orchestrate.py` of the clone it lives in; `install.sh` links it at
