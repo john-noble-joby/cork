@@ -156,6 +156,19 @@ class BranchControlledStandardsTest(unittest.TestCase):
         self.assertEqual(text, "UNIVERSAL"); self.assertNotIn("TARGET RULES", text)
         self.assertIn("no regular-file copy at main", out)
 
+    def test_empty_standards_file_at_trusted_ref_keeps_first_file_precedence(self):
+        # an existing-but-empty code-review/AGENTS.md at the base wins over a lower-priority
+        # root AGENTS.md, exactly as the checkout path's exists() rule does; the empty project
+        # layer is then simply omitted from the prompt
+        _git(self.repo, "checkout", "-q", "main")
+        (self.repo / "code-review" / "AGENTS.md").write_text("")
+        (self.repo / "AGENTS.md").write_text("ROOT RULES")
+        _git(self.repo, "add", "-A"); _git(self.repo, "commit", "-qm", "empty first candidate")
+        text, label, _ = self._load({"a.py"})
+        self.assertEqual(text, "UNIVERSAL"); self.assertNotIn("ROOT RULES", text)
+        plain, _ = orchestrate.load_agent_instructions(str(self.repo))
+        self.assertEqual(plain, "UNIVERSAL")   # checkout path agrees
+
     def test_trusted_ref_opt_out_survives_branch_deleting_or_editing_the_sentinel(self):
         # the base opted out; the branch deletes (or rewrites) the sentinel — the base decides
         _git(self.repo, "checkout", "-q", "main")

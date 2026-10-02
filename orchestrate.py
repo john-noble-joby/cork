@@ -1415,7 +1415,7 @@ def _project_standards(repo: str, changed: set[str] | None,
         return "", ""
     for rel in _PROJECT_STANDARDS:
         text = _tree_file(repo, trusted_ref, rel)
-        if text and text.strip():
+        if text is not None:   # first existing file wins, even when empty — same as the checkout path
             if rel in changed:
                 print(f"  ⚠ {rel} is changed by this diff — reviewers follow the {trusted_ref} revision; the branch's copy is review material", flush=True)
             return text, f"{rel}@{trusted_ref}"
