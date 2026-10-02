@@ -95,7 +95,7 @@ remote-tracking ref such as `origin/develop`, or a local branch) — never prefi
 equals `$CORK_HOME`'s), the shipped lenses are branch material too: read them with
 `git -C "$CORK_HOME" show {BASE}:lenses/<name>.md`, the same exception the engine applies
 to `standards/AGENTS.md`. Fill `{STANDARDS}` with the path of a file written by
-`python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref {BASE} > /tmp/cork-standards-{BRANCH}.md`
+`STANDARDS_FILE=$(mktemp /tmp/cork-standards.XXXXXX); python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "{BASE}" > "$STANDARDS_FILE"`
 (outside the repo; the rubric from the trusted ref through the engine's loader, never the
 checkout's standards files). Skip a lens whose concern the diff does not touch and say so;
 never skip spec-and-test-coverage.
