@@ -254,9 +254,12 @@ reviewer sees the latest diff paired with the pre-fix inventory.
 
 **Fewer passes on a large diff.** When the branch is one large commit that no reviewer has
 seen, run cork **review-only** first — every reviewer in parallel over the same diff, one
-consolidated report — fix everything once, then run full mode. Sequential full-mode passes
-over an unreviewed diff turn each reviewer into an incremental pass over the previous
-reviewer's fixes.
+consolidated report — fix everything once, commit, then run full mode. Sequential full-mode
+passes over an unreviewed diff turn each reviewer into an incremental pass over the previous
+reviewer's fixes. That consolidated fix batch is a fix round like any other: before the first
+full-mode reviewer runs, refresh the sweep items it touched and rebuild `story.md` exactly as
+the paragraph above requires between models, or the first reviewer gets the post-fix diff with
+the pre-fix inventory.
 
 ## Phase 5 — Open the PR
 

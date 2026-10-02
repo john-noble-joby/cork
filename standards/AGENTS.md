@@ -123,8 +123,10 @@ Each recurs across real review history; when a diff fixes one instance, verify t
 ## Long-tail classes (pre-review)
 Review history (edge-fmt #534/#537: 6 and 11 Copilot passes, five single-item passes after a
 "clean" one) shows the items that surface late belong to a few classes that are checkable in
-pass 1 from the diff. Flag these as findings in the **first** pass; do not wait for the instance
-to show up. If the `## Story / Task` section carries a `## Pre-review sweep` inventory (devit
+pass 1 from the diff. When the diff shows a concrete instance of one of these classes, report
+it in the **first** pass — do not defer it to a later pass because it is "only" a sibling, a
+row or a cell; but report only what you can name (which sibling, which row, which probe, which
+cell), never the class in the abstract. If the `## Story / Task` section carries a `## Pre-review sweep` inventory (devit
 writes one and passes it through `--story-file`), verify its claims against the diff instead of
 rebuilding them, and flag a sibling, input row, probe, upstream or matrix cell it omits. If no
 inventory is present, apply each class to the diff directly — **never report the absence of the
