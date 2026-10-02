@@ -61,8 +61,9 @@ files the sub-stories in Linear), cuts a worktree + `feature/` or `bugfix/` bran
 `develop`, implements (parallel `subagent-driven-development` when decomposable — falls
 back to inline if the `superpowers` plugin isn't installed), sweeps the long-tail review
 classes before any reviewer runs (Phase 3.5: surface inventory, input-domain table, contract
-probes, upstream-drift check, platform matrix, and a one-agent docs & wording sweep from
-`references/docs-sweep.md`, each pasted into the PR body), runs cork review+fix, opens a
+probes, upstream-drift check, platform matrix, and a docs & wording sweep from
+`references/docs-sweep.md` — one agent by default, up to two split by audience over a shared
+claim inventory the session reconciles — each pasted into the PR body), runs cork review+fix, opens a
 PR (`<TICKET>:` title + "In plain terms" body + the sweep artifacts), runs the
 `copilot-review-loop` with a ~4-pass budget, and surfaces all pushbacks. Orchestrates the
 other skills; does not auto-merge.

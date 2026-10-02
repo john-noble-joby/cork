@@ -34,8 +34,10 @@ procedure in the README's *Versioning* section.
   devit gains *Phase 3.5 — Pre-review sweep*: six artifacts pasted into the PR body — surface
   inventory for every new gate, input-domain table for every external value, contract probes
   with real output captured as fixtures, upstream-drift check against dependencies' `main`, a
-  platform/network matrix with a test per cell, and a one-agent docs & wording sweep
-  (`skills/devit/references/docs-sweep.md`, split by audience, never by location) — plus a
+  platform/network matrix with a test per cell, and a docs & wording sweep
+  (`skills/devit/references/docs-sweep.md`: one agent by default; for a big story up to two
+  split by audience, never by location, working from one shared claim inventory that the
+  session reconciles) — plus a
   review-only-first note for large diffs and a ~4-pass Copilot budget that treats repeated
   single-item passes as a missed class. The default standards (`standards/AGENTS.md`) and the
   canonical `coding-standards` skill (classes 17–21 and the restatement inventory under

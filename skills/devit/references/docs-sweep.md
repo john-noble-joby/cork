@@ -1,11 +1,13 @@
 # Docs & Wording sweep — subagent prompt
 
-Dispatch **one** agent per story with the prompt below (devit Phase 3.5 item f). It owns
-**consistency**, not areas: a behaviour change has N restatements — code comments, docstrings,
-CLI help, hints and error messages, READMEs, runbook, env-file and compose comments, the PR
-body, the Linear story — and every restatement that still describes the old behaviour becomes
-a review finding later. One agent that holds every claim and checks every restatement is the
-only arrangement that catches drift *between* locations.
+Dispatch an agent with the prompt below (devit Phase 3.5 item f) — **one per story by default**.
+It owns **consistency**, not areas: a behaviour change has N restatements — code comments,
+docstrings, CLI help, hints and error messages, READMEs, runbook, env-file and compose
+comments, commit messages, the PR body, the Linear story — and every restatement that still
+describes the old behaviour becomes a review finding later. The invariant is that **one claim
+inventory is checked against every restatement**, so drift *between* locations is visible;
+a single agent satisfies it trivially, and the two-agent split below satisfies it only with
+the shared inventory and the reconciliation step.
 
 **For big stories, split by AUDIENCE, never by location — and keep one claim inventory.**
 Two agents at most, both working from the **same numbered claim list**, which you (the devit
@@ -13,9 +15,10 @@ session) write first by running step 1 of the procedure yourself and passing it 
 `{CLAIM_INVENTORY}`:
 
 1. **Operator / QA-facing** — READMEs, runbook, CLI `--help`, hints, error and status messages,
-   env-file and compose comments.
-2. **Code-facing** — code comments, docstrings, the branch's commit messages, the draft PR
-   body, the Linear story.
+   env-file, compose and deployment config comments, the CHANGELOG.
+2. **Code-facing** — everything else: code comments, docstrings, ADRs and design docs, test
+   names and fixture comments, the branch's commit messages, the draft PR body, the Linear
+   story. Any source not named in 1 belongs here, so the two scopes together are exhaustive.
 
 Then **you reconcile**: for every claim, put the two agents' restatement lists side by side and
 check that the operator-facing wording and the code-facing wording agree with each other, not
@@ -98,9 +101,10 @@ and every piece of text that claims to describe it**.
 
 ## Restatements
 ### Claim 1
-- <location> — "<quoted text>" — stale | overclaiming | contradicting (with claim K) | consistent
+- <location> — "<quoted text>" — stale | overclaiming | contradicting <location of the other restatement> | consistent
   (location is `path:line` for files, `commit:<short sha>` for a commit message, `pr-body` or
-  `story` for the two inputs above)
+  `story` for the two inputs above; a contradiction names the *other restatement* it disagrees
+  with, never a claim number — two claims differing is not a contradiction)
 ...
 
 ## Missing (asked for by the story, absent from the diff)
