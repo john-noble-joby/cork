@@ -3031,6 +3031,9 @@ def main() -> None:
     # prompts' context. Resolved before preflight so a bad --story-file fails before any probe
     # spends quota, and again after Step 1 when only the fresh checkpoint summary is left.
     story, story_source = resolve_story(tid, args.story_file, args.story, state)
+    # Warned here, not after Step 1: on a fresh run the fallback is replaced by the Step 1
+    # summary below, so this is the only moment the missing contract is visible.
+    _warn_fallback_story(story_source)
 
     # Freeze the selected rotation at first run; reuse it on resume.
     # Never re-preflight on resume — the probes cost Copilot quota and the
@@ -3072,7 +3075,6 @@ def main() -> None:
     else:
         skip(1, total, f"Claude Code: implement {tid}")
     print(f"  Story: {story_source} ({len(story)} chars)")
-    _warn_fallback_story(story_source)
 
     diff       = git_diff_branch(repo, base)
     changed_names = _git_changed_names(repo, f"{base}...HEAD")
@@ -3080,7 +3082,7 @@ def main() -> None:
     if not diff.strip():
         fail("No diff vs base branch — nothing to review.")
     diff_lines = len(diff.splitlines())
-    print(f"  {len(files)} files, {diff_lines} diff lines vs {base}")
+    print(f"  {len(changed_names)} changed paths, {diff_lines} diff lines vs {base}")
 
     # Standards are loaded only now — after Step 1 has implemented and committed — so a
     # rubric or opt-out sentinel the implementation itself added or edited is seen as part

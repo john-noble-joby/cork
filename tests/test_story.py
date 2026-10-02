@@ -19,7 +19,7 @@ class ReviewStoryTest(unittest.TestCase):
             name: getattr(orchestrate, name)
             for name in ("CONFIG_PATH", "load_agent_instructions", "git_diff_branch",
                          "_git_changed_names", "_file_contents", "load_state", "_call_and_extract",
-                         "_probe", "require_base_ref", "git_toplevel", "pin_ref", "preflight", "resolve_story")
+                         "_probe", "require_base_ref", "git_toplevel", "pin_ref", "preflight", "resolve_story", "_state_path")
         }
         self._env = {k: os.environ.get(k) for k in ("XDG_CACHE_HOME",)}
         os.environ["XDG_CACHE_HOME"] = str(Path(self.tmp.name) / "cache")   # no devit scratch unless a test writes one
@@ -118,6 +118,25 @@ class ReviewStoryTest(unittest.TestCase):
         self.assertEqual(cm.exception.code, 99)
         self.assertEqual(seen["story_args"][1], str(self.story_file))
         self.assertTrue(seen["preflight"])
+
+    def test_headless_fresh_run_without_contract_warns_before_preflight(self):
+        # Copilot on PR #33: a fresh run resolves to the fallback, then Step 1 replaces it with
+        # the implementer summary — so the warning must fire before preflight or never.
+        orchestrate.CONFIG_PATH.write_text(json.dumps(orchestrate.DEFAULT_CONFIG))
+        orchestrate._state_path = lambda tid: Path(self.tmp.name) / "no-checkpoint.json"
+        self.addCleanup(setattr, orchestrate, "_state_path", self._originals["_state_path"])
+
+        def fake_preflight(*a, **k):
+            raise SystemExit(99)
+        orchestrate.preflight = fake_preflight
+        out = io.StringIO(); orig = sys.argv; sys.argv = ["orchestrate.py", "TASK-1", self.tmp.name]
+        try:
+            with redirect_stdout(out), self.assertRaises(SystemExit) as cm:
+                orchestrate.main()
+        finally:
+            sys.argv = orig
+        self.assertEqual(cm.exception.code, 99)
+        self.assertIn("no story supplied", out.getvalue())
 
     def _api_prompt(self, **kwargs) -> tuple[str, str]:
         seen = {}
