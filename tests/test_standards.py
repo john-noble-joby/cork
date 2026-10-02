@@ -121,9 +121,22 @@ class BranchControlledStandardsTest(unittest.TestCase):
     def test_branch_added_opt_out_sentinel_does_not_disable_the_default(self):
         (self.repo / "code-review" / ".cork-standards-off").write_text("")
         text, _, out = self._load({"code-review/.cork-standards-off"})
-        self.assertIn("UNIVERSAL", text); self.assertIn("ignoring it", out)
+        self.assertIn("UNIVERSAL", text); self.assertIn("default standards apply", out)
         text, _, _ = self._load({"a.py"})   # sentinel not part of the diff: honoured as before
         self.assertNotIn("UNIVERSAL", text)
+        # without a trusted ref (--diff-file) a changed sentinel cannot opt out either
+        text, _, out = self._load({"code-review/.cork-standards-off"}, ref=None)
+        self.assertIn("UNIVERSAL", text); self.assertIn("no trusted ref", out)
+
+    def test_trusted_ref_opt_out_survives_branch_deleting_or_editing_the_sentinel(self):
+        # the base opted out; the branch deletes (or rewrites) the sentinel — the base decides
+        _git(self.repo, "checkout", "-q", "main")
+        (self.repo / "code-review" / ".cork-standards-off").write_text("")
+        _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "opt out at base")
+        _git(self.repo, "checkout", "-qb", "deletes")
+        _git(self.repo, "rm", "-q", "code-review/.cork-standards-off"); _git(self.repo, "commit", "-qm", "drop sentinel")
+        text, _, out = self._load({"code-review/.cork-standards-off"})
+        self.assertNotIn("UNIVERSAL", text); self.assertIn("opted out", out)
 
 
 class StandardsCmdTest(unittest.TestCase):

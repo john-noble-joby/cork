@@ -284,7 +284,7 @@ class ReviewDiffTest(unittest.TestCase):
         self.assertTrue(prompt.startswith(orchestrate.FIX_BOUNDARY), prompt[:80])
         self.assertLess(prompt.index("Trust boundary:"), prompt.index("## Code Review Findings"))
         self.assertIn(hostile, prompt)                      # the finding still reaches the fixer
-        self.assertIn("quoted material", prompt)
+        self.assertIn("quoted material", " ".join(prompt.split()))   # wrap-tolerant
 
     def test_headless_review_prompt_opens_with_trust_boundary(self):
         # the headless Claude self-review carries the boundary in the ordinary prompt (no
