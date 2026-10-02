@@ -30,6 +30,31 @@ procedure in the README's *Versioning* section.
 ## [Unreleased]
 
 ### Added
+- **Review-input manifest, required context and a configurable budget.** Every API review prints
+  what the model actually saw: the budget split (standards / story / diff / file contents), the
+  changed files sent whole, and the files seen diff-only — over budget, or over 500 lines (with
+  line counts). Large files are omitted instead of being replaced by a size remark that reviewers
+  turned into a finding. `--context-file PATH` (repeatable) names unchanged files the reviewer
+  must see whole — callers, DI wiring, covering tests, restating docs — included under
+  `## Required Context` ahead of the changed files and never dropped: a review that cannot fit
+  them fails with the breakdown. `review_budget_chars` in config.json (default 192000) sets the
+  prompt size per API review for seats whose models have larger windows. cork warns loudly on
+  the fallback story, on a local base behind `origin/<base>`, and on a diff over the 1,500-line
+  soft limit. Closes the context items of #32 (hangar #36, FAST #540).
+- **Lenses.** `lenses/` ships four narrow-concern reviewer prompts (state & concurrency; HTTP
+  contract & store; spec & test coverage; standards & docs) run as parallel read-only subagents.
+  devit gains *Phase 3.75 — Lens gate* before the model rotation and *Phase 6.5 — Final cork
+  re-review* after the Copilot loop (plus a cork re-run during the loop when fixes exceed ~100
+  lines or touch files cork never saw); fix steps everywhere record the defect class and the
+  mutation check in the commit message and stop at a second fix of the same area to propose a
+  design change. The cork skill passes `--story-file` and `--context-file` on every call and
+  reports the rotation that actually completed; the Copilot loop skill defines `max` as a cap
+  on passes that found something, notes that auto-review on push still needs a request, and
+  that the overview is a per-review snapshot. Standards gain an *Evidence discipline* section
+  (independent Boolean clauses, one failure per fixture, failed state before absence
+  assertions, both credential modes and malformed successful responses, contracts traced
+  through unchanged consumers, inspected vs executed, size is not a finding, advice is a
+  claim). Closes #32.
 - **Long-tail review classes are swept before review, not discovered one pass at a time.**
   devit gains *Phase 3.5 — Pre-review sweep*: six artifacts pasted into the PR body — surface
   inventory for every new gate, input-domain table for every external value, contract probes
