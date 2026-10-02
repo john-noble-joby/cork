@@ -1572,7 +1572,29 @@ def _default_rubric_rel(repo: str) -> str | None:
             return nominal.relative_to(root).as_posix()
         except ValueError:
             continue
-    return None
+    # A linked worktree of cork's own clone: lexically the rubric lies outside the worktree,
+    # yet both check out the same repository, so the branch under review can edit the same
+    # blob. Same absolute git common dir → same repository; the rubric is then addressed by
+    # its path inside its own clone's work tree and read from the trusted ref like any other.
+    clone = str(_DEFAULT_STANDARDS.parent.parent)
+    common = _git_common_dir(repo)
+    if common is None or common != _git_common_dir(clone):
+        return None
+    try:
+        return nominal.relative_to(Path(os.path.normpath(Path(git_toplevel(clone)).absolute()))).as_posix()
+    except ValueError:
+        return None
+
+
+def _git_common_dir(path: str) -> Path | None:
+    # Absolute: the plain output is a relative `.git` in a main checkout, so two unrelated
+    # repositories would otherwise compare equal.
+    if not Path(path).is_dir():
+        return None
+    r = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=path, capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    return (Path(path) / r.stdout.strip()).resolve()
 
 
 def _universal_standards(repo: str, changed: set[str] | None, base_ref: str | None) -> str:
@@ -2948,17 +2970,19 @@ def main() -> None:
                             help="Review-only: review a unified diff read from PATH (UTF-8); "
                                  "changed files are taken from its `+++ b/<path>` headers.")
     parser.add_argument("--context-file", metavar="PATH", action="append", dest="context_files",
-                        help="Review-only, repeatable: an unchanged repo file the reviewer must see whole "
-                             "(a caller of a changed symbol, DI wiring, the covering tests, restating docs). "
-                             "Always included in full; the review fails rather than dropping it when it "
-                             "does not fit review_budget_chars.")
+                        help="Review-only, repeatable: a repo file the reviewer must see whole — typically an "
+                             "unchanged dependency (a caller of a changed symbol, DI wiring, the covering tests, "
+                             "restating docs), or a changed file the manifest listed as diff-only (over budget "
+                             "or over 500 lines). Always included in full; the review fails rather than dropping "
+                             "it when it does not fit review_budget_chars.")
     args = parser.parse_args()
     review_only_flags = [f for f, v in (("--diff-range", args.diff_range), ("--diff-file", args.diff_file),
                                         ("--context-file", args.context_files))
                          if v is not None]
     if review_only_flags and not args.review_model:
-        # Otherwise a forgotten --review-model silently turns an intended review into a full
-        # implementation run that ignores the supplied story or diff.
+        # A diff source or required context only means something to a review; without
+        # --review-model a forgotten flag would start a full implementation run that silently
+        # ignores them. (--story/--story-file apply to both modes and are not guarded here.)
         parser.error(f"{'/'.join(review_only_flags)} are review-only flags: add --review-model MODEL")
     if args.diff_file is not None and args.base_branch is not None:
         parser.error("--diff-file has no base: drop --base-branch (with --diff-range it stays the trusted ref for the standards)")

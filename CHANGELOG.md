@@ -34,8 +34,9 @@ procedure in the README's *Versioning* section.
   what the model actually saw: the budget split (standards / story / diff / file contents), the
   changed files sent whole, and the files seen diff-only — over budget, or over 500 lines (with
   line counts). Large files are omitted instead of being replaced by a size remark that reviewers
-  turned into a finding. `--context-file PATH` (repeatable) names unchanged files the reviewer
-  must see whole — callers, DI wiring, covering tests, restating docs — included under
+  turned into a finding. `--context-file PATH` (repeatable) names files the reviewer must see
+  whole — unchanged callers, DI wiring, covering tests, restating docs, or a changed file the
+  manifest listed as diff-only (over budget or over 500 lines) — included under
   `## Required Context` ahead of the changed files and never dropped: a review that cannot fit
   them fails with the breakdown (in bytes on argv-transported lanes); without named context an
   over-budget diff stays a diff-only review. `review_budget_chars` in config.json (default

@@ -239,7 +239,7 @@ applies the same empty-diff guard.
 | `--base-branch BRANCH` | Diff `merge-base(BRANCH, HEAD)...HEAD` (default `origin/develop`). |
 | `--diff-range A..B` | Review `git diff A..B` (or `A...B`) instead — e.g. `old-head..new-head` so a fix round reviews only its delta. Both endpoints must resolve; standards still come from `--base-branch`. |
 | `--diff-file PATH` | Review a unified diff read from PATH; changed files come from its `+++ b/<path>` headers. Paths must carry git's `a/`/`b/` prefixes (`git diff`, or `diff -urN a b`); `diff --git` lines are optional and an unprefixed header is refused. |
-| `--context-file PATH` (repeatable) | An unchanged repo file the reviewer must see whole — a caller of a changed symbol, DI wiring, the covering tests, restating docs. Always included in full under `## Required Context`; the review fails rather than dropping it when it does not fit the budget. |
+| `--context-file PATH` (repeatable) | Any repo file the reviewer must see whole — typically an unchanged dependency (a caller of a changed symbol, DI wiring, the covering tests, restating docs), or a changed file the manifest listed as diff-only (over budget or over 500 lines) that a focused packet forces into full context. Always included in full under `## Required Context`; the review fails rather than dropping it when it does not fit the budget. |
 | `--skip-validation` | Skip the model availability probe. |
 
 Keep stories to a few KB: large stories crowd changed-file contents out of API lane budgets, while

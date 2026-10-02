@@ -93,6 +93,11 @@ RUN_DIR=$(mktemp -d /tmp/cork-run.XXXXXX)        # per run; never inside the wor
 STORY_FILE="$RUN_DIR/story.md"                   # the ticket (Linear MCP) or the user's stated contract — Write it now
 STANDARDS_FILE="$RUN_DIR/standards.md"
 python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "{BASE}" > "$STANDARDS_FILE"
+# Blast radius the diff does not show: callers of changed symbols, DI/registration wiring, the
+# covering tests, docs that restate the behaviour — plus any changed file the manifest later lists
+# as diff-only (over budget or over 500 lines) that the story depends on. Repo-relative paths.
+CONTEXT_FILES=( )                                 # <- fill from grep/LSP over the changed symbols
+CONTEXT_ARGS=(); for f in "${CONTEXT_FILES[@]}"; do CONTEXT_ARGS+=(--context-file "$f"); done
 ```
 
 Do not dispatch a lens until `$STORY_FILE` has content: the spec-and-test-coverage lens has
@@ -139,8 +144,12 @@ Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it p
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch {BASE} --story-file "$STORY_FILE"
+python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch {BASE} --story-file "$STORY_FILE" "${CONTEXT_ARGS[@]}"
 ```
+
+`"${CONTEXT_ARGS[@]}"` is the array built in Step 2; it is how callers, wiring, tests and docs
+reach a blind lane — prose cannot deliver them. Expand it after each pass when the manifest
+shows a file the story depends on was seen diff-only.
 
 `--story-file` is **required on every call**: pass the `$STORY_FILE` written in Step 2 (the
 ticket or the user's stated contract, outside the repository). devit passes
