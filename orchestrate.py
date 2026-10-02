@@ -1458,25 +1458,29 @@ def _project_standards(repo: str, changed: set[str] | None,
     return "", ""
 
 
+def _default_rubric_rel(repo: str) -> str | None:
+    # The default rubric's path relative to the repo under review, or None when it lies outside
+    # (the usual case). Decided lexically, following no symlink at all: the checkout controls
+    # every path component under the repo when cork reviews itself, so a branch could replace
+    # the file with a symlink (making the target look "external"), delete it (making exists()
+    # false) or swap the `standards/` parent for a symlink (`standards -> .`, redirecting the
+    # lookup to another blob). The shipped path (built from Path(__file__).resolve(), so
+    # absolute) is compared as written against the repo root, both as given and resolved.
+    nominal = Path(os.path.normpath(_DEFAULT_STANDARDS))
+    for root in {Path(os.path.normpath(Path(repo).absolute())), Path(repo).resolve()}:
+        try:
+            return nominal.relative_to(root).as_posix()
+        except ValueError:
+            continue
+    return None
+
+
 def _universal_standards(repo: str, changed: set[str] | None, base_ref: str | None) -> str:
     # cork's own default rubric ships beside orchestrate.py. When cork reviews its own checkout
     # that file is inside the repo under review, so a branch edit to standards/AGENTS.md would
     # become system instructions for that branch's review. In that case the rubric is read from
     # the trusted git tree like the project layer; with no trusted ref it is dropped.
-    # Containment is decided lexically, following no symlink at all: the checkout controls
-    # every path component under the repo when cork reviews itself, so a branch could replace
-    # the file with a symlink (making the target look "external"), delete it (making exists()
-    # false) or swap the `standards/` parent for a symlink (`standards -> .`, redirecting the
-    # lookup to another blob) to escape or redirect the trusted read. The shipped path is
-    # compared as written against the repo root, both as given and resolved.
-    nominal = Path(os.path.normpath(_DEFAULT_STANDARDS))   # built from Path(__file__).resolve(): absolute
-    rel = None   # the usual case: the default standards live outside the repo under review
-    for root in {Path(os.path.normpath(Path(repo).absolute())), Path(repo).resolve()}:
-        try:
-            rel = nominal.relative_to(root).as_posix()
-            break
-        except ValueError:
-            continue
+    rel = _default_rubric_rel(repo)
     if changed is None or rel is None:
         return _DEFAULT_STANDARDS.read_text(errors="replace") if _DEFAULT_STANDARDS.exists() else ""
     if base_ref is None:
@@ -2462,18 +2466,17 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     # names — in a delta round it is the PR's own previous head — so it can never anchor trust.
     # Only --diff-file has no trusted ref at all.
     base_ref: str | None
+    patch_names: list[str] = []
     if diff_range is not None:
         require_range(repo, diff_range)
         require_base_ref(repo, base)
         diff, scope, base_ref = git_diff_range(repo, diff_range), diff_range, base
-        names_fn = lambda: _git_changed_names(repo, diff_range)
     elif diff_file is not None:
         diff, patch_names = read_diff_file(diff_file)
-        scope, base_ref, names_fn = f"diff file {diff_file}", None, (lambda: patch_names)
+        scope, base_ref = f"diff file {diff_file}", None
     else:
         require_base_ref(repo, base)
         diff, scope, base_ref = git_diff_branch(repo, base), base, base
-        names_fn = lambda: _git_changed_names(repo, f"{base}...HEAD")
     if not diff.strip():   # before the probe and before listing names: an empty diff needs neither
         fail(f"No diff for {scope} — nothing to review.")
     provider, model = _split_model_ref(model_ref)
@@ -2481,7 +2484,7 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
         verdict = _probe(provider, model)
         if verdict != "ok":
             fail(f"{provider}/{model} not usable on this seat ({verdict}).")
-    names = names_fn()
+    names = patch_names if diff_file is not None else _git_changed_names(repo, diff_range or f"{base}...HEAD")
     instructions, instructions_path = load_agent_instructions(repo, set(names), base_ref)
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")

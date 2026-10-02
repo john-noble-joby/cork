@@ -73,6 +73,20 @@ class ArgvTest(HarnessBase):
         self.assertTrue(kw["input"].endswith("USER"))
         self.assertEqual((status, text), (200, fake.out))
 
+    def test_trust_boundary_reaches_prompt_only_and_system_capable_lanes(self):
+        # the boundary is part of the system text; a prompt-only lane (codex) must see it at the
+        # very top of its stdin body, a system-capable lane (claude) inside --system-prompt
+        system = orchestrate._review_system("Custom rules")
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        orchestrate._harness_call("codex", "gpt-5.6-sol", system, "USER", "/repo")
+        self.assertTrue(fake.calls[0][1]["input"].startswith("Trust boundary:"))
+        self.assertLess(fake.calls[0][1]["input"].index("Custom rules"), fake.calls[0][1]["input"].index("USER"))
+        fake = _FakeRun(); orchestrate.subprocess.run = fake
+        orchestrate._harness_call("claude", "opus", system, "USER", "/repo")
+        argv, kw = fake.calls[0]
+        self.assertTrue(argv[argv.index("--system-prompt") + 1].startswith("Trust boundary:"))
+        self.assertEqual(kw["input"], "USER")
+
     def test_claude_argv_read_only_system_flag_no_bash(self):
         fake = _FakeRun(); orchestrate.subprocess.run = fake
         orchestrate._harness_call("claude", "claude-opus-4.7", "SYS", "USER", "/repo")

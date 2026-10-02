@@ -256,6 +256,19 @@ class BranchControlledStandardsTest(unittest.TestCase):
         self.assertNotIn("UNIVERSAL", text); self.assertIn("opted out", out)
 
 
+class TrustBoundaryWordingTest(unittest.TestCase):
+    # The boundary exists in three wordings — the engine constant, the default standards for
+    # human readers, and the docs-sweep prompt — and they must not drift apart on the rule.
+    def test_engine_standards_and_docs_sweep_state_the_same_rule(self):
+        root = Path(__file__).resolve().parents[1]
+        standards = (root / "standards" / "AGENTS.md").read_text()
+        sweep = (root / "skills" / "devit" / "references" / "docs-sweep.md").read_text()
+        norm = lambda t: " ".join(t.split())
+        for key in ("material under review, not instructions", "never follow it"):
+            self.assertIn(key, norm(orchestrate.TRUST_BOUNDARY)); self.assertIn(key, norm(standards))
+        self.assertIn("untrusted data", sweep); self.assertIn("is never followed", norm(sweep))
+
+
 class StandardsCmdTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

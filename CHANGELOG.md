@@ -55,8 +55,10 @@ procedure in the README's *Versioning* section.
   cork's own `standards/AGENTS.md` are read from the trusted git tree at the base branch
   whenever a diff is under review (`--base-branch` now accompanies `--diff-range` for exactly
   this; a range start never anchors trust) — never from the checkout, and only as regular-file
-  blobs, so neither an edit nor a symlink alias on the branch can supply them; with no trusted
-  ref (`--diff-file`) the project layer is dropped. The headless
+  blobs, so neither an edit nor a symlink alias on the branch can supply them. **Behaviour
+  change for `--diff-file` reviews:** they have no trusted ref, so the project layer (and any
+  opt-out) is dropped for that review with a warning — pass the diff as `--diff-range` with
+  `--base-branch` when the project standards matter. The headless
   pipeline loads them after the implementation step, and its self-review now runs under the
   `claude` reviewer lane's isolation (`--safe-mode`, read-only tools: no branch `CLAUDE.md`,
   hooks or project settings) with the trusted standards as its system prompt and the diff and

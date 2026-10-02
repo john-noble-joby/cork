@@ -40,7 +40,7 @@ No frameworks. No classes. No abstractions beyond what the task requires.
 
 When the orchestrator runs against a repo, it looks for:
 - `code-review/AGENTS.md`, `code-review/agent.md`, `AGENTS.md`, `agent.md`, or `.github/AGENTS.md` (first match) — injected as system prompt for reviewer models, read from the trusted base ref when a diff is under review
-- Standard git history — `git diff HEAD` is the source of truth for what Claude Code changed
+- Standard git history — `git diff <base>...HEAD` (merge-base against the base branch) is the source of truth for what Claude Code changed; see README *Coding & review standards* for where the standards come from
 
 ## Environment
 
