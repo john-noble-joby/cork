@@ -299,12 +299,43 @@ class ReviewDiffTest(unittest.TestCase):
         with patch.object(orchestrate, "_call_and_extract", return_value=(200, "review ok", None)), redirect_stdout(out):
             orchestrate.review("copilot", "model", "", "story", "diff", files,
                                char_budget=len(orchestrate._review_system("")) + 500 + 300 + 200,
-                               large={"huge.cs": 1_234})
+                               large={"huge.cs": 1_234}, skipped=["gone.py"])
         text = out.getvalue()
-        self.assertIn("review input: budget", text)
-        self.assertRegex(text, r"full contents \(2/4 changed files\): mid\.py \(100\), small\.py \(10\)")
+        self.assertIn("review input: budget", text); self.assertIn("required context 0,", text)
+        self.assertRegex(text, r"full contents \(2/5 changed paths\): mid\.py \(100\), small\.py \(10\)")
         self.assertIn("diff-only, over budget (1): big.py (5,000)", text)
         self.assertIn(f"diff-only, over {orchestrate.MAX_FILE_LINES} lines (1): huge.cs (1,234 lines)", text)
+        self.assertIn("not readable in the tree — deleted, submodule, renamed-from (1): gone.py", text)
+
+    def test_over_budget_diff_without_required_context_still_reviews(self):
+        # no --context-file: an over-budget diff is a diff-only review as before (API lane), or the
+        # lane's own skip (harness lane) — never a hard failure that kills a headless rotation
+        out = io.StringIO()
+        with patch.object(orchestrate, "_call_and_extract", return_value=(200, "review ok", None)) as call, redirect_stdout(out):
+            result = orchestrate.review("copilot", "model", "", "story", "x" * 60_000, {"a.py": "a"}, char_budget=50_000)
+        self.assertEqual(result, "review ok"); call.assert_called_once()
+        self.assertIn("file contents 0", out.getvalue()); self.assertIn("no changed file fit the budget", out.getvalue())
+        with patch.object(orchestrate, "_call_and_extract", return_value=(413, "too big", None)), redirect_stdout(io.StringIO()):
+            result = orchestrate.review("codex", "m", "", "story", "x" * 60_000, {}, char_budget=50_000, repo="/repo")
+        self.assertIn("skipped", result)
+
+    def test_required_context_is_checked_in_bytes_on_arg_lanes_and_manifest_names_the_byte_budget(self):
+        # opencode carries the whole prompt as one argv element capped in BYTES; a required
+        # section that fits the char budget but not the arg cap must fail with the breakdown,
+        # not pass the manifest's "always included" and then skip on E2BIG
+        err = io.StringIO()
+        with patch.object(orchestrate, "load_config", return_value={}), redirect_stderr(err), self.assertRaises(SystemExit):
+            orchestrate.review("opencode", "p/m", "", "story", "diff", {}, repo="/repo",
+                               required={"ctx.py": "r" * 140_000})
+        self.assertIn("byte argument limit", err.getvalue()); self.assertIn("required context", err.getvalue())
+        # after an argv repack the manifest reports the effective byte budget, not the char one
+        files = {"big.py": "x" * (orchestrate._MAX_ARG_BYTES - 2_000), "tiny.py": "y" * 100}
+        fake_run = Mock(return_value=Mock(returncode=0, stdout="ok", stderr=""))
+        out = io.StringIO()
+        with patch.object(orchestrate, "load_config", return_value={}), patch.object(orchestrate.subprocess, "run", fake_run), \
+             patch.object(orchestrate, "_harness_scratch", return_value=__import__("contextlib").nullcontext("")), redirect_stdout(out):
+            orchestrate.review("opencode", "p/m", "S" * 3_000, "story", "diff", files, repo="/repo")
+        self.assertIn("bytes (argv cap)", out.getvalue())
 
     def test_fix_prompt_frames_review_findings_as_untrusted(self):
         # the review text can quote a hostile ticket line verbatim; the fixer must be told

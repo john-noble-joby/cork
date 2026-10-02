@@ -116,7 +116,8 @@ class ReviewStoryTest(unittest.TestCase):
                                        validate=False, story_file=str(self.story_file))
         finally:
             orchestrate.subprocess.run = original_run
-        self.assertIn("## Story / Task\nharness acceptance contract", calls[0][1]["input"])
+        lane_call = next(c for c in calls if "input" in c[1])   # git helpers (stale-base check) also go through run()
+        self.assertIn("## Story / Task\nharness acceptance contract", lane_call[1]["input"])
 
     def test_story_file_wins_over_every_other_source(self):
         self.story_file.write_text("file story", encoding="utf-8")

@@ -70,7 +70,7 @@ _CORK_AUTH     = Path(os.environ.get("CORK_AUTH_FILE",
 # Public GitHub Copilot OAuth client id (same one editor integrations / opencode
 # use). Overridable in case GitHub rotates it.
 _COPILOT_CLIENT_ID = os.environ.get("CORK_COPILOT_CLIENT_ID", "Iv1.b507a08c87ecfe98")
-_DEFAULT_CHAR_BUDGET = 192_000  # fallback if /models fetch fails
+_DEFAULT_CHAR_BUDGET = 192_000  # default review_budget_chars — see review_budget()
 _RESPONSES_MAX_OUTPUT = 32_000  # reasoning + findings share this ceiling
 _RESPONSES_EFFORTS = ("low", "medium", "high")
 _DEFAULT_RESPONSES_EFFORT = "medium"
@@ -944,7 +944,7 @@ def _validate_config(cfg: dict) -> None:
     if cfg.get("responses_effort", _DEFAULT_RESPONSES_EFFORT) not in _RESPONSES_EFFORTS:
         fail("config.responses_effort must be low, medium, or high")
     budget = cfg.get("review_budget_chars", _DEFAULT_CHAR_BUDGET)
-    if isinstance(budget, bool) or not isinstance(budget, int) or budget < 50_000:
+    if not isinstance(budget, int) or budget < 50_000:   # bools are ints below 50000 and fail here too
         fail("config.review_budget_chars must be an integer of at least 50000 (characters per review prompt)")
 
 
@@ -1201,22 +1201,29 @@ def git_toplevel(repo: str) -> str:
 
 
 def _warn_stale_local_base(repo: str, base: str) -> None:
-    # A local branch used as the base can sit many merges behind its remote: the review then
-    # covers every file the base has since absorbed, not the PR's own change (49 files instead
-    # of 10 on one run). Say so when origin/<base> exists and is ahead.
-    if "/" in base:
+    # A local branch used as the base can sit behind, ahead of or diverged from its remote: the
+    # review then covers the base's own catch-up (49 files instead of 10 on one run) or misses
+    # changes the remote already has. Say so whenever origin/<base> exists and differs. A
+    # remote-tracking ref given as the base (`origin/develop`) has nothing to compare against.
+    def rev(ref: str) -> str | None:
+        try:
+            r = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+                               cwd=repo, capture_output=True, text=True)
+        except OSError:   # not a directory we can run git in: nothing to warn about here
+            return None
+        return r.stdout.strip() or None if r.returncode == 0 else None
+    if rev(f"refs/remotes/{base}"):
         return
-    remote = f"origin/{base}"
-    ok = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{remote}^{{commit}}"],
-                        cwd=repo, capture_output=True, text=True)
-    if ok.returncode != 0:
+    local, remote = rev(f"refs/heads/{base}"), rev(f"origin/{base}")
+    if not local or not remote or local == remote:
         return
-    behind = subprocess.run(["git", "rev-list", "--count", f"{base}..{remote}"],
-                            cwd=repo, capture_output=True, text=True)
-    n = behind.stdout.strip()
-    if behind.returncode == 0 and n.isdigit() and int(n) > 0:
-        print(f"  ⚠ local base {base!r} is {n} commit(s) behind {remote} — the diff will include "
-              f"everything the base has since absorbed; use --base-branch {remote} (after git fetch)", flush=True)
+    def count(rng: str) -> int:
+        r = subprocess.run(["git", "rev-list", "--count", rng], cwd=repo, capture_output=True, text=True)
+        return int(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip().isdigit() else 0
+    behind, ahead = count(f"{base}..origin/{base}"), count(f"origin/{base}..{base}")
+    state = ("diverged from" if behind and ahead else "behind" if behind else "ahead of")
+    print(f"  ⚠ local base {base!r} is {state} origin/{base} ({behind} behind, {ahead} ahead) — the diff is "
+          f"measured against a base the remote does not have; use --base-branch origin/{base} after git fetch", flush=True)
 
 
 def pin_ref(repo: str, ref: str) -> str:
@@ -1391,12 +1398,20 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
     return text, names
 
 
-def _file_contents(cwd: str, names: list[str]) -> dict[str, str]:
+def _read_changed(cwd: str, names: list[str]) -> tuple[dict[str, str], dict[str, int], list[str]]:
+    # One pass over the changed set, one predicate for every category: (contents of files up
+    # to MAX_FILE_LINES, name → line count for larger ones, names that cannot be read at all —
+    # deleted paths, submodule pointers, the old side of a rename). Each category is named in
+    # the review-input manifest; nothing is dropped silently and nothing is replaced by a
+    # remark the model could mistake for a finding.
     contents: dict[str, str] = {}
+    large: dict[str, int] = {}
+    skipped: list[str] = []
     root = Path(cwd).resolve()
     for name in names:
         path = Path(cwd) / name
         if not path.exists():
+            skipped.append(name)
             continue
         resolved = path.resolve()
         if not resolved.is_relative_to(root):  # symlink or `..` pointing outside the tree
@@ -1404,14 +1419,22 @@ def _file_contents(cwd: str, names: list[str]) -> dict[str, str]:
         if any(part.lower() == ".git" for part in resolved.relative_to(root).parts):  # `alias -> .git/config`
             fail(f"changed file {name!r} resolves into git metadata")
         if not resolved.is_file():  # a changed submodule is listed as a directory; its pointer change is in the diff
+            skipped.append(name)
             continue
         lines = resolved.read_text(errors="replace").splitlines()
-        # A file over MAX_FILE_LINES is omitted from the prompt and named in the review-input
-        # manifest instead (see _large_files). It used to be replaced by a one-line remark about
-        # its size; reviewers turned that remark into a "finding" while claiming full coverage.
         if len(lines) <= MAX_FILE_LINES:
             contents[name] = "\n".join(lines)
-    return contents
+        else:
+            large[name] = len(lines)
+    return contents, large, skipped
+
+
+def _file_contents(cwd: str, names: list[str]) -> dict[str, str]:
+    return _read_changed(cwd, names)[0]
+
+
+def _large_files(cwd: str, names: list[str]) -> dict[str, int]:
+    return _read_changed(cwd, names)[1]
 
 
 def _required_contents(cwd: str, paths: list[str]) -> dict[str, str]:
@@ -1419,33 +1442,20 @@ def _required_contents(cwd: str, paths: list[str]) -> dict[str, str]:
     # symbol, DI registrations, the tests covering the change, the docs that restate it. Same
     # containment rules as changed files, but no size cut and no budget fallback: the caller
     # named them as required, so a missing one is an error and one that does not fit the
-    # budget fails the review instead of being dropped (see review()).
+    # budget fails the review instead of being dropped (see review()). Keys are the path as git
+    # names it (root-relative, POSIX), so `./x.py`, `x.py` and an absolute path are one entry
+    # and can be matched against the changed set.
     root = Path(cwd).resolve()
     out: dict[str, str] = {}
     for rel in paths:
-        path = Path(cwd) / rel
+        path = Path(rel) if Path(rel).is_absolute() else Path(cwd) / rel
         if not path.is_file():
             fail(f"--context-file {rel!r} is not a file in the repository")
         resolved = path.resolve()
         if not resolved.is_relative_to(root) or any(part.lower() == ".git" for part in resolved.relative_to(root).parts):
             fail(f"--context-file {rel!r} resolves outside the repository or into git metadata")
-        out[rel] = resolved.read_text(errors="replace")
+        out[resolved.relative_to(root).as_posix()] = resolved.read_text(errors="replace")
     return out
-
-
-def _large_files(cwd: str, names: list[str]) -> dict[str, int]:
-    # name → line count for the changed files _file_contents leaves out for size, so the
-    # manifest can say exactly which files the reviewer saw diff-only and why.
-    large: dict[str, int] = {}
-    root = Path(cwd).resolve()
-    for name in names:
-        path = Path(cwd) / name
-        if not path.exists() or not path.resolve().is_relative_to(root) or not path.resolve().is_file():
-            continue
-        n = len(path.resolve().read_text(errors="replace").splitlines())
-        if n > MAX_FILE_LINES:
-            large[name] = n
-    return large
 
 
 def git_commit_all(cwd: str, message: str) -> bool:
@@ -2060,14 +2070,17 @@ def _review_system(instructions: str) -> str:
 
 def _print_manifest(system: str, story: str, diff: str, files: dict[str, str],
                     included: list[str], budget: int, large: dict[str, int],
-                    required: dict[str, str] | None = None) -> None:
+                    required: dict[str, str], skipped: list[str], unit: str = "chars") -> None:
     # What the model actually saw. A "no findings" verdict means nothing without this: on a
     # large diff the standards and the diff take most of the budget and smallest-file-first
-    # packing drops exactly the big DI, test and docs files, silently. Printed every run.
+    # packing drops exactly the big DI, test and docs files, silently. Printed every run; the
+    # denominator is the whole changed set, and every path lands in exactly one category.
     full = sum(len(files[n]) for n in included)
-    print(f"  → review input: budget {budget:,} chars — standards {len(system):,}, story {len(story):,}, "
-          f"diff {len(diff):,}, file contents {full:,}", flush=True)
-    print(f"  → full contents ({len(included)}/{len(files) + len(large)} changed files): "
+    req = sum(len(c) for c in required.values())
+    total = len(files) + len(large) + len(skipped)
+    print(f"  → review input: budget {budget:,} {unit} — standards {len(system):,}, story {len(story):,}, "
+          f"diff {len(diff):,}, required context {req:,}, file contents {full:,}", flush=True)
+    print(f"  → full contents ({len(included)}/{total} changed paths): "
           + (", ".join(f"{n} ({len(files[n]):,})" for n in sorted(included)) or "none"), flush=True)
     if required:
         print(f"  → required context ({len(required)}, always included): "
@@ -2078,6 +2091,24 @@ def _print_manifest(system: str, story: str, diff: str, files: dict[str, str],
     if large:
         print(f"  → diff-only, over {MAX_FILE_LINES} lines ({len(large)}): "
               + ", ".join(f"{n} ({c:,} lines)" for n, c in sorted(large.items())), flush=True)
+    if skipped:
+        print(f"  → diff-only, not readable in the tree — deleted, submodule, renamed-from ({len(skipped)}): "
+              + ", ".join(sorted(skipped)), flush=True)
+    if not included and files:
+        print("  → no changed file fit the budget: this is a diff-only review", flush=True)
+
+
+def _required_section(required: dict[str, str]) -> str:
+    if not required:
+        return ""
+    block = "\n\n".join(f"### {n}\n```\n{c}\n```" for n, c in required.items())
+    return f"## Required Context (unchanged files the change depends on)\n{block}\n\n"
+
+
+def _budget_breakdown(system: str, story: str, diff: str, required_section: str,
+                      size: Callable[[str], int], unit: str) -> str:
+    return (f"standards {size(system):,}, story {size(story):,}, diff {size(diff):,}, "
+            f"required context {size(required_section):,} {unit}")
 
 
 def review(provider: str, model: str, instructions: str, story: str,
@@ -2085,18 +2116,30 @@ def review(provider: str, model: str, instructions: str, story: str,
            char_budget: int = _DEFAULT_CHAR_BUDGET,
            max_attempts: int = 3, repo: str = "",
            large: dict[str, int] | None = None,
-           required: dict[str, str] | None = None) -> str:
+           required: dict[str, str] | None = None,
+           skipped: list[str] | None = None) -> str:
     system = _review_system(instructions)
     required = required or {}
-    required_block = "\n\n".join(f"### {n}\n```\n{c}\n```" for n, c in required.items())
-    required_section = f"## Required Context (unchanged files the change depends on)\n{required_block}\n\n" if required else ""
-    fixed_min = len(system) + len(story) + len(diff) + len(required_section) + 500
-    if fixed_min > char_budget:
-        # Required context is never silently dropped: that is the whole point of naming it.
-        fail(f"review input exceeds the {char_budget:,}-char budget by {fixed_min - char_budget:,} before any "
-             f"changed file fits (standards {len(system):,}, story {len(story):,}, diff {len(diff):,}, "
-             f"required context {len(required_section):,}) — review a narrower diff, drop a --context-file, "
-             f"or raise review_budget_chars in config.json")
+    required_section = _required_section(required)
+    spec = HARNESSES.get(provider)
+    # Required context is never silently dropped: that is the whole point of naming it. Without
+    # any, an over-budget diff behaves as before — a diff-only prompt (API lanes) or the lane's
+    # own 413 skip (harness lanes); the manifest says no changed file fit.
+    if required:
+        fixed_chars = len(system) + len(story) + len(diff) + len(required_section) + 500
+        if fixed_chars > char_budget:
+            fail(f"review input exceeds the {char_budget:,}-char budget by {fixed_chars - char_budget:,} before any "
+                 f"changed file fits ({_budget_breakdown(system, story, diff, required_section, len, 'chars')}) — "
+                 f"review a narrower diff, drop a --context-file, or raise review_budget_chars in config.json")
+        if spec and spec["prompt_via"] == "arg":   # the real limit for this lane is the argv cap, in bytes
+            prefix = "" if spec["system_flag"] else system + _STANDARDS_SEPARATOR
+            fixed_bytes = _utf8_len(prefix) + _utf8_len(story) + _utf8_len(diff) + _utf8_len(required_section) + 500
+            if fixed_bytes >= _MAX_ARG_BYTES:
+                fail(f"review input for {provider} exceeds the {_MAX_ARG_BYTES:,}-byte argument limit by "
+                     f"{fixed_bytes - _MAX_ARG_BYTES:,} before any changed file fits "
+                     f"({_budget_breakdown(prefix, story, diff, required_section, _utf8_len, 'bytes')}) — "
+                     f"review a narrower diff, drop a --context-file, or use a stdin-prompt lane")
+    effective_budget, unit = char_budget, "chars"
 
     def build(budget: int, size: Callable[[str], int] = len) -> tuple[str, list[str]]:
         fixed = size(system) + size(story) + size(diff) + size(required_section) + 500
@@ -2107,7 +2150,6 @@ def review(provider: str, model: str, instructions: str, story: str,
                 f"## Branch Diff\n```diff\n{diff}\n```"), names
 
     user_msg, included = build(char_budget)
-    spec = HARNESSES.get(provider)
     if spec and spec["prompt_via"] == "arg":
         # The whole prompt (plus the standards, for a lane with no system flag) travels as
         # ONE argv element the kernel caps at _MAX_ARG_BYTES — in BYTES, while the default
@@ -2128,7 +2170,8 @@ def review(provider: str, model: str, instructions: str, story: str,
                 else:
                     hi = mid
             user_msg, included = build(lo, _utf8_len)  # a diff alone over the limit still gets the 413 skip
-    _print_manifest(system, story, diff, files, included, char_budget, large or {}, required)
+            effective_budget, unit = lo, "bytes (argv cap)"
+    _print_manifest(system, story, diff, files, included, effective_budget, large or {}, required, skipped or [], unit)
 
     if provider in HARNESSES:  # one shot; a dead harness is a skipped reviewer, never a traceback
         status, text, _ = _call_and_extract(provider, model, system, user_msg, repo=repo)
@@ -2257,12 +2300,13 @@ def prompt_initial(ticket_id: str) -> str:
     )
 
 
-def prompt_claude_review(base: str, summary: str, diff: str, files: dict[str, str]) -> str:
+def prompt_claude_review(base: str, summary: str, diff: str, files: dict[str, str],
+                         budget: int = _DEFAULT_CHAR_BUDGET) -> str:
     # User message for the headless self-review. The reviewer runs with read-only file tools
     # and no shell, so it cannot run `git diff` itself: the diff and the changed files are
     # delivered in the message exactly as for an API lane. The standards, trust boundary and
     # spec axis travel in the system prompt (_review_system).
-    file_block, _ = _budget_files(files, max(0, _DEFAULT_CHAR_BUDGET - len(summary) - len(diff) - 1_000))
+    file_block, _ = _budget_files(files, max(0, budget - len(summary) - len(diff) - 1_000))
     return (
         f"## Story / Task\n{summary}\n\n"
         f"## Changed Files (current state)\n{file_block}\n\n"
@@ -2622,13 +2666,16 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     instructions, instructions_path = load_agent_instructions(repo, set(names), base_ref)
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
-    files = _file_contents(repo, names)
+    files, large, skipped = _read_changed(repo, names)
+    required = _required_contents(repo, context_files or [])
+    # A changed file named as required context is sent once, whole, under Required Context.
+    files = {n: c for n, c in files.items() if n not in required}
+    large = {n: c for n, c in large.items() if n not in required}
     print(f"Story: {story_source} ({len(story)} chars)")
-    print(f"\n── Review: {provider}/{model} — {len(files)} files, "
+    print(f"\n── Review: {provider}/{model} — {len(names)} changed paths, "
           f"{len(diff.splitlines())} diff lines vs {scope}\n", flush=True)
     print(review(provider, model, instructions, story, diff, files, review_budget(),
-                 repo=repo, large=_large_files(repo, names),
-                 required=_required_contents(repo, context_files or [])))
+                 repo=repo, large=large, required=required, skipped=skipped))
 
 def cmd_preflight() -> None:
     cfg = load_config()
@@ -2858,6 +2905,7 @@ def main() -> None:
         return
 
     require_base_ref(repo, base)
+    _warn_stale_local_base(repo, base)
     repo = git_toplevel(repo)   # a nested directory must not become the containment root
     # Immutable from here: tool-capable steps follow. Diffs, names and the trusted rubric use
     # the pinned commit; the branch name survives only for the PR's target and for display.
@@ -2942,7 +2990,8 @@ def main() -> None:
         skip(1, total, f"Claude Code: implement {tid}")
 
     diff       = git_diff_branch(repo, base)
-    files      = changed_files_branch(repo, base)
+    changed_names = _git_changed_names(repo, f"{base}...HEAD")
+    files, _large, skipped_names = _read_changed(repo, changed_names)
     if not diff.strip():
         fail("No diff vs base branch — nothing to review.")
     diff_lines = len(diff.splitlines())
@@ -2989,7 +3038,7 @@ def main() -> None:
         # with the trusted standards assembled above as the system prompt — the branch cannot
         # supply any part of its own review rubric.
         self_review_out = run_claude_review(
-            _review_system(instructions), prompt_claude_review(base, summary, diff, files), cwd=repo
+            _review_system(instructions), prompt_claude_review(base, summary, diff, files, review_budget()), cwd=repo
         )
         print(f"  {self_review_out[:300]}…")
         state["done"]["self_review"] = self_review_out
@@ -3023,12 +3072,13 @@ def main() -> None:
         if key in rem["models"] and key not in rem["needs_fix_only"]:
             step(review_step, total, f"Blind review: {key}", ticket_id=tid)
             diff  = git_diff_branch(repo, base)
-            files = changed_files_branch(repo, base)
-            print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {key}")
+            changed_names = _git_changed_names(repo, f"{base}...HEAD")   # fixes since the last pass may have added files
+            files, large, skipped_names = _read_changed(repo, changed_names)
+            print(f"  Sending {len(changed_names)} changed paths, {len(diff.splitlines())} lines to {key}")
             review_out = review(
                 entry["provider"], entry["model"],
                 instructions, summary, diff, files, review_budget(), repo=repo,
-                large=_large_files(repo, _git_changed_names(repo, f"{base}...HEAD")),
+                large=large, skipped=skipped_names,
             )
             print(f"  {review_out[:300]}…")
             _save_model(tid, state, key, "review", review_out)

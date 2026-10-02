@@ -16,9 +16,11 @@ class ReviewBudgetTest(unittest.TestCase):
         self.assertEqual(orchestrate.review_budget(), orchestrate._DEFAULT_CHAR_BUDGET)   # no config file
         self._write(review_budget_chars=600_000)
         self.assertEqual(orchestrate.review_budget(), 600_000)
+        self._write(review_budget_chars=50_000)                      # the documented minimum is accepted
+        self.assertEqual(orchestrate.review_budget(), 50_000)
     def test_review_budget_must_be_a_sane_integer(self):
         import io, contextlib
-        for bad in (1_000, "192000", True, 192000.5):
+        for bad in (1_000, 49_999, "192000", True, 192000.5):
             self._write(review_budget_chars=bad)
             with self.subTest(bad=bad), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 orchestrate.load_config(quiet=True)

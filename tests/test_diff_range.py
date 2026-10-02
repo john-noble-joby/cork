@@ -259,29 +259,58 @@ class ReviewDiffSourceTest(unittest.TestCase):
         self.assertIn("review input: budget", out)
         self.assertEqual(orchestrate._large_files(str(self.repo), ["huge.py", "a.py", "missing.py"]), {"huge.py": 600})
 
-    def test_review_warns_on_fallback_story_stale_local_base_and_large_diff(self):
-        # no story → the spec axis has nothing to check; say so loudly instead of "Story: fallback"
+    def test_fallback_story_warns_loudly(self):
         orchestrate.load_state = lambda tid: {}
-        self.addCleanup(setattr, orchestrate, "load_state", self._originals.get("load_state", orchestrate.load_state))
         out = io.StringIO()
         with redirect_stdout(out):
             orchestrate.cmd_review("T-1", str(self.repo), "origin/main", "copilot/model", validate=False)
         self.assertIn("no story supplied", out.getvalue()); self.assertIn("Story: fallback", out.getvalue())
-        # a local base behind its remote reviews the base's own catch-up, not the PR
+        self.assertNotIn("soft limit", out.getvalue()); self.assertNotIn("local base", out.getvalue())
+        _, out = self._review()                                  # a story given: no fallback warning
+        self.assertNotIn("no story supplied", out)
+
+    def test_stale_local_base_warns_behind_ahead_diverged_and_not_otherwise(self):
+        _git(self.repo, "checkout", "-q", "-b", "topic", self.c3); (self.repo / "t.py").write_text("t = 1\n")
+        _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "topic")   # HEAD differs from every base below
+        def out_for(base: str) -> str:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                orchestrate.cmd_review("T-1", str(self.repo), base, "copilot/model", validate=False, story_text="story")
+            return out.getvalue()
         _git(self.repo, "branch", "b2", self.c1); _git(self.repo, "update-ref", "refs/remotes/origin/b2", self.c3)
-        _git(self.repo, "checkout", "-q", "-b", "topic", self.c2); (self.repo / "t.py").write_text("t = 1\n")
-        _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "topic")
-        out = io.StringIO()
-        with redirect_stdout(out):
-            orchestrate.cmd_review("T-1", str(self.repo), "b2", "copilot/model", validate=False, story_text="story")
-        self.assertIn("local base 'b2' is 2 commit(s) behind origin/b2", out.getvalue())
-        # a large diff gets the soft-limit warning pointing at the manifest
+        self.assertIn("local base 'b2' is behind origin/b2 (2 behind, 0 ahead)", out_for("b2"))
+        _git(self.repo, "branch", "b3", self.c3); _git(self.repo, "update-ref", "refs/remotes/origin/b3", self.c1)
+        self.assertIn("local base 'b3' is ahead of origin/b3 (0 behind, 2 ahead)", out_for("b3"))
+        _git(self.repo, "checkout", "-q", "-b", "b4", self.c2); (self.repo / "d.py").write_text("d\n")
+        _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "diverge"); _git(self.repo, "checkout", "-q", "topic")
+        _git(self.repo, "update-ref", "refs/remotes/origin/b4", self.c3)
+        self.assertIn("local base 'b4' is diverged from origin/b4 (1 behind, 1 ahead)", out_for("b4"))
+        _git(self.repo, "branch", "feature/x", self.c1); _git(self.repo, "update-ref", "refs/remotes/origin/feature/x", self.c3)
+        self.assertIn("local base 'feature/x' is behind", out_for("feature/x"))          # a slash is not a remote
+        _git(self.repo, "branch", "same", self.c1); _git(self.repo, "update-ref", "refs/remotes/origin/same", self.c1)
+        self.assertNotIn("local base", out_for("same"))                                   # up to date: silent
+        self.assertNotIn("local base", out_for("origin/main"))                            # remote-tracking base: nothing to compare
+
+    def test_large_diff_warns_at_the_soft_limit_and_small_diffs_do_not(self):
+        _, out = self._review()
+        self.assertNotIn("soft limit", out)
         (self.repo / "wide.py").write_text("".join(f"w{i} = {i}\n" for i in range(1_600)))
         _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "wide")
-        out = io.StringIO()
-        with redirect_stdout(out):
-            orchestrate.cmd_review("T-1", str(self.repo), "b2", "copilot/model", validate=False, story_text="story")
-        self.assertIn("soft limit 1,500", out.getvalue())
+        _, out = self._review()
+        self.assertIn("soft limit 1,500", out)
+
+    def test_read_changed_splits_the_set_at_the_line_limit_and_names_unreadable_paths(self):
+        (self.repo / "at.py").write_text("x\n" * orchestrate.MAX_FILE_LINES)
+        (self.repo / "over.py").write_text("x\n" * (orchestrate.MAX_FILE_LINES + 1))
+        (self.repo / "sub").mkdir()
+        files, large, skipped = orchestrate._read_changed(str(self.repo), ["at.py", "over.py", "gone.py", "sub", "a.py"])
+        self.assertIn("at.py", files); self.assertNotIn("at.py", large)
+        self.assertEqual(large, {"over.py": orchestrate.MAX_FILE_LINES + 1}); self.assertNotIn("over.py", files)
+        self.assertEqual(skipped, ["gone.py", "sub"]); self.assertIn("a.py", files)
+        # a deleted file shows up in the manifest as not readable, not as nothing
+        _git(self.repo, "rm", "-q", "b.py"); _git(self.repo, "commit", "-qm", "drop b")
+        _, out = self._review(diff_range=f"{self.c3}..HEAD")
+        self.assertIn("not readable in the tree — deleted, submodule, renamed-from (1): b.py", out)
 
     def test_required_context_files_are_always_included_or_the_review_fails(self):
         # an unchanged caller named with --context-file arrives whole, ahead of the changed
@@ -291,6 +320,15 @@ class ReviewDiffSourceTest(unittest.TestCase):
         self.assertIn("## Required Context", prompt); self.assertIn("### caller.py", prompt); self.assertIn("print(a)", prompt)
         self.assertLess(prompt.index("## Required Context"), prompt.index("## Changed Files"))
         self.assertIn("required context (1, always included): caller.py", out)
+        # a changed file named as context — including a 600-line one, which is the legitimate way
+        # to get it whole — is sent once, under Required Context, and spellings are normalised
+        (self.repo / "huge.py").write_text("".join(f"x{i} = {i}\n" for i in range(600)))
+        _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "huge")
+        prompt, out = self._review(diff_range=f"{self.c3}..HEAD", context_files=["huge.py", "./huge.py", str(self.repo / "b.py")])
+        self.assertEqual(prompt.count("### huge.py"), 1); self.assertEqual(prompt.count("### b.py"), 1)
+        self.assertNotIn("### ./huge.py", prompt); self.assertNotIn(str(self.repo), prompt)
+        self.assertNotIn("over 500 lines", out); self.assertIn("required context (2, always included): b.py", out)
+        self._fails("git metadata", context_files=[".git/config"])
         self._fails("is not a file in the repository", context_files=["nope.py"])
         (Path(self.tmp.name) / "outside.py").write_text("secret = 1\n")       # exists, but outside the tree
         self._fails("outside the repository", context_files=["../outside.py"])
@@ -350,7 +388,8 @@ class ReviewDiffSourceTest(unittest.TestCase):
         orchestrate.cmd_review = lambda *a, **k: seen.append((a, k))
         self.addCleanup(setattr, orchestrate, "cmd_review", orig)
         base = ["orchestrate.py", "T-1", str(self.repo), "--review-model", "copilot/model"]
-        for extra, key, val in ((["--diff-range", "a..b"], "diff_range", "a..b"), (["--diff-file", "x.patch"], "diff_file", "x.patch")):
+        for extra, key, val in ((["--diff-range", "a..b"], "diff_range", "a..b"), (["--diff-file", "x.patch"], "diff_file", "x.patch"),
+                                (["--context-file", "a.py", "--context-file", "b.py"], "context_files", ["a.py", "b.py"])):
             with self.subTest(flag=extra[0]):
                 orig_argv = sys.argv; sys.argv = base + extra
                 try: orchestrate.main()
@@ -363,6 +402,7 @@ class ReviewDiffSourceTest(unittest.TestCase):
         finally: sys.argv = orig_argv
         self.assertEqual(seen[-1][1]["diff_range"], "a..b"); self.assertEqual(seen[-1][0][2], "main")
         for argv, needle in ((["orchestrate.py", "T-1", str(self.repo), "--diff-range", "a..b"], "review-only flags"),
+                             (["orchestrate.py", "T-1", str(self.repo), "--context-file", "a.py"], "review-only flags"),
                              (base + ["--diff-file", "x", "--base-branch", "main"], "drop --base-branch"),
                              (base + ["--diff-range", "a..b", "--diff-file", "x"], "not allowed with")):
             with self.subTest(argv=argv[3:]):
