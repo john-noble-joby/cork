@@ -1424,6 +1424,31 @@ def _project_standards(repo: str, changed: set[str] | None,
     return "", ""
 
 
+def _universal_standards(repo: str, changed: set[str] | None, trusted_ref: str | None) -> str:
+    # cork's own default rubric ships beside orchestrate.py. When cork reviews its own checkout
+    # that file is inside the repo under review, so a branch edit to standards/AGENTS.md would
+    # become system instructions for that branch's review. In that case the rubric is read from
+    # the trusted git tree like the project layer; with no trusted ref it is dropped.
+    if not _DEFAULT_STANDARDS.exists():
+        return ""
+    try:
+        rel = _DEFAULT_STANDARDS.resolve().relative_to(Path(repo).resolve()).as_posix()
+    except ValueError:
+        rel = None   # the usual case: the default standards live outside the repo under review
+    if changed is None or rel is None:
+        return _DEFAULT_STANDARDS.read_text(errors="replace")
+    if trusted_ref is None:
+        print(f"  ⚠ the default standards ({rel}) are inside the repo under review and there is no trusted ref — not used", flush=True)
+        return ""
+    text = _tree_file(repo, trusted_ref, rel)
+    if text is None:
+        print(f"  ⚠ the default standards ({rel}) are inside the repo under review with no regular-file copy at {trusted_ref} — not used", flush=True)
+        return ""
+    if rel in changed:
+        print(f"  ⚠ {rel} is changed by this diff — reviewers follow the {trusted_ref} revision; the branch's copy is review material", flush=True)
+    return text
+
+
 def load_agent_instructions(repo: str, changed: set[str] | None = None,
                             trusted_ref: str | None = None) -> tuple[str, str]:
     # Effective review/coding rubric = cork universal default (gated) + the repo's own.
@@ -1432,8 +1457,7 @@ def load_agent_instructions(repo: str, changed: set[str] | None = None,
     project_text, project_path = _project_standards(repo, changed, trusted_ref)
     use_default = (load_config(quiet=True).get("default_standards", True)
                    and not _repo_opted_out(repo, changed, trusted_ref))
-    universal_text = (_DEFAULT_STANDARDS.read_text(errors="replace")
-                      if use_default and _DEFAULT_STANDARDS.exists() else "")
+    universal_text = _universal_standards(repo, changed, trusted_ref) if use_default else ""
     parts, labels = [], []
     if universal_text.strip():
         parts.append(universal_text); labels.append("cork default")
