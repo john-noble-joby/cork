@@ -1332,8 +1332,10 @@ def _unquote_git_path(quoted: str) -> str:
 
 def read_diff_file(path: str) -> tuple[str, list[str]]:
     # A unified diff supplied by the caller (e.g. `git diff old..new > delta.patch`). Changed
-    # file names come from the `+++ b/<path>` headers; deletions (`+++ /dev/null`) have no
-    # current file to show and are skipped by _file_contents anyway.
+    # file names come from the `+++ b/<path>` headers; a deletion (`+++ /dev/null`) keeps its
+    # `--- a/<path>` name and a binary or mode-only section (a `diff --git` line with no
+    # `+++`) keeps its `b/<path>`, so the manifest lists every changed path — those two land
+    # under "not readable" exactly as they do for a git-range review.
     p = Path(path)
     try:
         p = p.expanduser()
@@ -1354,15 +1356,33 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
     # and NEL, which are ordinary bytes inside a source line, letting one crafted added line
     # exhaust the hunk count and leave `--- a/x` / `+++ b/secret` looking like a header.
     header_re = re.compile(r'^\+\+\+ (?:"b/((?:[^"\\]|\\.)*)"|b/([^\t]+))(?:\t.*)?$')
+    old_re = re.compile(r'^--- (?:"a/((?:[^"\\]|\\.)*)"|a/([^\t]+))(?:\t.*)?$')
+    # `diff --git a/<p> b/<p>`: both sides name the same path (cork reviews renames as
+    # delete + add, like `git diff --no-renames`), so the line is matched as a whole against
+    # itself rather than split on the ambiguous ` b/`.
+    git_re = re.compile(r'^diff --git (?:"a/((?:[^"\\]|\\.)*)"|a/(.+)) (?:"b/((?:[^"\\]|\\.)*)"|b/(.+))$')
     hunk_re = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
     names: list[str] = []
     old_left = new_left = 0   # hunk lines still to consume on each side
     saw_section = False       # a `---`/`+++` pair, or a `diff --git` line (binary / mode-only sections have no `+++`)
+    pending: str | None = None   # path of the current `diff --git` section until a `+++` header names it
     prev = ""
+
+    def git_section_path(line: str) -> str | None:
+        g = git_re.match(line)
+        if not g:
+            return None
+        a = _unquote_git_path(g.group(1)) if g.group(1) is not None else g.group(2)
+        b = _unquote_git_path(g.group(3)) if g.group(3) is not None else g.group(4)
+        return b if a == b else None   # a rename header is ambiguous; its `+++` header still names the new path
+
     for line in text.split("\n"):
         line = line.removesuffix("\r")
         if line.startswith("diff --git ") and not (old_left > 0 or new_left > 0):
             saw_section = True
+            if pending is not None:
+                names.append(pending)   # the previous section had no `+++`: binary or mode-only
+            pending = git_section_path(line)
         if old_left > 0 or new_left > 0:
             if line.startswith("\\"):           # `\ No newline at end of file` is not counted
                 pass
@@ -1376,11 +1396,17 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
             old_left = int(h.group(1) or 1); new_left = int(h.group(2) or 1)
         elif prev.startswith("--- ") and line.startswith("+++ "):
             saw_section = True
+            pending = None
             if (m := header_re.match(line)):
                 names.append(_unquote_git_path(m.group(1)) if m.group(1) is not None else m.group(2))
-            elif not line.startswith("+++ /dev/null"):  # a deletion has no new path
+            elif line.startswith("+++ /dev/null"):       # a deletion: the old path is the changed path
+                if (o := old_re.match(prev)):
+                    names.append(_unquote_git_path(o.group(1)) if o.group(1) is not None else o.group(2))
+            else:
                 fail(f"--diff-file {p}: header {line!r} lacks the b/ prefix — cork needs git-style a/ b/ paths")
         prev = line
+    if pending is not None:
+        names.append(pending)
     if text.strip() and not saw_section:  # a blank file falls through to the shared empty-diff guard
         fail(f"--diff-file {p}: no unified diff found (expected `---`/`+++` file headers or `diff --git` sections)")
     # A patch is caller-supplied input: its paths must stay inside the repo, or the reviewer
@@ -2134,7 +2160,8 @@ def _required_section(required: dict[str, str]) -> str:
     if not required:
         return ""
     block = "\n\n".join(f"### {n}\n```\n{c}\n```" for n, c in required.items())
-    return f"## Required Context (unchanged files the change depends on)\n{block}\n\n"
+    return ("## Required Context (read these whole: files the change depends on, or changed files "
+            f"omitted for size elsewhere)\n{block}\n\n")
 
 
 def _budget_breakdown(system: str, story: str, diff: str, required_section: str,

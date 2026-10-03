@@ -140,7 +140,7 @@ class ReviewDiffSourceTest(unittest.TestCase):
         # a deletion header is fine; an unprefixed path (`diff -u old new`, `--no-prefix`) is refused
         # loudly instead of silently yielding no changed files
         patch.write_text("--- a/a.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-a = 1\n")
-        self.assertEqual(orchestrate.read_diff_file(str(patch))[1], [])
+        self.assertEqual(orchestrate.read_diff_file(str(patch))[1], ["a.py"])   # a deletion keeps its old path
         patch.write_text("--- a.py\n+++ a.py\n@@ -1 +1 @@\n-a = 1\n+a = 2\n")
         self._fails("lacks the b/ prefix", diff_file=str(patch))
 
@@ -167,7 +167,7 @@ class ReviewDiffSourceTest(unittest.TestCase):
         # a binary or mode-only section has a `diff --git` line but no `+++`; that still counts as a diff
         binary = Path(self.tmp.name) / "binary.patch"
         binary.write_text("diff --git a/x.bin b/x.bin\nindex 0000000..1111111 100644\nBinary files a/x.bin and b/x.bin differ\n")
-        self.assertEqual(orchestrate.read_diff_file(str(binary))[1], [])
+        self.assertEqual(orchestrate.read_diff_file(str(binary))[1], ["x.bin"])   # a binary section keeps its path
         # three-dot range with no merge base: a clean failure, not a CalledProcessError traceback
         _git(self.repo, "checkout", "-q", "--orphan", "island"); _git(self.repo, "rm", "-rfq", "."); (self.repo / "z.py").write_text("z\n")
         _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "island"); island = _git(self.repo, "rev-parse", "HEAD")
@@ -307,6 +307,21 @@ class ReviewDiffSourceTest(unittest.TestCase):
         _git(self.repo, "add", "."); _git(self.repo, "commit", "-qm", "wide")
         _, out = self._review()
         self.assertIn("soft limit 1,500", out)
+
+    def test_diff_file_deletions_and_binary_sections_reach_the_manifest(self):
+        # Copilot on PR #33: the manifest's "whole changed set" promise held for git ranges only;
+        # a patch's deleted and binary paths were dropped before they could be listed as not readable
+        patch = Path(self.tmp.name) / "mixed.patch"
+        patch.write_text("diff --git a/gone.py b/gone.py\ndeleted file mode 100644\n--- a/gone.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-g = 1\n"
+                         "diff --git a/x.bin b/x.bin\nBinary files a/x.bin and b/x.bin differ\n"
+                         "diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n@@ -1 +1 @@\n-b = 1\n+b = 2\n")
+        self.assertEqual(orchestrate.read_diff_file(str(patch))[1], ["gone.py", "x.bin", "b.py"])
+        prompt, out = self._review(diff_file=str(patch))
+        self.assertIn("### b.py", prompt); self.assertIn("(1/3 changed paths)", out)
+        self.assertIn("not readable in the tree — deleted, submodule, renamed-from (2): gone.py, x.bin", out)
+        rename = Path(self.tmp.name) / "rename.patch"   # an ambiguous rename header defers to its +++ line
+        rename.write_text("diff --git a/old name.py b/new name.py\nsimilarity index 90%\nrename from old name.py\nrename to new name.py\n--- a/old name.py\n+++ b/new name.py\n@@ -1 +1 @@\n-x\n+y\n")
+        self.assertEqual(orchestrate.read_diff_file(str(rename))[1], ["new name.py"])
 
     def test_read_changed_splits_the_set_at_the_line_limit_and_names_unreadable_paths(self):
         (self.repo / "at.py").write_text("x\n" * orchestrate.MAX_FILE_LINES)

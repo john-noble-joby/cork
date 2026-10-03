@@ -283,8 +283,11 @@ BASE=$(cat "$SWEEP_DIR/base")   # persisted in Phase 2; never rely on the variab
 # one cat (fails on a missing file); stdin supplies a blank line so a story.txt without a trailing
 # newline cannot fuse its last line onto the "## Pre-review sweep" heading
 printf '\n' | cat "$SWEEP_DIR/story.txt" - "$SWEEP" > "$SWEEP_DIR/story.md"
-CONTEXT_FILES=(path/to/caller.py path/to/di.cs tests/path/covering_test.py docs/guide.md)   # from the surface inventory
-CONTEXT_ARGS=(); for f in "${CONTEXT_FILES[@]}"; do CONTEXT_ARGS+=(--context-file "$f"); done
+# Context list from the surface inventory, persisted (one path per line) so Phases 6 and 6.5
+# rebuild the same arguments — shell arrays do not survive to those tool calls either.
+printf '%s\n' path/to/caller.py path/to/di.cs tests/path/covering_test.py docs/guide.md > "$SWEEP_DIR/context.txt"
+mapfile -t CONTEXT_FILES < "$SWEEP_DIR/context.txt"
+CONTEXT_ARGS=(); for f in "${CONTEXT_FILES[@]}"; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done
 python3 "$CORK_HOME/orchestrate.py" <TICKET> . --review-model <MODEL> --base-branch "origin/$BASE" --story-file "$SWEEP_DIR/story.md" "${CONTEXT_ARGS[@]}"
 ```
 
@@ -388,18 +391,30 @@ them to make a pass come out clean. Record a budget stop, and the class it expos
 
 **Cork must see the code the loop produced.** Fix commits made during the loop are code no
 cork model has reviewed. Whenever the fixes since the last cork pass exceed ~100 diff lines or
-touch a file cork never saw, run a cork **review-only** fan-out over that delta
-(`--diff-range <last-cork-head>..HEAD --base-branch origin/$BASE --story-file … "${CONTEXT_ARGS[@]}"`) before the
-next Copilot request, and fix what it finds as a batch.
+touch a file cork never saw, run a cork **review-only** fan-out over that delta before the
+next Copilot request, and fix what it finds as a batch. This is a fresh tool call: recompute
+`SWEEP_DIR`, `BASE=$(cat "$SWEEP_DIR/base")` and `CONTEXT_ARGS` from `$SWEEP_DIR/context.txt`
+exactly as in the Phase 4 block (no variable from Phase 4 is still set), then
+`--diff-range <last-cork-head>..HEAD --base-branch "origin/$BASE" --story-file "$SWEEP_DIR/story.md" "${CONTEXT_ARGS[@]}"`.
 
 (Pauses per reviewer when `interactive_review` is on — see Notes.)
 
 ## Phase 6.5 — Final cork re-review (mandatory)
 
 The diff that will merge is not the diff cork reviewed in Phase 4. Run a cork **review-only**
-fan-out over the whole final diff (`--base-branch origin/$BASE`, `story.md` rebuilt from
-`story.txt` plus the current sweep exactly as in Phase 4, and `"${CONTEXT_ARGS[@]}"` from
-Phase 4) and read the manifest. Fix findings as one batch with the
+fan-out over the whole final diff and read the manifest. Nothing from Phase 4's shell is still
+set, so the block rebuilds every input from the files it persisted:
+
+```bash
+SWEEP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/devit/<TICKET>"; SWEEP="$SWEEP_DIR/pre-review-sweep.md"   # recomputed
+BASE=$(cat "$SWEEP_DIR/base"); [ -n "$BASE" ] || { echo "no persisted base in $SWEEP_DIR"; exit 1; }
+printf '\n' | cat "$SWEEP_DIR/story.txt" - "$SWEEP" > "$SWEEP_DIR/story.md"              # story + current sweep, as in Phase 4
+mapfile -t CONTEXT_FILES < "$SWEEP_DIR/context.txt"                                       # plus anything Phase 6 appended
+CONTEXT_ARGS=(); for f in "${CONTEXT_FILES[@]}"; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done
+# then, per model: python3 "$CORK_HOME/orchestrate.py" <TICKET> . --review-model <MODEL> --base-branch "origin/$BASE" --story-file "$SWEEP_DIR/story.md" "${CONTEXT_ARGS[@]}" --skip-validation
+```
+
+Fix findings as one batch with the
 defect-class rule, commit, and — if the batch exceeded ~100 lines — run the fan-out once more
 over that delta. Only then proceed to Phase 7. On the hangar run three models reviewed a
 700-line branch once; the merged branch was 1,800 lines and nothing had re-read it.

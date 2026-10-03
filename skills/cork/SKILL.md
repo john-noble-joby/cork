@@ -89,15 +89,29 @@ reviewers for a branch that implemented nothing.
 files, written once, outside the repository:
 
 ```bash
-RUN_DIR=$(mktemp -d /tmp/cork-run.XXXXXX)        # per run; never inside the worktree
-STORY_FILE="$RUN_DIR/story.md"                   # the ticket (Linear MCP) or the user's stated contract — Write it now
+# Shell variables do not survive between tool calls: everything later blocks need is a FILE under a
+# directory recomputed from the branch name, never a variable carried forward.
+RUN_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/run/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"
+mkdir -p "$RUN_DIR"                               # outside the worktree
+STORY_FILE="$RUN_DIR/story.md"                    # the ticket (Linear MCP) or the user's stated contract — Write it now
 STANDARDS_FILE="$RUN_DIR/standards.md"
 python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "{BASE}" > "$STANDARDS_FILE"
 # Blast radius the diff does not show: callers of changed symbols, DI/registration wiring, the
 # covering tests, docs that restate the behaviour — plus any changed file the manifest later lists
-# as diff-only (over budget or over 500 lines) that the story depends on. Repo-relative paths.
-CONTEXT_FILES=( )                                 # <- fill from grep/LSP over the changed symbols
-CONTEXT_ARGS=(); for f in "${CONTEXT_FILES[@]}"; do CONTEXT_ARGS+=(--context-file "$f"); done
+# as diff-only (over budget or over 500 lines) that the story depends on. Repo-relative paths, one
+# per line, persisted so every later block (and a re-run) rebuilds the same list.
+printf '%s\n' path/to/caller.py tests/path/covering_test.py > "$RUN_DIR/context.txt"   # <- from grep/LSP over the changed symbols
+```
+
+Every later command block starts by recomputing the same paths and rebuilding the array —
+copy this preamble verbatim rather than trusting a variable from an earlier call:
+
+```bash
+RUN_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/run/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"
+STORY_FILE="$RUN_DIR/story.md"; STANDARDS_FILE="$RUN_DIR/standards.md"
+[ -s "$STORY_FILE" ] || { echo "no story at $STORY_FILE — write it first"; exit 1; }
+mapfile -t CONTEXT_FILES < "$RUN_DIR/context.txt"
+CONTEXT_ARGS=(); for f in "${CONTEXT_FILES[@]}"; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done
 ```
 
 Do not dispatch a lens until `$STORY_FILE` has content: the spec-and-test-coverage lens has
@@ -144,12 +158,17 @@ Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it p
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
+RUN_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/run/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"   # Step 2 preamble, recomputed
+STORY_FILE="$RUN_DIR/story.md"; [ -s "$STORY_FILE" ] || { echo "no story at $STORY_FILE — write it first"; exit 1; }
+mapfile -t CONTEXT_FILES < "$RUN_DIR/context.txt"
+CONTEXT_ARGS=(); for f in "${CONTEXT_FILES[@]}"; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done
 python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch {BASE} --story-file "$STORY_FILE" "${CONTEXT_ARGS[@]}"
 ```
 
-`"${CONTEXT_ARGS[@]}"` is the array built in Step 2; it is how callers, wiring, tests and docs
-reach a blind lane — prose cannot deliver them. Expand it after each pass when the manifest
-shows a file the story depends on was seen diff-only.
+The preamble is not decoration: this command runs in a fresh shell, so without it `--story-file`
+expands to an empty path and every context argument silently disappears. `context.txt` is how
+callers, wiring, tests and docs reach a blind lane — prose cannot deliver them. Append to it after
+each pass when the manifest shows a file the story depends on was seen diff-only.
 
 `--story-file` is **required on every call**: pass the `$STORY_FILE` written in Step 2 (the
 ticket or the user's stated contract, outside the repository). devit passes
@@ -200,7 +219,7 @@ Because no fixes land between passes, **every reviewer sees the identical diff**
 
 Dispatch concurrently, then collect when all return:
 
-- **Inputs first:** run the block below up to and including writing `$STORY` and `$STANDARDS_FILE` before dispatching anything — lenses and models read the same two files.
+- **Inputs first:** run the block below up to and including writing `$STORY`, `$STANDARDS_FILE` and `context.txt` before dispatching anything — lenses and models read the same files, and they live under a branch-derived `RUN_DIR`, not in shell variables, because nothing in a variable survives to the next tool call.
 - **Self-review:** dispatch the lenses in `$CORK_HOME/lenses/` (and the repo's `code-review/lenses/`, read from the trusted `{BASE}` ref; cork's own lenses too when the repo under review is cork, detected with absolute common dirs as in Step 2) as parallel read-only subagents over `git diff {BASE}...HEAD`, with `{STORY_FILE}` = `$STORY` and `{STANDARDS}` = `$STANDARDS_FILE`. Gather findings only — apply nothing.
 - **Each model from the `preflight` rotation** (captured in Step 0), all launched together (background processes, then `wait`):
 
@@ -209,15 +228,18 @@ CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 # The story every reviewer judges against: the PR body's acceptance section, the Linear story the
 # branch names, or one the user gives you. Write it once; without it the lanes only get the generic
 # "Review the branch changes for <ticket>." fallback (or a stale checkpoint if <ticket> has one).
-OUTDIR=$(mktemp -d /tmp/cork-review.XXXXXX)   # per-run dir: concurrent runs never share story or report files
+RUN_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/run/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"   # branch-derived, recomputable in any later block
+mkdir -p "$RUN_DIR"; OUTDIR="$RUN_DIR"
 STORY="$OUTDIR/story.md"                      # <- fill from the PR body / ticket / user before fanning out
 STANDARDS_FILE="$OUTDIR/standards.md"; python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "{BASE}" > "$STANDARDS_FILE"   # for the lenses
 # PREFLIGHT_MODELS is the space-separated list of "provider/model" lines from Step 0 preflight
 # Blast radius the diff does not show — callers of changed symbols, DI/registration wiring, covering
-# tests, restating docs, and any changed file the manifest lists as diff-only. Repo-relative paths;
-# populate it here (the full-mode array is a different shell), or the lanes get no context at all.
-CONTEXT_FILES=( )                             # <- fill from grep/LSP over the changed symbols
-CONTEXT_ARGS=(); for f in "${CONTEXT_FILES[@]}"; do CONTEXT_ARGS+=(--context-file "$f"); done
+# tests, restating docs, and any changed file the manifest lists as diff-only. Repo-relative paths,
+# one per line in context.txt; populate it here (full mode's file is a different run), or the lanes
+# get no context at all. Shell variables do not survive tool calls — rebuild from the file.
+printf '%s\n' path/to/caller.py tests/path/covering_test.py > "$RUN_DIR/context.txt"   # <- from grep/LSP over the changed symbols
+mapfile -t CONTEXT_FILES < "$RUN_DIR/context.txt"
+CONTEXT_ARGS=(); for f in "${CONTEXT_FILES[@]}"; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done
 for M in $PREFLIGHT_MODELS; do
   safe="${M//\//-}"
   python3 "$CORK_HOME/orchestrate.py" "${TICKET:-REVIEW}" {WORKTREE} \
