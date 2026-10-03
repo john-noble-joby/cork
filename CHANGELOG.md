@@ -30,6 +30,46 @@ procedure in the README's *Versioning* section.
 ## [Unreleased]
 
 ### Added
+- **Review-input manifest, required context and a configurable budget.** Every API review prints
+  what the model actually saw: the budget split (standards / story / diff / file contents), the
+  changed files sent whole, and the files seen diff-only — over budget, or over 500 lines (with
+  line counts). Large files are omitted instead of being replaced by a size remark that reviewers
+  turned into a finding. `--context-file PATH` (repeatable) names files the reviewer must see
+  whole — unchanged callers, DI wiring, covering tests, restating docs, or a changed file the
+  manifest listed as diff-only (over budget or over 500 lines) — included under
+  `## Required Context` ahead of the changed files and never dropped: a review that cannot fit
+  them fails with the breakdown (in bytes on argv-transported lanes); without named context an
+  over-budget diff stays a diff-only review. `review_budget_chars` in config.json (default
+  192000) sets the prompt size per API review for seats whose models have larger windows. cork
+  warns loudly on the fallback story, on a local base that is behind, ahead of or diverged from
+  `origin/<base>` (review-only and headless), and on a diff over the 1,500-line soft limit.
+  Closes the context items of #32 (hangar #36, FAST #540).
+- **Lenses.** `lenses/` ships four narrow-concern reviewer prompts (state & concurrency; HTTP
+  contract & store; spec & test coverage; standards & docs) run as parallel read-only subagents.
+  devit gains *Phase 3.75 — Lens gate* before the model rotation and *Phase 6.5 — Final cork
+  re-review* after the Copilot loop (plus a cork re-run during the loop when fixes exceed ~100
+  lines or touch files cork never saw); fix steps everywhere record the defect class and the
+  mutation check in the commit message and stop at a second fix of the same area to propose a
+  design change. The cork skill passes `--story-file` and `--context-file` on every call and
+  reports the rotation that actually completed; the Copilot loop skill defines `max` as a cap
+  on non-approving passes (findings, or a bare "needs a closer look"), distinguishes a budget
+  stop caused by findings still arriving from one caused by a persistent non-approving verdict,
+  notes that auto-review on push still needs a request, and
+  that the overview is a per-review snapshot. Standards gain an *Evidence discipline* section
+  (independent Boolean clauses, one failure per fixture, failed state before absence
+  assertions, both credential modes and malformed successful responses, contracts traced
+  through unchanged consumers, inspected vs executed, size is not a finding, advice is a
+  claim). Refs #32 — the remaining item, probing harness model availability in preflight, is
+  tracked in #34.
+- **Reviewers grade against the ticket in every mode.** `--story-file`/`--story` now apply to
+  headless runs too: the blind reviewers and the isolated self-review receive the story, while
+  the implementer's summary stays the fix prompts' context. Without a flag cork looks for the
+  story devit persisted for the ticket (`$XDG_CACHE_HOME/cork/devit/<TICKET>/story.md`, then
+  `story.txt` — outside every repository), then the checkpoint summary, then the named fallback.
+  `standards show <repo> --base-ref REF` prints the assembled rubric from a trusted ref; the
+  devit lens gate and cork self-review feed it to lens subagents instead of the checkout's
+  standards files. An unreadable changed file is listed as skipped in the manifest; an
+  unreadable `--context-file` fails the review like a missing one.
 - **Long-tail review classes are swept before review, not discovered one pass at a time.**
   devit gains *Phase 3.5 — Pre-review sweep*: six artifacts pasted into the PR body — surface
   inventory for every new gate, input-domain table for every external value, contract probes

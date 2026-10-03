@@ -193,6 +193,31 @@ inventory as a finding**: your prompt may simply not have carried it.
   scenario/integration test, or its omission is noted as intentional in the change
   description.
 
+## Evidence discipline
+- **Prove each Boolean clause independently.** A compound guard (`a || b || c`) is three claims:
+  a test that only kills removal of the whole predicate proves none of them. Mutate one clause at
+  a time.
+- **Isolate the invalid fixture.** A "rejects X" test whose fixture also trips an unrelated
+  rejection passes for the wrong reason — one failure per fixture.
+- **Exercise the failed state before asserting its absence.** A privacy or redaction assertion
+  ("the key never appears in health/logs/error bodies") is vacuous unless the test first drives
+  the component into the failure that would expose it and proves an error was recorded.
+- **Both modes, both shapes.** Credential handling is tested in every supported mode (key and
+  guest, enabled and disabled), and parsers are tested on malformed *successful* responses, not
+  only on error bodies — a 200 with a reflected secret in a JSON property is the case that leaks.
+- **Trace changed contracts through unchanged consumers.** A new default, route, env name or
+  schema reaches every caller, installed config file and docs guide, including repos and files
+  the diff did not touch; "unchanged" is a claim to verify, not a reason to skip.
+- **Say what you inspected versus executed**, and keep **coverage gaps** apart from **current
+  defects** in the report. A model's "no findings" over files it saw diff-only is evidence about
+  those files; the review-input manifest tells you which.
+- **File length is not a defect.** Report a large file only with a concrete consequence (a
+  specific responsibility to split, a specific test that cannot be written); never from size
+  alone.
+- **Verify advice before applying it.** A fix another reviewer proposes is a claim: probe it
+  (a scratch program, the library's documentation, a filtered test) before adopting it — one
+  such claim, that an exception's inner message cannot carry request bodies, was false.
+
 ## Adversarial lens (find wrong behavior, not style)
 Boundary values (0, min, max, just-past-max; empty/whitespace/one/many); partial-failure in
 any multi-step or parallel operation (does the failure path carry as much detail as success,

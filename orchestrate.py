@@ -60,6 +60,8 @@ from typing import NoReturn
 CLAUDE         = os.environ.get("CLAUDE_BIN", str(Path.home() / ".local/bin/claude"))
 COPILOT_BASE   = "https://api.githubcopilot.com"
 MAX_FILE_LINES = 500
+_WARN_DIFF_LINES  = 1_500   # soft: reviewers lose context above this; suggest splitting
+_BLOCK_DIFF_LINES = 5_000   # hard (headless only): almost certainly too large to review
 STATE_DIR      = Path.home() / ".local/share/code-orchestrator"
 _OPENCODE_AUTH = Path.home() / ".local/share/opencode/auth.json"
 # cork's own token store (XDG default), overridable with CORK_AUTH_FILE.
@@ -68,7 +70,7 @@ _CORK_AUTH     = Path(os.environ.get("CORK_AUTH_FILE",
 # Public GitHub Copilot OAuth client id (same one editor integrations / opencode
 # use). Overridable in case GitHub rotates it.
 _COPILOT_CLIENT_ID = os.environ.get("CORK_COPILOT_CLIENT_ID", "Iv1.b507a08c87ecfe98")
-_DEFAULT_CHAR_BUDGET = 192_000  # fallback if /models fetch fails
+_DEFAULT_CHAR_BUDGET = 192_000  # default review_budget_chars — see review_budget()
 _RESPONSES_MAX_OUTPUT = 32_000  # reasoning + findings share this ceiling
 _RESPONSES_EFFORTS = ("low", "medium", "high")
 _DEFAULT_RESPONSES_EFFORT = "medium"
@@ -367,6 +369,7 @@ DEFAULT_CONFIG = {
     "interactive_review": True,
     "default_standards": True,
     "responses_effort": _DEFAULT_RESPONSES_EFFORT,
+    "review_budget_chars": _DEFAULT_CHAR_BUDGET,   # prompt size per API review; raise it for large-window seats
     "providers": {
         "copilot":   {"enabled": True},
         "openai":    {"enabled": False},
@@ -940,6 +943,9 @@ def _validate_config(cfg: dict) -> None:
         fail("config.default_standards must be true or false (a JSON boolean)")
     if cfg.get("responses_effort", _DEFAULT_RESPONSES_EFFORT) not in _RESPONSES_EFFORTS:
         fail("config.responses_effort must be low, medium, or high")
+    budget = cfg.get("review_budget_chars", _DEFAULT_CHAR_BUDGET)
+    if not isinstance(budget, int) or budget < 50_000:   # bools are ints below 50000 and fail here too
+        fail("config.review_budget_chars must be an integer of at least 50000 (characters per review prompt)")
 
 
 def _validate_model_ref(provider: str, model: object) -> None:
@@ -982,6 +988,13 @@ def _validate_harness_cfg(name: str, hc: dict) -> None:
         valid = False
     if not valid:
         fail(f"config.providers.{name}.timeout must be a positive finite number of seconds")
+
+
+def review_budget() -> int:
+    # Characters of prompt an API review may carry. The default fits every Copilot model; a
+    # seat whose models have 200k+ token windows should raise it — the review-input manifest
+    # shows what fell off at the current value.
+    return int(load_config(quiet=True).get("review_budget_chars", _DEFAULT_CHAR_BUDGET))
 
 
 def load_config(quiet: bool = False) -> dict:
@@ -1187,6 +1200,32 @@ def git_toplevel(repo: str) -> str:
     return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else repo
 
 
+def _warn_stale_local_base(repo: str, base: str) -> None:
+    # A local branch used as the base can sit behind, ahead of or diverged from its remote: the
+    # review then covers the base's own catch-up (49 files instead of 10 on one run) or misses
+    # changes the remote already has. Say so whenever origin/<base> exists and differs. A
+    # remote-tracking ref given as the base (`origin/develop`) has nothing to compare against.
+    def rev(ref: str) -> str | None:
+        try:
+            r = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+                               cwd=repo, capture_output=True, text=True)
+        except OSError:   # not a directory we can run git in: nothing to warn about here
+            return None
+        return r.stdout.strip() or None if r.returncode == 0 else None
+    if rev(f"refs/remotes/{base}"):
+        return
+    local, remote = rev(f"refs/heads/{base}"), rev(f"origin/{base}")
+    if not local or not remote or local == remote:
+        return
+    def count(rng: str) -> int:
+        r = subprocess.run(["git", "rev-list", "--count", rng], cwd=repo, capture_output=True, text=True)
+        return int(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip().isdigit() else 0
+    behind, ahead = count(f"{base}..origin/{base}"), count(f"origin/{base}..{base}")
+    state = ("diverged from" if behind and ahead else "behind" if behind else "ahead of")
+    print(f"  ⚠ local base {base!r} is {state} origin/{base} ({behind} behind, {ahead} ahead) — the diff is "
+          f"measured against a base the remote does not have; use --base-branch origin/{base} after git fetch", flush=True)
+
+
 def pin_ref(repo: str, ref: str) -> str:
     # The headless pipeline runs tool-capable steps (implement, fix) between validating the
     # base and reading diffs, names and the trusted rubric from it. A symbolic ref can be moved
@@ -1293,8 +1332,10 @@ def _unquote_git_path(quoted: str) -> str:
 
 def read_diff_file(path: str) -> tuple[str, list[str]]:
     # A unified diff supplied by the caller (e.g. `git diff old..new > delta.patch`). Changed
-    # file names come from the `+++ b/<path>` headers; deletions (`+++ /dev/null`) have no
-    # current file to show and are skipped by _file_contents anyway.
+    # file names come from the `+++ b/<path>` headers; a deletion (`+++ /dev/null`) keeps its
+    # `--- a/<path>` name and a binary or mode-only section (a `diff --git` line with no
+    # `+++`) keeps its `b/<path>`, so the manifest lists every changed path — those two land
+    # under "not readable" exactly as they do for a git-range review.
     p = Path(path)
     try:
         p = p.expanduser()
@@ -1315,15 +1356,33 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
     # and NEL, which are ordinary bytes inside a source line, letting one crafted added line
     # exhaust the hunk count and leave `--- a/x` / `+++ b/secret` looking like a header.
     header_re = re.compile(r'^\+\+\+ (?:"b/((?:[^"\\]|\\.)*)"|b/([^\t]+))(?:\t.*)?$')
+    old_re = re.compile(r'^--- (?:"a/((?:[^"\\]|\\.)*)"|a/([^\t]+))(?:\t.*)?$')
+    # `diff --git a/<p> b/<p>`: both sides name the same path (cork reviews renames as
+    # delete + add, like `git diff --no-renames`), so the line is matched as a whole against
+    # itself rather than split on the ambiguous ` b/`.
+    git_re = re.compile(r'^diff --git (?:"a/((?:[^"\\]|\\.)*)"|a/(.+)) (?:"b/((?:[^"\\]|\\.)*)"|b/(.+))$')
     hunk_re = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
     names: list[str] = []
     old_left = new_left = 0   # hunk lines still to consume on each side
     saw_section = False       # a `---`/`+++` pair, or a `diff --git` line (binary / mode-only sections have no `+++`)
+    pending: str | None = None   # path of the current `diff --git` section until a `+++` header names it
     prev = ""
+
+    def git_section_path(line: str) -> str | None:
+        g = git_re.match(line)
+        if not g:
+            return None
+        a = _unquote_git_path(g.group(1)) if g.group(1) is not None else g.group(2)
+        b = _unquote_git_path(g.group(3)) if g.group(3) is not None else g.group(4)
+        return b if a == b else None   # a rename header is ambiguous; its `+++` header still names the new path
+
     for line in text.split("\n"):
         line = line.removesuffix("\r")
         if line.startswith("diff --git ") and not (old_left > 0 or new_left > 0):
             saw_section = True
+            if pending is not None:
+                names.append(pending)   # the previous section had no `+++`: binary or mode-only
+            pending = git_section_path(line)
         if old_left > 0 or new_left > 0:
             if line.startswith("\\"):           # `\ No newline at end of file` is not counted
                 pass
@@ -1337,11 +1396,17 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
             old_left = int(h.group(1) or 1); new_left = int(h.group(2) or 1)
         elif prev.startswith("--- ") and line.startswith("+++ "):
             saw_section = True
+            pending = None
             if (m := header_re.match(line)):
                 names.append(_unquote_git_path(m.group(1)) if m.group(1) is not None else m.group(2))
-            elif not line.startswith("+++ /dev/null"):  # a deletion has no new path
+            elif line.startswith("+++ /dev/null"):       # a deletion: the old path is the changed path
+                if (o := old_re.match(prev)):
+                    names.append(_unquote_git_path(o.group(1)) if o.group(1) is not None else o.group(2))
+            else:
                 fail(f"--diff-file {p}: header {line!r} lacks the b/ prefix — cork needs git-style a/ b/ paths")
         prev = line
+    if pending is not None:
+        names.append(pending)
     if text.strip() and not saw_section:  # a blank file falls through to the shared empty-diff guard
         fail(f"--diff-file {p}: no unified diff found (expected `---`/`+++` file headers or `diff --git` sections)")
     # A patch is caller-supplied input: its paths must stay inside the repo, or the reviewer
@@ -1359,12 +1424,20 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
     return text, names
 
 
-def _file_contents(cwd: str, names: list[str]) -> dict[str, str]:
+def _read_changed(cwd: str, names: list[str]) -> tuple[dict[str, str], dict[str, int], list[str]]:
+    # One pass over the changed set, one predicate for every category: (contents of files up
+    # to MAX_FILE_LINES, name → line count for larger ones, names that cannot be read at all —
+    # deleted paths, submodule pointers, the old side of a rename). Each category is named in
+    # the review-input manifest; nothing is dropped silently and nothing is replaced by a
+    # remark the model could mistake for a finding.
     contents: dict[str, str] = {}
+    large: dict[str, int] = {}
+    skipped: list[str] = []
     root = Path(cwd).resolve()
     for name in names:
         path = Path(cwd) / name
         if not path.exists():
+            skipped.append(name)
             continue
         resolved = path.resolve()
         if not resolved.is_relative_to(root):  # symlink or `..` pointing outside the tree
@@ -1372,26 +1445,50 @@ def _file_contents(cwd: str, names: list[str]) -> dict[str, str]:
         if any(part.lower() == ".git" for part in resolved.relative_to(root).parts):  # `alias -> .git/config`
             fail(f"changed file {name!r} resolves into git metadata")
         if not resolved.is_file():  # a changed submodule is listed as a directory; its pointer change is in the diff
+            skipped.append(name)
             continue
-        lines = resolved.read_text(errors="replace").splitlines()
+        try:
+            lines = resolved.read_text(errors="replace").splitlines()
+        except OSError:   # unreadable (permissions, vanished mid-run): named as skipped, like a deleted path
+            skipped.append(name)
+            continue
         if len(lines) <= MAX_FILE_LINES:
             contents[name] = "\n".join(lines)
-        elif Path(name).suffix.lower() in {
-            ".json", ".yaml", ".yml", ".toml", ".xml",   # config / data
-            ".md", ".txt", ".rst", ".adoc",               # docs / specs
-            ".props", ".targets", ".csproj", ".sln",      # MSBuild
-            ".proto", ".graphql", ".sql",                 # schemas
-        }:
-            contents[name] = (
-                f"[{len(lines)}-line {Path(name).suffix} file — "
-                f"large size expected for this type; see diff for changes]"
-            )
         else:
-            contents[name] = (
-                f"[{len(lines)}-line file — NOTE: this may itself be a finding. "
-                f"Files this large often violate SRP. See diff for changes.]"
-            )
-    return contents
+            large[name] = len(lines)
+    return contents, large, skipped
+
+
+def _file_contents(cwd: str, names: list[str]) -> dict[str, str]:
+    return _read_changed(cwd, names)[0]
+
+
+def _large_files(cwd: str, names: list[str]) -> dict[str, int]:
+    return _read_changed(cwd, names)[1]
+
+
+def _required_contents(cwd: str, paths: list[str]) -> dict[str, str]:
+    # --context-file: unchanged files the reviewer must see whole — callers of a changed
+    # symbol, DI registrations, the tests covering the change, the docs that restate it. Same
+    # containment rules as changed files, but no size cut and no budget fallback: the caller
+    # named them as required, so a missing one is an error and one that does not fit the
+    # budget fails the review instead of being dropped (see review()). Keys are the path as git
+    # names it (root-relative, POSIX), so `./x.py`, `x.py` and an absolute path are one entry
+    # and can be matched against the changed set.
+    root = Path(cwd).resolve()
+    out: dict[str, str] = {}
+    for rel in paths:
+        path = Path(rel) if Path(rel).is_absolute() else Path(cwd) / rel
+        if not path.is_file():
+            fail(f"--context-file {rel!r} is not a file in the repository")
+        resolved = path.resolve()
+        if not resolved.is_relative_to(root) or any(part.lower() == ".git" for part in resolved.relative_to(root).parts):
+            fail(f"--context-file {rel!r} resolves outside the repository or into git metadata")
+        try:
+            out[resolved.relative_to(root).as_posix()] = resolved.read_text(errors="replace")
+        except OSError as e:
+            fail(f"--context-file {rel!r} cannot be read: {e}")
+    return out
 
 
 def git_commit_all(cwd: str, message: str) -> bool:
@@ -1501,7 +1598,29 @@ def _default_rubric_rel(repo: str) -> str | None:
             return nominal.relative_to(root).as_posix()
         except ValueError:
             continue
-    return None
+    # A linked worktree of cork's own clone: lexically the rubric lies outside the worktree,
+    # yet both check out the same repository, so the branch under review can edit the same
+    # blob. Same absolute git common dir → same repository; the rubric is then addressed by
+    # its path inside its own clone's work tree and read from the trusted ref like any other.
+    clone = str(_DEFAULT_STANDARDS.parent.parent)
+    common = _git_common_dir(repo)
+    if common is None or common != _git_common_dir(clone):
+        return None
+    try:
+        return nominal.relative_to(Path(os.path.normpath(Path(git_toplevel(clone)).absolute()))).as_posix()
+    except ValueError:
+        return None
+
+
+def _git_common_dir(path: str) -> Path | None:
+    # Absolute: the plain output is a relative `.git` in a main checkout, so two unrelated
+    # repositories would otherwise compare equal.
+    if not Path(path).is_dir():
+        return None
+    r = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=path, capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    return (Path(path) / r.stdout.strip()).resolve()
 
 
 def _universal_standards(repo: str, changed: set[str] | None, base_ref: str | None) -> str:
@@ -1550,27 +1669,28 @@ def _utf8_len(text: str) -> int:
 
 
 def _budget_files(files: dict[str, str], budget: int,
-                  size: Callable[[str], int] = len) -> tuple[str, int]:
+                  size: Callable[[str], int] = len) -> tuple[str, list[str]]:
     # Pack as many file contents as fit within `budget`, measured by `size` (characters
     # for API lanes, encoded bytes for arg-transported lanes — ordering and stopping must
     # use the same unit as the limit, or a small-in-chars multibyte file that is big in
     # bytes would block an ASCII file behind it that fits). Whole entries (path + fence)
     # are what get emitted, so they are what gets sorted and charged, joins included:
-    # smallest entry first, so small files always get in. Returns (file_block, included_count).
-    entries = sorted((f"### {name}\n```\n{content}\n```" for name, content in files.items()), key=size)
-    included, used = [], 0
-    for entry in entries:
+    # smallest entry first, so small files always get in. Returns (file_block, included names).
+    entries = sorted(((f"### {name}\n```\n{content}\n```", name) for name, content in files.items()),
+                     key=lambda e: size(e[0]))
+    included, names, used = [], [], 0
+    for entry, name in entries:
         cost = size(entry) + (size("\n\n") if included else 0)
         if used + cost > budget:
             break
-        included.append(entry)
+        included.append(entry); names.append(name)
         used += cost
     if not included:
-        return "(files omitted — diff too large; see diff section)", 0
+        return "(files omitted — diff too large; see diff section)", []
     block = "\n\n".join(included)
     if len(included) < len(files):
         block += f"\n\n_(+{len(files) - len(included)} files omitted for token budget — see diff)_"
-    return block, len(included)
+    return block, names
 
 
 def _openai_compatible_call(provider: str, model: str, system: str,
@@ -2003,21 +2123,96 @@ def _review_system(instructions: str) -> str:
     return TRUST_BOUNDARY + "\n\n" + review_system + "\n\n" + SPEC_CONFORMANCE_SUFFIX
 
 
+def _print_manifest(system: str, story: str, diff: str, files: dict[str, str],
+                    included: list[str], budget: int, large: dict[str, int],
+                    required: dict[str, str], skipped: list[str], unit: str = "chars",
+                    size: Callable[[str], int] = len) -> None:
+    # What the model actually saw. A "no findings" verdict means nothing without this: on a
+    # large diff the standards and the diff take most of the budget and smallest-file-first
+    # packing drops exactly the big DI, test and docs files, silently. Printed every run; the
+    # denominator is the whole changed set, and every path lands in exactly one category.
+    # `size` is the unit the budget was packed in — characters, or UTF-8 bytes after an argv
+    # repack — so every component is reported in the unit the line names.
+    full = sum(size(files[n]) for n in included)
+    req = sum(size(c) for c in required.values())
+    total = len(files) + len(large) + len(skipped)
+    print(f"  → review input: budget {budget:,} {unit} — standards {size(system):,}, story {size(story):,}, "
+          f"diff {size(diff):,}, required context {req:,}, file contents {full:,}", flush=True)
+    print(f"  → full contents ({len(included)}/{total} changed paths): "
+          + (", ".join(f"{n} ({size(files[n]):,})" for n in sorted(included)) or "none"), flush=True)
+    if required:
+        print(f"  → required context ({len(required)}, always included): "
+              + ", ".join(f"{n} ({size(c):,})" for n, c in sorted(required.items())), flush=True)
+    dropped = sorted(n for n in files if n not in included)
+    if dropped:
+        print(f"  → diff-only, over budget ({len(dropped)}): " + ", ".join(f"{n} ({size(files[n]):,})" for n in dropped), flush=True)
+    if large:
+        print(f"  → diff-only, over {MAX_FILE_LINES} lines ({len(large)}): "
+              + ", ".join(f"{n} ({c:,} lines)" for n, c in sorted(large.items())), flush=True)
+    if skipped:
+        print(f"  → diff-only, not readable in the tree — deleted, submodule, renamed-from ({len(skipped)}): "
+              + ", ".join(sorted(skipped)), flush=True)
+    if not included and files:
+        print("  → no changed file fit the budget: this is a diff-only review", flush=True)
+
+
+def _required_section(required: dict[str, str]) -> str:
+    if not required:
+        return ""
+    block = "\n\n".join(f"### {n}\n```\n{c}\n```" for n, c in required.items())
+    return ("## Required Context (read these whole: files the change depends on, or changed files "
+            f"omitted for size elsewhere)\n{block}\n\n")
+
+
+def _budget_breakdown(system: str, story: str, diff: str, required_section: str,
+                      size: Callable[[str], int], unit: str) -> str:
+    return (f"standards {size(system):,}, story {size(story):,}, diff {size(diff):,}, "
+            f"required context {size(required_section):,} {unit}")
+
+
 def review(provider: str, model: str, instructions: str, story: str,
            diff: str, files: dict[str, str],
            char_budget: int = _DEFAULT_CHAR_BUDGET,
-           max_attempts: int = 3, repo: str = "") -> str:
+           max_attempts: int = 3, repo: str = "",
+           large: dict[str, int] | None = None,
+           required: dict[str, str] | None = None,
+           skipped: list[str] | None = None) -> str:
     system = _review_system(instructions)
-
-    def build(budget: int, size: Callable[[str], int] = len) -> tuple[str, int]:
-        fixed = size(system) + size(story) + size(diff) + 500
-        file_block, n = _budget_files(files, max(0, budget - fixed), size)
-        return (f"## Story / Task\n{story}\n\n"
-                f"## Changed Files (current state)\n{file_block}\n\n"
-                f"## Branch Diff\n```diff\n{diff}\n```"), n
-
-    user_msg, n_included = build(char_budget)
+    required = required or {}
+    required_section = _required_section(required)
     spec = HARNESSES.get(provider)
+    # Required context is never silently dropped: that is the whole point of naming it. Without
+    # any, an over-budget diff behaves as before — a diff-only prompt (API lanes) or the lane's
+    # own 413 skip (harness lanes); the manifest says no changed file fit.
+    effective_budget, unit, size = char_budget, "chars", len
+
+    def build(budget: int, size: Callable[[str], int] = len) -> tuple[str, list[str]]:
+        fixed = size(system) + size(story) + size(diff) + size(required_section) + 500
+        file_block, names = _budget_files(files, max(0, budget - fixed), size)
+        return (f"## Story / Task\n{story}\n\n"
+                f"{required_section}"
+                f"## Changed Files (current state)\n{file_block}\n\n"
+                f"## Branch Diff\n```diff\n{diff}\n```"), names
+
+    if required:
+        # Measured on the prompt as actually built with no changed file in it — the exact
+        # scaffolding, not the 500-char packing reserve, which would reject inputs that fit.
+        scaffold, _ = build(0)
+        fixed_chars = len(system) + len(scaffold)
+        if fixed_chars > char_budget:
+            fail(f"review input exceeds the {char_budget:,}-char budget by {fixed_chars - char_budget:,} before any "
+                 f"changed file fits ({_budget_breakdown(system, story, diff, required_section, len, 'chars')}) — "
+                 f"review a narrower diff, drop a --context-file, or raise review_budget_chars in config.json")
+        if spec and spec["prompt_via"] == "arg":   # the real limit for this lane is the argv cap, in bytes
+            prefix = "" if spec["system_flag"] else system + _STANDARDS_SEPARATOR
+            fixed_bytes = _utf8_len(prefix) + _utf8_len(scaffold)
+            if fixed_bytes >= _MAX_ARG_BYTES:
+                fail(f"review input for {provider} exceeds the {_MAX_ARG_BYTES:,}-byte argument limit by "
+                     f"{fixed_bytes - _MAX_ARG_BYTES:,} before any changed file fits "
+                     f"({_budget_breakdown(prefix, story, diff, required_section, _utf8_len, 'bytes')}) — "
+                     f"review a narrower diff, drop a --context-file, or use a stdin-prompt lane")
+
+    user_msg, included = build(char_budget)
     if spec and spec["prompt_via"] == "arg":
         # The whole prompt (plus the standards, for a lane with no system flag) travels as
         # ONE argv element the kernel caps at _MAX_ARG_BYTES — in BYTES, while the default
@@ -2037,10 +2232,9 @@ def review(provider: str, model: str, instructions: str, story: str,
                     lo = mid
                 else:
                     hi = mid
-            user_msg, n_included = build(lo, _utf8_len)  # a diff alone over the limit still gets the 413 skip
-    if n_included < len(files):
-        print(f"  → token budget: included {n_included}/{len(files)} files "
-              f"(diff-only for the rest)")
+            user_msg, included = build(lo, _utf8_len)  # a diff alone over the limit still gets the 413 skip
+            effective_budget, unit, size = lo, "bytes (argv cap)", _utf8_len
+    _print_manifest(system, story, diff, files, included, effective_budget, large or {}, required, skipped or [], unit, size)
 
     if provider in HARNESSES:  # one shot; a dead harness is a skipped reviewer, never a traceback
         status, text, _ = _call_and_extract(provider, model, system, user_msg, repo=repo)
@@ -2169,14 +2363,15 @@ def prompt_initial(ticket_id: str) -> str:
     )
 
 
-def prompt_claude_review(base: str, summary: str, diff: str, files: dict[str, str]) -> str:
+def prompt_claude_review(base: str, story: str, diff: str, files: dict[str, str],
+                         budget: int = _DEFAULT_CHAR_BUDGET) -> str:
     # User message for the headless self-review. The reviewer runs with read-only file tools
     # and no shell, so it cannot run `git diff` itself: the diff and the changed files are
     # delivered in the message exactly as for an API lane. The standards, trust boundary and
     # spec axis travel in the system prompt (_review_system).
-    file_block, _ = _budget_files(files, max(0, _DEFAULT_CHAR_BUDGET - len(summary) - len(diff) - 1_000))
+    file_block, _ = _budget_files(files, max(0, budget - len(story) - len(diff) - 1_000))
     return (
-        f"## Story / Task\n{summary}\n\n"
+        f"## Story / Task\n{story}\n\n"
         f"## Changed Files (current state)\n{file_block}\n\n"
         f"## Branch Diff (vs {base})\n```diff\n{diff}\n```\n\n"
         "Follow the review standards in your system prompt. "
@@ -2270,6 +2465,23 @@ def cmd_standards_status(repo: str) -> None:
     else:
         print(f"  universal default: ON ({_DEFAULT_STANDARDS})")
     print(f"  project standards: {project or 'none — run `standards init` to add one'}")
+
+
+def cmd_standards_show(repo: str, base_ref: str | None) -> None:
+    # The assembled reviewer rubric, exactly as the API lanes receive it. With --base-ref the
+    # project layer comes from that trusted tree (the devit lens gate and cork self-review
+    # pass it to subagents this way, so a branch cannot edit its own rubric); without it, the
+    # checkout — the same distinction `standards status` draws. Text on stdout only, so it
+    # can be redirected to a file; the source label goes to stderr.
+    # The ref is validated and pinned exactly as review mode does it: a typo or a vanished
+    # remote-tracking ref must fail, not print a rubric that silently lacks the project layer.
+    if base_ref is not None:
+        require_base_ref(repo, base_ref)
+        base_ref = pin_ref(repo, base_ref)
+    text, label = load_agent_instructions(repo, set() if base_ref else None, base_ref)
+    print(f"standards: {label or 'none'}", file=sys.stderr, flush=True)
+    if text:
+        print(text)
 
 
 def cmd_standards_init(repo: str, opt_out: bool = False) -> None:
@@ -2459,33 +2671,77 @@ def cmd_auth_print_token(as_json: bool = False) -> None:
     print(token)
 
 
-def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True,
-               story_file: str | None = None, story_text: str | None = None,
-               diff_range: str | None = None, diff_file: str | None = None) -> None:
-    if story_file is not None:
-        story_path = Path(story_file)
+def _devit_scratch_dir(tid: str) -> Path:
+    # Where the devit skill persists the fetched story for a ticket (Phase 0) — outside every
+    # repository, so nothing on the branch under review can author it.
+    cache = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+    return cache / "cork" / "devit" / tid
+
+
+def _devit_scratch_story(tid: str) -> tuple[str, str] | None:
+    # story.md (story + pre-review sweep, Phase 4 onward) beats story.txt (the bare ticket).
+    if not tid or tid in (".", "..") or Path(tid).name != tid:   # one plain path component; never walk elsewhere
+        return None
+    for name in ("story.md", "story.txt"):
+        path = _devit_scratch_dir(tid) / name
         try:
-            story_path = story_path.expanduser()  # RuntimeError for an unknown ~user
-            story = story_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError, RuntimeError) as e:
-            fail(f"Cannot read story file {story_path}: {e}")
-        story_source = f"--story-file {story_path}"
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        if text.strip():
+            return text, f"devit scratch {path}"
+    return None
+
+
+def _read_story_file(story_file: str) -> tuple[str, str]:
+    story_path = Path(story_file)
+    try:
+        story_path = story_path.expanduser()  # RuntimeError for an unknown ~user
+        story = story_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError, RuntimeError) as e:
+        fail(f"Cannot read story file {story_path}: {e}")
+    return story, f"--story-file {story_path}"
+
+
+def resolve_story(tid: str, story_file: str | None, story_text: str | None,
+                  checkpoint: dict | None = None) -> tuple[str, str]:
+    # Precedence: an explicit flag, then the story devit persisted for this ticket, then the
+    # implementer's own summary from the checkpoint, then a fallback that the manifest and a
+    # warning both name — a reviewer must never silently grade against no contract.
+    if story_file is not None:
+        story, story_source = _read_story_file(story_file)
     elif story_text is not None:
-        story = story_text
-        story_source = "--story"
+        story, story_source = story_text, "--story"
     else:
-        state = load_state(tid)
+        found = _devit_scratch_story(tid)
+        state = load_state(tid) if checkpoint is None else checkpoint
         done_summary = state.get("done", {}).get("summary")
         checkpoint_summary = state.get("summary")
-        if done_summary:
+        if found:
+            story, story_source = found
+        elif done_summary:
             story, story_source = done_summary, "checkpoint done.summary"
         elif checkpoint_summary:
             story, story_source = checkpoint_summary, "checkpoint summary"
         else:
-            story = f"Review the branch changes for {tid}."
-            story_source = "fallback"
+            story, story_source = f"Review the branch changes for {tid}.", "fallback"
     if (story_file is not None or story_text is not None) and not story.strip():
         fail(f"Story from {story_source} is empty.")
+    return story, story_source
+
+
+def _warn_fallback_story(story_source: str) -> None:
+    if story_source == "fallback":
+        print("  ⚠ no story supplied — the spec-conformance axis has nothing to check against and "
+              "the reviewer will say so; pass --story-file (devit writes one) or --story", flush=True)
+
+
+def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = True,
+               story_file: str | None = None, story_text: str | None = None,
+               diff_range: str | None = None, diff_file: str | None = None,
+               context_files: list[str] | None = None) -> None:
+    story, story_source = resolve_story(tid, story_file, story_text)
+    _warn_fallback_story(story_source)
 
     _validate_model_ref(*_split_model_ref(model_ref))  # shape only; independent of --skip-validation
     # The diff under review comes from exactly one source: a commit range (delta rounds), a
@@ -2505,6 +2761,7 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     if diff_range is not None:
         require_range(repo, diff_range)
         require_base_ref(repo, base)
+        _warn_stale_local_base(repo, base)   # the base still anchors the standards for a range review
         a, b = _split_range(diff_range)
         pinned_range = f"{pin_ref(repo, a)}{'...' if '...' in diff_range else '..'}{pin_ref(repo, b)}"
         diff, scope, base_ref = git_diff_range(repo, pinned_range), diff_range, pin_ref(repo, base)
@@ -2513,10 +2770,14 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
         scope, base_ref = f"diff file {diff_file}", None
     else:
         require_base_ref(repo, base)
+        _warn_stale_local_base(repo, base)
         base_ref = pin_ref(repo, base)
         diff, scope = git_diff_branch(repo, base_ref), base
     if not diff.strip():   # before the probe and before listing names: an empty diff needs neither
         fail(f"No diff for {scope} — nothing to review.")
+    if len(diff.splitlines()) >= _WARN_DIFF_LINES:
+        print(f"  ⚠ diff is {len(diff.splitlines()):,} lines (soft limit {_WARN_DIFF_LINES:,}): reviewers lose "
+              "file context above this — see the review-input manifest below and consider splitting", flush=True)
     provider, model = _split_model_ref(model_ref)
     if validate:
         verdict = _probe(provider, model)
@@ -2527,12 +2788,16 @@ def cmd_review(tid: str, repo: str, base: str, model_ref: str, validate: bool = 
     instructions, instructions_path = load_agent_instructions(repo, set(names), base_ref)
     if instructions_path:
         print(f"Review instructions: {instructions_path} ({len(instructions)} chars)")
-    files = _file_contents(repo, names)
+    files, large, skipped = _read_changed(repo, names)
+    required = _required_contents(repo, context_files or [])
+    # A changed file named as required context is sent once, whole, under Required Context.
+    files = {n: c for n, c in files.items() if n not in required}
+    large = {n: c for n, c in large.items() if n not in required}
     print(f"Story: {story_source} ({len(story)} chars)")
-    print(f"\n── Review: {provider}/{model} — {len(files)} files, "
+    print(f"\n── Review: {provider}/{model} — {len(names)} changed paths, "
           f"{len(diff.splitlines())} diff lines vs {scope}\n", flush=True)
-    print(review(provider, model, instructions, story, diff, files, _DEFAULT_CHAR_BUDGET,
-                 repo=repo))
+    print(review(provider, model, instructions, story, diff, files, review_budget(),
+                 repo=repo, large=large, required=required, skipped=skipped))
 
 def cmd_preflight() -> None:
     cfg = load_config()
@@ -2660,14 +2925,19 @@ def main() -> None:
         sub = sys.argv[2] if len(sys.argv) >= 3 else ""
         rest = sys.argv[3:]
         opt = "--opt-out" in rest
-        repo = next((a for a in rest if not a.startswith("--")), ".")
-        repo = str(Path(repo).expanduser().resolve())
+        base_ref = rest[rest.index("--base-ref") + 1] if "--base-ref" in rest and rest.index("--base-ref") + 1 < len(rest) else None
+        positional = [a for i, a in enumerate(rest) if not a.startswith("--") and (i == 0 or rest[i - 1] != "--base-ref")]
+        repo = str(Path(positional[0] if positional else ".").expanduser().resolve())
         if sub == "status":
             cmd_standards_status(repo)
         elif sub == "init":
             cmd_standards_init(repo, opt_out=opt)
+        elif sub == "show":
+            if "--base-ref" in rest and base_ref is None:
+                fail("usage: orchestrate.py standards show [repo] --base-ref REF")
+            cmd_standards_show(repo, base_ref)
         else:
-            fail("usage: orchestrate.py standards status|init [repo] [--opt-out]")
+            fail("usage: orchestrate.py standards status|init|show [repo] [--opt-out] [--base-ref REF]")
         return
 
     parser = argparse.ArgumentParser(
@@ -2679,7 +2949,8 @@ def main() -> None:
                 "  login                 Give cork its own refreshable Copilot token\n"
                 "  preflight             Probe the configured model rotation\n"
                 "  config ...            Show or edit cork configuration\n"
-                "  standards ...         Show or initialize review standards"),
+                "  standards status|init|show [repo] [--opt-out] [--base-ref REF]\n"
+                "                        Inspect, initialize or print the effective review standards"),
     )
     parser.add_argument("ticket_id",  help="Linear ticket ID, e.g. ENG-123")
     parser.add_argument("repo_path",  nargs="?", default=None,
@@ -2710,9 +2981,11 @@ def main() -> None:
                              "does the implementing and fixing instead of a headless subprocess.")
     story_group = parser.add_mutually_exclusive_group()
     story_group.add_argument("--story-file", metavar="PATH",
-                             help="Review-only story/acceptance contract read as UTF-8.")
+                             help="Story/acceptance contract read as UTF-8; every reviewer grades the "
+                                  "diff against it (review-only and headless). Without it cork looks for "
+                                  "the story devit persisted for the ticket, then the checkpoint summary.")
     story_group.add_argument("--story", metavar="TEXT",
-                             help="Review-only story/acceptance contract supplied inline. "
+                             help="Story/acceptance contract supplied inline. "
                                   "Use --story=TEXT when TEXT starts with '-'.")
     diff_group = parser.add_mutually_exclusive_group()
     diff_group.add_argument("--diff-range", metavar="A..B",
@@ -2723,13 +2996,20 @@ def main() -> None:
     diff_group.add_argument("--diff-file", metavar="PATH",
                             help="Review-only: review a unified diff read from PATH (UTF-8); "
                                  "changed files are taken from its `+++ b/<path>` headers.")
+    parser.add_argument("--context-file", metavar="PATH", action="append", dest="context_files",
+                        help="Review-only, repeatable: a repo file the reviewer must see whole — typically an "
+                             "unchanged dependency (a caller of a changed symbol, DI wiring, the covering tests, "
+                             "restating docs), or a changed file the manifest listed as diff-only (over budget "
+                             "or over 500 lines). Always included in full; the review fails rather than dropping "
+                             "it when it does not fit review_budget_chars.")
     args = parser.parse_args()
-    review_only_flags = [f for f, v in (("--story", args.story), ("--story-file", args.story_file),
-                                        ("--diff-range", args.diff_range), ("--diff-file", args.diff_file))
+    review_only_flags = [f for f, v in (("--diff-range", args.diff_range), ("--diff-file", args.diff_file),
+                                        ("--context-file", args.context_files))
                          if v is not None]
     if review_only_flags and not args.review_model:
-        # Otherwise a forgotten --review-model silently turns an intended review into a full
-        # implementation run that ignores the supplied story or diff.
+        # A diff source or required context only means something to a review; without
+        # --review-model a forgotten flag would start a full implementation run that silently
+        # ignores them. (--story/--story-file apply to both modes and are not guarded here.)
         parser.error(f"{'/'.join(review_only_flags)} are review-only flags: add --review-model MODEL")
     if args.diff_file is not None and args.base_branch is not None:
         parser.error("--diff-file has no base: drop --base-branch (with --diff-range it stays the trusted ref for the standards)")
@@ -2751,10 +3031,12 @@ def main() -> None:
     if args.review_model:
         cmd_review(tid, repo, base, args.review_model, validate=not args.skip_validation,
                    story_file=args.story_file, story_text=args.story,
-                   diff_range=args.diff_range, diff_file=args.diff_file)
+                   diff_range=args.diff_range, diff_file=args.diff_file,
+                   context_files=args.context_files)
         return
 
     require_base_ref(repo, base)
+    _warn_stale_local_base(repo, base)
     repo = git_toplevel(repo)   # a nested directory must not become the containment root
     # Immutable from here: tool-capable steps follow. Diffs, names and the trusted rubric use
     # the pinned commit; the branch name survives only for the PR's target and for display.
@@ -2800,6 +3082,15 @@ def main() -> None:
     else:
         state = {"version": 2, "ticket_id": tid, "done": {}}
 
+    # The story the reviewers grade against is the ticket (a flag or devit's persisted copy),
+    # not the implementer's own description of its work — `summary` below stays the fix
+    # prompts' context. Resolved before preflight so a bad --story-file fails before any probe
+    # spends quota, and again after Step 1 when only the fresh checkpoint summary is left.
+    story, story_source = resolve_story(tid, args.story_file, args.story, state)
+    # Warned here, not after Step 1: on a fresh run the fallback is replaced by the Step 1
+    # summary below, so this is the only moment the missing contract is visible.
+    _warn_fallback_story(story_source)
+
     # Freeze the selected rotation at first run; reuse it on resume.
     # Never re-preflight on resume — the probes cost Copilot quota and the
     # rotation must stay stable so step numbers don't shift mid-run.
@@ -2835,15 +3126,19 @@ def main() -> None:
         state["done"]["summary"]   = summary
         mark_done_v2(tid, state)
         step_done(1, total, f"Claude Code: implement {tid}")
+        if story_source.startswith(("checkpoint", "fallback")):
+            story, story_source = resolve_story(tid, args.story_file, args.story, state)
     else:
         skip(1, total, f"Claude Code: implement {tid}")
+    print(f"  Story: {story_source} ({len(story)} chars)")
 
     diff       = git_diff_branch(repo, base)
-    files      = changed_files_branch(repo, base)
+    changed_names = _git_changed_names(repo, f"{base}...HEAD")
+    files, _large, skipped_names = _read_changed(repo, changed_names)
     if not diff.strip():
         fail("No diff vs base branch — nothing to review.")
     diff_lines = len(diff.splitlines())
-    print(f"  {len(files)} files, {diff_lines} diff lines vs {base}")
+    print(f"  {len(changed_names)} changed paths, {diff_lines} diff lines vs {base}")
 
     # Standards are loaded only now — after Step 1 has implemented and committed — so a
     # rubric or opt-out sentinel the implementation itself added or edited is seen as part
@@ -2859,8 +3154,7 @@ def main() -> None:
     # A diff > ~1,500 lines saturates reviewer context and overflows smaller
     # models (gpt-4o at 64k tokens fails around 7,000 lines). Warn early so
     # the story can be split before investing review time.
-    _WARN_LINES  = 1_500   # soft: flag for splitting consideration
-    _BLOCK_LINES = 5_000   # hard: refuse to continue (almost certainly too large)
+    _WARN_LINES, _BLOCK_LINES = _WARN_DIFF_LINES, _BLOCK_DIFF_LINES
     if diff_lines >= _BLOCK_LINES:
         fail(
             f"Diff is {diff_lines} lines — too large for reliable multi-model review "
@@ -2887,7 +3181,7 @@ def main() -> None:
         # with the trusted standards assembled above as the system prompt — the branch cannot
         # supply any part of its own review rubric.
         self_review_out = run_claude_review(
-            _review_system(instructions), prompt_claude_review(base, summary, diff, files), cwd=repo
+            _review_system(instructions), prompt_claude_review(base, story, diff, files, review_budget()), cwd=repo
         )
         print(f"  {self_review_out[:300]}…")
         state["done"]["self_review"] = self_review_out
@@ -2921,11 +3215,13 @@ def main() -> None:
         if key in rem["models"] and key not in rem["needs_fix_only"]:
             step(review_step, total, f"Blind review: {key}", ticket_id=tid)
             diff  = git_diff_branch(repo, base)
-            files = changed_files_branch(repo, base)
-            print(f"  Sending {len(files)} files, {len(diff.splitlines())} lines to {key}")
+            changed_names = _git_changed_names(repo, f"{base}...HEAD")   # fixes since the last pass may have added files
+            files, large, skipped_names = _read_changed(repo, changed_names)
+            print(f"  Sending {len(changed_names)} changed paths, {len(diff.splitlines())} lines to {key}")
             review_out = review(
                 entry["provider"], entry["model"],
-                instructions, summary, diff, files, _DEFAULT_CHAR_BUDGET, repo=repo,
+                instructions, story, diff, files, review_budget(), repo=repo,
+                large=large, skipped=skipped_names,
             )
             print(f"  {review_out[:300]}…")
             _save_model(tid, state, key, "review", review_out)

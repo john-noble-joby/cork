@@ -376,12 +376,12 @@ class ArgvTest(HarnessBase):
         # A long-named empty file has a tiny *content* but a large *entry*; sorting by
         # content put it first and its miss ended packing before a.py that fits.
         long = "é" * 60
-        block, n = orchestrate._budget_files({long: "", "a.py": "xxxxx"}, 40)
-        self.assertEqual(n, 1); self.assertIn("### a.py", block)
+        block, names = orchestrate._budget_files({long: "", "a.py": "xxxxx"}, 40)
+        self.assertEqual(names, ["a.py"]); self.assertIn("### a.py", block)
         # joins are charged: two 22-char entries need 46, not 44
         two = {"a.py": "xxxxx", "b.py": "yyyyy"}
-        self.assertEqual(orchestrate._budget_files(two, 44)[1], 1)
-        self.assertEqual(orchestrate._budget_files(two, 46)[1], 2)
+        self.assertEqual(len(orchestrate._budget_files(two, 44)[1]), 1)
+        self.assertEqual(len(orchestrate._budget_files(two, 46)[1]), 2)
         block, _ = orchestrate._budget_files(two, 46)
         self.assertEqual(len(block), 46)                              # exactly the budget, joins included
 

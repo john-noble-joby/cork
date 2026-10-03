@@ -2,7 +2,7 @@ import io
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
@@ -291,6 +291,67 @@ class ReviewDiffTest(unittest.TestCase):
         self.assertNotIn("prompt_push_pr(tid, base, summary)", src)
         self.assertIn("base_name, base = base, pin_ref(repo, base)", src)
 
+    def test_review_prints_an_input_manifest_naming_included_and_omitted_files(self):
+        # a verdict is only readable against what the model saw: every run prints the budget
+        # split, the files sent with full contents, and the files it saw diff-only (and why)
+        files = {"small.py": "x" * 10, "mid.py": "y" * 100, "big.py": "z" * 5_000}
+        out = io.StringIO()
+        with patch.object(orchestrate, "_call_and_extract", return_value=(200, "review ok", None)), redirect_stdout(out):
+            orchestrate.review("copilot", "model", "", "story", "diff", files,
+                               char_budget=len(orchestrate._review_system("")) + 500 + 300 + 200,
+                               large={"huge.cs": 1_234}, skipped=["gone.py"])
+        text = out.getvalue()
+        self.assertIn("review input: budget", text); self.assertIn("required context 0,", text)
+        self.assertRegex(text, r"full contents \(2/5 changed paths\): mid\.py \(100\), small\.py \(10\)")
+        self.assertIn("diff-only, over budget (1): big.py (5,000)", text)
+        self.assertIn(f"diff-only, over {orchestrate.MAX_FILE_LINES} lines (1): huge.cs (1,234 lines)", text)
+        self.assertIn("not readable in the tree — deleted, submodule, renamed-from (1): gone.py", text)
+
+    def test_over_budget_diff_without_required_context_still_reviews(self):
+        # no --context-file: an over-budget diff is a diff-only review as before (API lane), or the
+        # lane's own skip (harness lane) — never a hard failure that kills a headless rotation
+        out = io.StringIO()
+        with patch.object(orchestrate, "_call_and_extract", return_value=(200, "review ok", None)) as call, redirect_stdout(out):
+            result = orchestrate.review("copilot", "model", "", "story", "x" * 60_000, {"a.py": "a"}, char_budget=50_000)
+        self.assertEqual(result, "review ok"); call.assert_called_once()
+        self.assertIn("file contents 0", out.getvalue()); self.assertIn("no changed file fit the budget", out.getvalue())
+        with patch.object(orchestrate, "_call_and_extract", return_value=(413, "too big", None)), redirect_stdout(io.StringIO()):
+            result = orchestrate.review("codex", "m", "", "story", "x" * 60_000, {}, char_budget=50_000, repo="/repo")
+        self.assertIn("skipped", result)
+
+    def test_required_context_guard_measures_the_real_scaffolding_not_the_packing_reserve(self):
+        # Copilot on PR #33: counting the 500-char reserve as content rejected inputs that fit.
+        # An assembled prompt 300 chars under the budget must pass; 200 over it must fail.
+        budget, story, diff = 50_000, "story", "diff"
+        overhead = len(orchestrate._required_section({"ctx.py": ""})) + len(orchestrate._review_system(""))
+        fits = "r" * (budget - 300 - len(story) - len(diff) - overhead)
+        with patch.object(orchestrate, "load_config", return_value={}), \
+             patch.object(orchestrate, "_call_and_extract", return_value=(200, "review ok", None)), redirect_stdout(io.StringIO()):
+            orchestrate.review("copilot", "m", "", story, diff, {}, char_budget=budget, required={"ctx.py": fits})
+            err = io.StringIO()
+            with redirect_stderr(err), self.assertRaises(SystemExit):
+                orchestrate.review("copilot", "m", "", story, diff, {}, char_budget=budget, required={"ctx.py": fits + "r" * 500})
+        self.assertIn("exceeds the 50,000-char budget", err.getvalue())
+
+    def test_required_context_is_checked_in_bytes_on_arg_lanes_and_manifest_names_the_byte_budget(self):
+        # opencode carries the whole prompt as one argv element capped in BYTES; a required
+        # section that fits the char budget but not the arg cap must fail with the breakdown,
+        # not pass the manifest's "always included" and then skip on E2BIG
+        err = io.StringIO()
+        with patch.object(orchestrate, "load_config", return_value={}), redirect_stderr(err), self.assertRaises(SystemExit):
+            orchestrate.review("opencode", "p/m", "", "story", "diff", {}, repo="/repo",
+                               required={"ctx.py": "r" * 140_000})
+        self.assertIn("byte argument limit", err.getvalue()); self.assertIn("required context", err.getvalue())
+        # after an argv repack the manifest reports the effective byte budget, not the char one
+        files = {"big.py": "x" * (orchestrate._MAX_ARG_BYTES - 2_000), "tiny.py": "y" * 100}
+        fake_run = Mock(return_value=Mock(returncode=0, stdout="ok", stderr=""))
+        out = io.StringIO()
+        with patch.object(orchestrate, "load_config", return_value={}), patch.object(orchestrate.subprocess, "run", fake_run), \
+             patch.object(orchestrate, "_harness_scratch", return_value=__import__("contextlib").nullcontext("")), redirect_stdout(out):
+            orchestrate.review("opencode", "p/m", "S" * 3_000, "é" * 100, "diff", files, repo="/repo")
+        self.assertIn("bytes (argv cap)", out.getvalue())
+        self.assertIn("story 200,", out.getvalue())          # components are reported in bytes too, not characters
+
     def test_fix_prompt_frames_review_findings_as_untrusted(self):
         # the review text can quote a hostile ticket line verbatim; the fixer must be told
         # what it is before reading it, and the framing must precede the findings
@@ -380,7 +441,7 @@ class ReviewDiffTest(unittest.TestCase):
         story = "Implement the widget"
         diff = "diff"
         with (
-            patch.object(orchestrate, "_budget_files", return_value=("", 0)) as budget,
+            patch.object(orchestrate, "_budget_files", return_value=("", [])) as budget,
             patch.object(
                 orchestrate, "_call_and_extract", return_value=(200, "review output", None)
             ) as call_api,

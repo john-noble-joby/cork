@@ -63,10 +63,12 @@ back to inline if the `superpowers` plugin isn't installed), sweeps the long-tai
 classes before any reviewer runs (Phase 3.5: surface inventory, input-domain table, contract
 probes, upstream-drift check, platform matrix, and a docs & wording sweep from
 `references/docs-sweep.md` — one agent by default, up to two split by audience over a shared
-claim inventory the session reconciles — each pasted into the PR body), runs cork review+fix, opens a
-PR (`<TICKET>:` title + "In plain terms" body + the sweep artifacts), runs the
-`copilot-review-loop` with a ~4-pass budget, and surfaces all pushbacks. Orchestrates the
-other skills; does not auto-merge.
+claim inventory the session reconciles — each pasted into the PR body), runs the lens gate
+(`$CORK_HOME/lenses/`, Phase 3.75), runs cork review+fix with `--story-file` and `--context-file`
+for the blast radius, opens a PR (`<TICKET>:` title + "In plain terms" body + the sweep
+artifacts), runs the `copilot-review-loop` with a ~4-pass budget, re-reviews the final diff
+with cork (Phase 6.5), and surfaces all pushbacks. Orchestrates the other skills; does not
+auto-merge.
 
 ### cork-setup
 Guided, interactive first-time setup. Say "set up cork" and it walks through the Copilot

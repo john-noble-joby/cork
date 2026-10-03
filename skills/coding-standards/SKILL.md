@@ -154,6 +154,19 @@ Correctness and standards say nothing about whether the change implements the *r
 - **Report three things**, quoting the spec line for each: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for — scope creep, distinguished from necessary enabling work; (c) requirements that look implemented but whose implementation looks wrong.
 - Design decisions the spec already argued through are settled — the spec pass checks that they were *implemented as written*, not whether they were right (a correctness defect still counts, on the correctness axis).
 
+## Evidence discipline
+
+What counts as proof, for the implementer's tests and the reviewer's report alike (condensed as *Evidence discipline* in `standards/AGENTS.md`):
+
+- **Each Boolean clause independently.** A compound guard is one claim per clause; mutate clauses one at a time (whole-predicate removal killed by a single newline test left the upper-half check unproven on FAST #540).
+- **One failure per fixture.** A "rejects X" fixture that also trips an unrelated rejection passes for the wrong reason.
+- **Failed state first.** Drive the component into the failure, prove it was recorded, then assert what must be absent (keys in health, logs, error bodies). A disabled or empty monitor proves nothing.
+- **Both modes, both shapes.** Every supported credential mode; malformed *successful* responses as well as error bodies.
+- **Changed contracts through unchanged consumers.** Defaults, routes, env names and schemas are traced into callers, installed configs and guides the diff did not touch; the devit surface inventory and `--context-file` exist for this.
+- **Inspected vs executed; gaps vs defects.** The report separates what was read from what was run, and what is uncovered from what is wrong. A reviewer that saw a file diff-only (the review-input manifest says so) has no evidence about that file.
+- **Size is not a finding.** A large file is reported only with a concrete consequence.
+- **Advice is a claim.** Probe another reviewer's proposed fix before adopting it.
+
 ## Review conduct (short form)
 
 - **Pass order:** correctness first, then the defect-class sweep, then style; spec conformance runs isolated from those (parallel subagent where the harness has them, otherwise its own sequential pass) and is reported under its own heading, not reranked. Every suspected defect needs a **concrete failure scenario** (inputs/state → wrong output); no "might be an issue".
