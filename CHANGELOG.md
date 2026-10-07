@@ -31,13 +31,19 @@ procedure in the README's *Versioning* section.
 
 ### Added
 - **`cork doctor` and `cork update`** (closes #36). `doctor` prints one line per session — the
-  version, and whether the clone is at `origin/main`, every installed skill matches the clone
-  byte for byte (stamps only move at a release, so content is the drift signal), and the `cork`
-  link resolves to this clone — with a `⚠` line per problem and exit 0, so it runs as a
-  `SessionStart` hook; `install.sh` prints the hook snippet. `update` is `git pull --ff-only`
-  plus `install.sh`, refusing a dirty tree. `install.sh` honours `CORK_BIN_DIR`, and the installer
-  tests now redirect `HOME` and the bin dir for real (the old `setdefault` was a no-op, so every
-  test run relinked the real `~/.local/bin/cork` to a temp repo).
+  version, and whether the clone is on `main` at `origin/main`, every installed skill and
+  `statusline.py` match the clone byte for byte (stamps only move at a release, so content is
+  the drift signal; extra files left behind count), the `cork` link and the `cork` on PATH
+  resolve to this clone, and `CORK_HOME` is this clone — with a `⚠` line per problem and exit 0
+  even on an unexpected error or a non-UTF-8 stdout, so it runs as a `SessionStart` hook;
+  `install.sh` prints the hook snippet (running the clone's own `bin/cork`, with `CORK_BIN_DIR`
+  carried when it is not the default). `update` is `git pull --ff-only` plus `install.sh`,
+  refusing a dirty tree or a clone not on `main`. `install.sh` honours `CORK_BIN_DIR`, and the
+  installer tests now redirect `HOME` and the bin dir for real (the old `setdefault` was a
+  no-op, so every test run relinked the real `~/.local/bin/cork` to a temp repo).
+- **Preflight probes give reasoning models room to answer.** The probe allowed 16 output tokens;
+  `gemini-3.8-flash` spends ~86 reasoning tokens before its first visible one, so the seat's
+  Gemini lane came back empty and was dropped as "other" on every preflight. The budget is 256.
 - **Long-tail review classes are swept before review, not discovered one pass at a time.**
   devit gains *Phase 3.5 — Pre-review sweep*: six artifacts pasted into the PR body — surface
   inventory for every new gate, input-domain table for every external value, contract probes

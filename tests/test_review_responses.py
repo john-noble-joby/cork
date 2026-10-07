@@ -114,7 +114,7 @@ class ResponsesCompletionTest(unittest.TestCase):
                     self.assertEqual(orchestrate._probe(provider, "gpt-6-sol"), "ok")
                     self.assertEqual(self.http.call_count, 1)
                     payload = self.http.call_args.args[2]
-                    self.assertEqual(payload["max_output_tokens"], 16)
+                    self.assertEqual(payload["max_output_tokens"], orchestrate._PROBE_MAX_OUT)
                     self.assertEqual(payload["reasoning"], {"effort": "high"})
 
     def test_complete_and_statusless_responses_ignore_stale_error_metadata(self):

@@ -1866,7 +1866,9 @@ def _probe(provider: str, model: str, details: dict | None = None) -> str:
     # A cheap availability probe — cap output hard so it can't burn review-sized
     # quota (the classification only needs the HTTP status, not the content).
     try:
-        status, text, _ = _call_and_extract(provider, model, "", "ok", max_out=16)
+        # 256, not 16: a reasoning model (gemini-3.8-flash spends ~86 reasoning tokens on "ok")
+        # returns 200 with empty content when starved, and an empty probe reads as "other".
+        status, text, _ = _call_and_extract(provider, model, "", "ok", max_out=_PROBE_MAX_OUT)
     except (TimeoutError, socket.timeout):
         return "timeout"
     except urllib.error.URLError as e:
@@ -2612,6 +2614,9 @@ def _version() -> str:
         return f"cork {ver}"
 
 
+_PROBE_MAX_OUT = 256
+
+
 def _clone_root() -> Path:
     return Path(__file__).resolve().parent
 
@@ -2633,9 +2638,14 @@ def _git_out(cwd: Path, *args: str, timeout: int | None = None) -> str | None:
 
 
 def _doctor_clone(clone: Path, fetch: bool) -> list[str]:
-    # The engine runs straight from the clone, so "latest" means the clone is at origin/main.
+    # The engine runs straight from the clone, so "latest" means the clone is at origin/main —
+    # on main: a feature branch or detached HEAD at the same commit is not "current" either,
+    # because the next checkout of main runs old code and `cork update` would not move main.
     problems: list[str] = []
-    if _git_out(clone, "status", "--porcelain"):
+    branch = _git_out(clone, "symbolic-ref", "--short", "-q", "HEAD")
+    if branch != "main":
+        problems.append(f"clone is on {branch or 'a detached HEAD'}, not main — agents run this checkout; `cork update` only updates main")
+    if _git_out(clone, "status", "--porcelain", "--untracked-files=no"):
         problems.append(f"clone {clone} has uncommitted changes — `cork update` refuses a dirty tree")
     if fetch and _git_out(clone, "fetch", "--quiet", "origin", timeout=8) is None:
         problems.append("could not fetch origin — freshness compared against the last fetch")
@@ -2651,35 +2661,88 @@ def _doctor_clone(clone: Path, fetch: bool) -> list[str]:
     return problems
 
 
+def _skill_names(clone: Path) -> list[str]:
+    # The installer's manifest is the inventory: a skills/ directory not listed there is never
+    # installed, so reporting it as missing would be a complaint `cork update` cannot fix.
+    try:
+        line = next(l for l in (clone / "install.sh").read_text().splitlines() if l.startswith("SKILLS=("))
+        return line.removeprefix("SKILLS=(").removesuffix(")").split()
+    except (OSError, StopIteration):
+        return sorted(p.parent.name for p in clone.glob("skills/*/SKILL.md"))
+
+
 def _doctor_skills(clone: Path, skills_dir: Path) -> list[str]:
     # Installed skills are copies; version stamps only move at a release, so a stale copy is
-    # detected by content, not by stamp.
+    # detected by content, not by stamp. statusline.py is installed beside the skills dir.
     problems: list[str] = []
-    for src in sorted(clone.glob("skills/*/SKILL.md")):
-        name = src.parent.name
-        dst_dir = skills_dir / name
-        if not (dst_dir / "SKILL.md").is_file():
-            problems.append(f"skill {name} is not installed in {skills_dir} — run `cork update`")
+    for name in _skill_names(clone):
+        src_dir, dst_dir = clone / "skills" / name, skills_dir / name
+        try:
+            if not (dst_dir / "SKILL.md").is_file():
+                problems.append(f"skill {name} is not installed in {skills_dir} — run `cork update`")
+                continue
+            stale = _skill_drift(src_dir, dst_dir)
+        except OSError as e:   # unreadable on either side: a problem line, not a crash in a hook
+            problems.append(f"skill {name} could not be compared ({e}) — run `cork update`")
             continue
-        stale = [p.relative_to(src.parent).as_posix() for p in src.parent.rglob("*") if p.is_file()
-                 and (not (dst_dir / p.relative_to(src.parent)).is_file()
-                      or (dst_dir / p.relative_to(src.parent)).read_bytes() != p.read_bytes())]
         if stale:
             problems.append(f"skill {name} installed copy differs from the clone ({', '.join(stale[:3])}"
                             f"{', …' if len(stale) > 3 else ''}) — run `cork update`")
+    src_status, dst_status = clone / "statusline.py", skills_dir.parent / "statusline.py"
+    try:
+        if src_status.is_file() and (not dst_status.is_file() or dst_status.read_bytes() != src_status.read_bytes()):
+            problems.append(f"statusline.py at {dst_status} differs from the clone — run `cork update`")
+    except OSError as e:
+        problems.append(f"statusline.py could not be compared ({e})")
     return problems
+
+
+def _skill_drift(src_dir: Path, dst_dir: Path) -> list[str]:
+    # Both directions: a file changed or missing in the installed copy, and a file left behind
+    # there that the clone no longer ships — install.sh replaces the directory in full, so an
+    # extra file means the copy predates the clone.
+    rel = lambda root, p: p.relative_to(root).as_posix()
+    src_files = {rel(src_dir, p): p for p in src_dir.rglob("*") if p.is_file()}
+    dst_files = {rel(dst_dir, p): p for p in dst_dir.rglob("*") if p.is_file()}
+    changed = [r for r, p in src_files.items() if r not in dst_files or dst_files[r].read_bytes() != p.read_bytes()]
+    extra = [f"{r} (not in clone)" for r in dst_files if r not in src_files]
+    return sorted(changed) + sorted(extra)
 
 
 def _doctor_shim(clone: Path, bin_dir: Path) -> list[str]:
     link, shim = bin_dir / "cork", clone / "bin" / "cork"
-    if not link.exists() and not link.is_symlink():
-        return [f"no `cork` command at {link} — run install.sh"]
-    if not link.is_symlink():
-        return [f"{link} is a regular file, not cork's symlink — leaving it to you"]
-    if not link.exists():
-        return [f"{link} is a dangling symlink → {os.readlink(link)} — run install.sh"]
-    if not link.resolve().samefile(shim):
-        return [f"{link} points at another clone ({link.resolve()}) — run install.sh from the clone agents should use"]
+    try:
+        if not shim.is_file():
+            return [f"this clone has no bin/cork ({shim}) — the checkout is incomplete"]
+        if not link.exists() and not link.is_symlink():
+            return [f"no `cork` command at {link} — run install.sh"]
+        if not link.is_symlink():
+            return [f"{link} is a regular file, not cork's symlink — leaving it to you"]
+        if not link.exists():
+            return [f"{link} is a dangling symlink → {os.readlink(link)} — run install.sh"]
+        if not link.resolve().samefile(shim):
+            return [f"{link} points at another clone ({link.resolve()}) — run install.sh from the clone agents should use"]
+        on_path = shutil.which("cork")
+        if on_path is None:
+            return [f"`cork` is not on PATH in this shell ({bin_dir}) — skills use explicit paths; add it to type `cork`"]
+        if not Path(on_path).resolve().samefile(shim):
+            return [f"`cork` on PATH is {on_path}, not {link} — a different cork answers when you type it"]
+    except OSError as e:   # permissions, a symlink loop: report, never crash a hook
+        return [f"could not check {link} ({e})"]
+    return []
+
+
+def _doctor_cork_home(clone: Path) -> list[str]:
+    # The skills run `python3 "$CORK_HOME/orchestrate.py"` — that path, not the link, is what
+    # agents execute. Default mirrors the skills' own fallback.
+    cork_home = Path(os.environ.get("CORK_HOME", str(Path.home() / "dev" / "cork"))).expanduser()
+    try:
+        if not cork_home.exists():
+            return [f"CORK_HOME={cork_home} does not exist — skills would run nothing"]
+        if not cork_home.resolve().samefile(clone):
+            return [f"CORK_HOME={cork_home} is not this clone — skills run that orchestrate.py, this doctor checked {clone}"]
+    except OSError as e:
+        return [f"could not check CORK_HOME ({e})"]
     return []
 
 
@@ -2687,10 +2750,11 @@ def cmd_doctor(clone: Path | None = None, fetch: bool = True) -> None:
     # One line when everything agrees; a line per problem otherwise. Exit 0 either way so
     # it can run as a SessionStart hook.
     clone = clone or _clone_root()
-    problems = _doctor_clone(clone, fetch) + _doctor_skills(clone, _skills_dir()) + _doctor_shim(clone, _bin_dir())
+    problems = (_doctor_clone(clone, fetch) + _doctor_skills(clone, _skills_dir())
+                + _doctor_shim(clone, _bin_dir()) + _doctor_cork_home(clone))
     version = _version() if clone == _clone_root() else f"cork {(clone / 'VERSION').read_text().strip()}"
     if not problems:
-        print(f"{version} — up to date (clone at origin/main, skills current, `cork` linked)", flush=True)
+        print(f"{version} — up to date (main at origin/main, skills and statusline current, `cork` linked, CORK_HOME is this clone)", flush=True)
         return
     print(f"{version} — {len(problems)} issue(s):", flush=True)
     for p in problems:
@@ -2699,7 +2763,10 @@ def cmd_doctor(clone: Path | None = None, fetch: bool = True) -> None:
 
 def cmd_update(clone: Path | None = None) -> None:
     clone = clone or _clone_root()
-    if _git_out(clone, "status", "--porcelain"):
+    branch = _git_out(clone, "symbolic-ref", "--short", "-q", "HEAD")
+    if branch != "main":   # pull would fast-forward whatever is checked out and leave main stale
+        fail(f"{clone} is on {branch or 'a detached HEAD'} — check out main, then re-run `cork update`")
+    if _git_out(clone, "status", "--porcelain", "--untracked-files=no"):
         fail(f"{clone} has uncommitted changes — commit or discard them, then re-run `cork update`")
     pull = subprocess.run(["git", "pull", "--ff-only", "origin", "main"], cwd=clone, capture_output=True, text=True)
     if pull.returncode != 0:
@@ -2755,7 +2822,14 @@ def main() -> None:
         return
 
     if len(sys.argv) >= 2 and sys.argv[1] == "doctor":
-        cmd_doctor(fetch="--no-fetch" not in sys.argv[2:])
+        # Runs as a SessionStart hook: whatever goes wrong, one line and exit 0. The hook's
+        # stdout may not be UTF-8 either.
+        if hasattr(sys.stdout, "reconfigure"):   # a real text stream; tests substitute StringIO
+            sys.stdout.reconfigure(errors="replace")
+        try:
+            cmd_doctor(fetch="--no-fetch" not in sys.argv[2:])
+        except Exception as e:
+            print(f"cork doctor could not complete: {e}", flush=True)
         return
     if len(sys.argv) >= 2 and sys.argv[1] == "update":
         cmd_update()

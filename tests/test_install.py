@@ -117,6 +117,17 @@ class InstallSafetyTest(unittest.TestCase):
         )
         wrapper.chmod(0o755)
 
+    def test_installer_links_the_shim_under_the_redirected_home_only(self):
+        # Reverting the HOME/CORK_BIN_DIR redirection to a setdefault (a no-op) would relink the
+        # real ~/.local/bin/cork to this temp repo on every test run — this test fails first.
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "dest"
+            result = self._run_real_install(dest)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            link = dest.parent / "home" / ".local" / "bin" / "cork"
+            self.assertTrue(link.is_symlink(), result.stdout)
+            self.assertEqual(os.readlink(link), str(ROOT / "bin" / "cork"))
+
     def test_nonexistent_destination_under_source_is_refused_without_dirtying_repo(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, skills = self._guard_fixture(Path(tmp))

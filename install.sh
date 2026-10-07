@@ -321,10 +321,16 @@ case ":$PATH:" in
 esac
 
 echo
+# The hook runs in a fresh shell: a non-default CORK_BIN_DIR must travel inside the command, or a
+# later `doctor` checks ~/.local/bin instead of the link it was actually installed at. Paths are
+# single-quoted for the shell, then backslashes and double quotes escaped for JSON.
+hook_cmd="'$shim' doctor"   # the clone's bin/cork: works whether or not the link was made; doctor still checks the link
+[ "$bin_dir" = "$HOME/.local/bin" ] || hook_cmd="CORK_BIN_DIR='$bin_dir' $hook_cmd"
+hook_json="${hook_cmd//\\/\\\\}"; hook_json="${hook_json//\"/\\\"}"
 echo "Keep every session on the latest cork: add this entry to hooks.SessionStart in ~/.claude/settings.json"
 echo "(it prints one line per session — the version, and whether the clone, skills and \`cork\` link agree):"
-echo "  { \"matcher\": \"\", \"hooks\": [ { \"type\": \"command\", \"command\": \"$link doctor\", \"timeout\": 10 } ] }"
-echo "Update later with: $link update   (git pull --ff-only + this installer)"
+echo "  { \"matcher\": \"\", \"hooks\": [ { \"type\": \"command\", \"command\": \"$hook_json\", \"timeout\": 10 } ] }"
+echo "Update later with: '$shim' update   (git pull --ff-only + this installer; the clone must be on main)"
 echo
 if [ "$rc" -eq 0 ]; then
   echo "Next: restart Claude Code, then say \"set up cork\" to finish configuration."

@@ -71,7 +71,7 @@ class CopilotRoutingTest(unittest.TestCase):
                      patch.object(orchestrate, "_http_post_json",
                                   return_value=(200, body)) as post:
                     result = orchestrate._call_and_extract(
-                        "copilot", model, "standards", "diff", max_out=16)
+                        "copilot", model, "standards", "diff", max_out=orchestrate._PROBE_MAX_OUT)
                 self.assertEqual(result, (200, "review findings", None))
                 url, _, payload, _ = post.call_args.args
                 endpoint = "/responses" if responses else "/chat/completions"
@@ -79,11 +79,11 @@ class CopilotRoutingTest(unittest.TestCase):
                 self.assertEqual(payload["model"], model)
                 if responses:
                     self.assertEqual(payload["input"], "diff")
-                    self.assertEqual(payload["max_output_tokens"], 16)
+                    self.assertEqual(payload["max_output_tokens"], orchestrate._PROBE_MAX_OUT)
                     self.assertEqual(payload["reasoning"], {"effort": "high"})
                 else:
                     self.assertEqual(payload["messages"][-1]["content"], "diff")
-                    self.assertEqual(payload["max_tokens"], 16)
+                    self.assertEqual(payload["max_tokens"], orchestrate._PROBE_MAX_OUT)
                     self.assertNotIn("reasoning_effort", payload)
 
     def test_review_effort_uses_config_or_legacy_default(self):

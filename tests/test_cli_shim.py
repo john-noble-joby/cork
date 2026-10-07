@@ -82,6 +82,19 @@ class InstallLinksShimTest(unittest.TestCase):
             self.assertEqual(on_path.returncode, 0, on_path.stderr)
             self.assertNotIn("not on PATH", on_path.stdout)
 
+    def test_install_prints_a_hook_snippet_that_carries_a_non_default_bin_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"; home.mkdir(); dest = Path(tmp) / "skills"
+            out = self._install(home, dest).stdout
+            self.assertIn(f"\"command\": \"'{SHIM}' doctor\"", out)   # the clone's shim, default dir: no env prefix
+            self.assertNotIn("CORK_BIN_DIR=", out)
+            home2 = Path(tmp) / "home2"; home2.mkdir()
+            custom = Path(tmp) / "my bin"            # a space: the snippet must stay one shell word per path
+            out = self._install(home2, dest, CORK_BIN_DIR=str(custom)).stdout
+            self.assertTrue((custom / "cork").is_symlink())
+            self.assertIn(f"\"command\": \"CORK_BIN_DIR='{custom}' '{SHIM}' doctor\"", out)
+            self.assertFalse((home2 / ".local" / "bin" / "cork").exists())   # the default dir was not touched
+
     def test_install_repoints_cork_links_but_leaves_foreign_files_and_links_alone(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
