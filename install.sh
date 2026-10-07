@@ -287,7 +287,7 @@ fi
 # explicit "$CORK_HOME/orchestrate.py" calls and the human-typed `cork …` always agree.
 echo
 shim="$REPO/bin/cork"
-bin_dir="$HOME/.local/bin"
+bin_dir="${CORK_BIN_DIR:-$HOME/.local/bin}"   # CORK_BIN_DIR: tests and non-standard layouts; never the real home by accident
 link="$bin_dir/cork"
 # Only a link that is recognisably cork's (its target is some clone's bin/cork, present or
 # deleted) is repointed; a regular file or a symlink to anything else is the user's and is
@@ -320,6 +320,11 @@ case ":$PATH:" in
   *) echo "    ($bin_dir is not on PATH — add 'export PATH=\"$bin_dir:\$PATH\"' to your shell profile to type \`cork\` directly)" ;;
 esac
 
+echo
+echo "Keep every session on the latest cork: add this entry to hooks.SessionStart in ~/.claude/settings.json"
+echo "(it prints one line per session — the version, and whether the clone, skills and \`cork\` link agree):"
+echo "  { \"matcher\": \"\", \"hooks\": [ { \"type\": \"command\", \"command\": \"$link doctor\", \"timeout\": 10 } ] }"
+echo "Update later with: $link update   (git pull --ff-only + this installer)"
 echo
 if [ "$rc" -eq 0 ]; then
   echo "Next: restart Claude Code, then say \"set up cork\" to finish configuration."

@@ -30,6 +30,14 @@ procedure in the README's *Versioning* section.
 ## [Unreleased]
 
 ### Added
+- **`cork doctor` and `cork update`** (closes #36). `doctor` prints one line per session — the
+  version, and whether the clone is at `origin/main`, every installed skill matches the clone
+  byte for byte (stamps only move at a release, so content is the drift signal), and the `cork`
+  link resolves to this clone — with a `⚠` line per problem and exit 0, so it runs as a
+  `SessionStart` hook; `install.sh` prints the hook snippet. `update` is `git pull --ff-only`
+  plus `install.sh`, refusing a dirty tree. `install.sh` honours `CORK_BIN_DIR`, and the installer
+  tests now redirect `HOME` and the bin dir for real (the old `setdefault` was a no-op, so every
+  test run relinked the real `~/.local/bin/cork` to a temp repo).
 - **Long-tail review classes are swept before review, not discovered one pass at a time.**
   devit gains *Phase 3.5 — Pre-review sweep*: six artifacts pasted into the PR body — surface
   inventory for every new gate, input-domain table for every external value, contract probes

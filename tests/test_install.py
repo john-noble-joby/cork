@@ -62,7 +62,12 @@ class InstallSafetyTest(unittest.TestCase):
         env.update(env_overrides)
         env["CLAUDE_SKILLS_DIR"] = str(destination)
         env.setdefault("CORK_HOME", str(repo))
-        env.setdefault("HOME", str(repo.parent / "home"))
+        # setdefault was a no-op here (HOME is always in os.environ), so the real ~/.local/bin/cork
+        # got relinked to a temp repo on every run. Redirect both unless a test says otherwise.
+        if "HOME" not in env_overrides:
+            env["HOME"] = str(repo.parent / "home")
+        if "CORK_BIN_DIR" not in env_overrides:
+            env["CORK_BIN_DIR"] = str(Path(env["HOME"]) / ".local" / "bin")
         Path(env["HOME"]).mkdir(parents=True, exist_ok=True)
         return subprocess.run(
             ["bash", "install.sh"],

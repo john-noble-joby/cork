@@ -2612,6 +2612,104 @@ def _version() -> str:
         return f"cork {ver}"
 
 
+def _clone_root() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def _skills_dir() -> Path:
+    return Path(os.environ.get("CLAUDE_SKILLS_DIR", str(Path.home() / ".claude" / "skills")))
+
+
+def _bin_dir() -> Path:
+    return Path(os.environ.get("CORK_BIN_DIR", str(Path.home() / ".local" / "bin")))
+
+
+def _git_out(cwd: Path, *args: str, timeout: int | None = None) -> str | None:
+    try:
+        r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def _doctor_clone(clone: Path, fetch: bool) -> list[str]:
+    # The engine runs straight from the clone, so "latest" means the clone is at origin/main.
+    problems: list[str] = []
+    if _git_out(clone, "status", "--porcelain"):
+        problems.append(f"clone {clone} has uncommitted changes — `cork update` refuses a dirty tree")
+    if fetch and _git_out(clone, "fetch", "--quiet", "origin", timeout=8) is None:
+        problems.append("could not fetch origin — freshness compared against the last fetch")
+    if _git_out(clone, "rev-parse", "--verify", "--quiet", "origin/main^{commit}") is None:
+        problems.append("no origin/main in the clone — cannot tell whether it is current")
+        return problems
+    behind = int(_git_out(clone, "rev-list", "--count", "HEAD..origin/main") or 0)
+    ahead = int(_git_out(clone, "rev-list", "--count", "origin/main..HEAD") or 0)
+    if behind:
+        problems.append(f"clone is {behind} commit(s) behind origin/main — run `cork update`")
+    if ahead:
+        problems.append(f"clone is {ahead} commit(s) ahead of origin/main (a feature branch?) — agents run this, not main")
+    return problems
+
+
+def _doctor_skills(clone: Path, skills_dir: Path) -> list[str]:
+    # Installed skills are copies; version stamps only move at a release, so a stale copy is
+    # detected by content, not by stamp.
+    problems: list[str] = []
+    for src in sorted(clone.glob("skills/*/SKILL.md")):
+        name = src.parent.name
+        dst_dir = skills_dir / name
+        if not (dst_dir / "SKILL.md").is_file():
+            problems.append(f"skill {name} is not installed in {skills_dir} — run `cork update`")
+            continue
+        stale = [p.relative_to(src.parent).as_posix() for p in src.parent.rglob("*") if p.is_file()
+                 and (not (dst_dir / p.relative_to(src.parent)).is_file()
+                      or (dst_dir / p.relative_to(src.parent)).read_bytes() != p.read_bytes())]
+        if stale:
+            problems.append(f"skill {name} installed copy differs from the clone ({', '.join(stale[:3])}"
+                            f"{', …' if len(stale) > 3 else ''}) — run `cork update`")
+    return problems
+
+
+def _doctor_shim(clone: Path, bin_dir: Path) -> list[str]:
+    link, shim = bin_dir / "cork", clone / "bin" / "cork"
+    if not link.exists() and not link.is_symlink():
+        return [f"no `cork` command at {link} — run install.sh"]
+    if not link.is_symlink():
+        return [f"{link} is a regular file, not cork's symlink — leaving it to you"]
+    if not link.exists():
+        return [f"{link} is a dangling symlink → {os.readlink(link)} — run install.sh"]
+    if not link.resolve().samefile(shim):
+        return [f"{link} points at another clone ({link.resolve()}) — run install.sh from the clone agents should use"]
+    return []
+
+
+def cmd_doctor(clone: Path | None = None, fetch: bool = True) -> None:
+    # One line when everything agrees; a line per problem otherwise. Exit 0 either way so
+    # it can run as a SessionStart hook.
+    clone = clone or _clone_root()
+    problems = _doctor_clone(clone, fetch) + _doctor_skills(clone, _skills_dir()) + _doctor_shim(clone, _bin_dir())
+    version = _version() if clone == _clone_root() else f"cork {(clone / 'VERSION').read_text().strip()}"
+    if not problems:
+        print(f"{version} — up to date (clone at origin/main, skills current, `cork` linked)", flush=True)
+        return
+    print(f"{version} — {len(problems)} issue(s):", flush=True)
+    for p in problems:
+        print(f"  ⚠ {p}", flush=True)
+
+
+def cmd_update(clone: Path | None = None) -> None:
+    clone = clone or _clone_root()
+    if _git_out(clone, "status", "--porcelain"):
+        fail(f"{clone} has uncommitted changes — commit or discard them, then re-run `cork update`")
+    pull = subprocess.run(["git", "pull", "--ff-only", "origin", "main"], cwd=clone, capture_output=True, text=True)
+    if pull.returncode != 0:
+        fail(f"git pull --ff-only failed in {clone}:\n{pull.stderr.strip()}")
+    print(pull.stdout.strip() or "Already up to date.", flush=True)
+    install = subprocess.run(["bash", str(clone / "install.sh")], cwd=clone)   # streams its own report
+    if install.returncode != 0:
+        fail("install.sh completed with warnings — see above")
+
+
 def main() -> None:
     # Auth and version commands are standalone — no ticket_id, handled before
     # argparse (which requires a positional ticket_id).
@@ -2656,6 +2754,13 @@ def main() -> None:
         cmd_review_classify()
         return
 
+    if len(sys.argv) >= 2 and sys.argv[1] == "doctor":
+        cmd_doctor(fetch="--no-fetch" not in sys.argv[2:])
+        return
+    if len(sys.argv) >= 2 and sys.argv[1] == "update":
+        cmd_update()
+        return
+
     if len(sys.argv) >= 2 and sys.argv[1] == "standards":
         sub = sys.argv[2] if len(sys.argv) >= 3 else ""
         rest = sys.argv[3:]
@@ -2679,7 +2784,9 @@ def main() -> None:
                 "  login                 Give cork its own refreshable Copilot token\n"
                 "  preflight             Probe the configured model rotation\n"
                 "  config ...            Show or edit cork configuration\n"
-                "  standards ...         Show or initialize review standards"),
+                "  standards ...         Show or initialize review standards\n"
+                "  doctor [--no-fetch]   Is this clone current, are the skills and `cork` link in sync?\n"
+                "  update                git pull --ff-only in the clone, then install.sh"),
     )
     parser.add_argument("ticket_id",  help="Linear ticket ID, e.g. ENG-123")
     parser.add_argument("repo_path",  nargs="?", default=None,
