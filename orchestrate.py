@@ -1374,7 +1374,10 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
             return None
         a = _unquote_git_path(g.group(1)) if g.group(1) is not None else g.group(2)
         b = _unquote_git_path(g.group(3)) if g.group(3) is not None else g.group(4)
-        return b if a == b else None   # a rename header is ambiguous; its `+++` header still names the new path
+        return b if a == b else None   # a rename header is ambiguous; `rename to` or `+++` names the new path
+
+    def header_path(rest: str) -> str:   # `rename from`/`rename to` operands, C-quoted when git quotes them
+        return _unquote_git_path(rest[1:-1]) if rest.startswith('"') and rest.endswith('"') else rest
 
     for line in text.split("\n"):
         line = line.removesuffix("\r")
@@ -1383,6 +1386,10 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
             if pending is not None:
                 names.append(pending)   # the previous section had no `+++`: binary or mode-only
             pending = git_section_path(line)
+        elif not (old_left > 0 or new_left > 0) and line.startswith("rename from "):
+            names.append(header_path(line.removeprefix("rename from ")))   # the old path: deleted, like --no-renames shows it
+        elif not (old_left > 0 or new_left > 0) and line.startswith("rename to "):
+            pending = header_path(line.removeprefix("rename to "))         # the new path, until a `+++` header confirms it
         if old_left > 0 or new_left > 0:
             if line.startswith("\\"):           # `\ No newline at end of file` is not counted
                 pass

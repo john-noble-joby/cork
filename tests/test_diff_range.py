@@ -319,9 +319,16 @@ class ReviewDiffSourceTest(unittest.TestCase):
         prompt, out = self._review(diff_file=str(patch))
         self.assertIn("### b.py", prompt); self.assertIn("(1/3 changed paths)", out)
         self.assertIn("not readable in the tree — deleted, submodule, renamed-from (2): gone.py, x.bin", out)
-        rename = Path(self.tmp.name) / "rename.patch"   # an ambiguous rename header defers to its +++ line
+        rename = Path(self.tmp.name) / "rename.patch"   # a rename with content: old path from `rename from`, new from +++, once
         rename.write_text("diff --git a/old name.py b/new name.py\nsimilarity index 90%\nrename from old name.py\nrename to new name.py\n--- a/old name.py\n+++ b/new name.py\n@@ -1 +1 @@\n-x\n+y\n")
-        self.assertEqual(orchestrate.read_diff_file(str(rename))[1], ["new name.py"])
+        self.assertEqual(orchestrate.read_diff_file(str(rename))[1], ["old name.py", "new name.py"])
+        binrename = Path(self.tmp.name) / "binrename.patch"   # binary or pure rename: no +++ at all, both paths still listed
+        binrename.write_text("diff --git a/old.bin b/new.bin\nsimilarity index 100%\nrename from old.bin\nrename to new.bin\n"
+                             'diff --git "a/caf\\303\\251.bin" "b/th\\303\\251.bin"\nsimilarity index 98%\nrename from "caf\\303\\251.bin"\nrename to "th\\303\\251.bin"\nBinary files differ\n')
+        self.assertEqual(orchestrate.read_diff_file(str(binrename))[1], ["old.bin", "new.bin", "café.bin", "thé.bin"])
+        inhunk = Path(self.tmp.name) / "inhunk.patch"   # a source line reading `rename to x` inside a hunk is content, not a header
+        inhunk.write_text("--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n a = 1\n+rename to evil.py\n")
+        self.assertEqual(orchestrate.read_diff_file(str(inhunk))[1], ["a.py"])
 
     def test_read_changed_splits_the_set_at_the_line_limit_and_names_unreadable_paths(self):
         (self.repo / "at.py").write_text("x\n" * orchestrate.MAX_FILE_LINES)
