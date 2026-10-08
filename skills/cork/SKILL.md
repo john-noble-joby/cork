@@ -95,7 +95,11 @@ files, written once, outside the repository:
 # standards or context; its PATH is persisted in this worktree's git dir (never committed, never
 # shared with another checkout) so every later block finds it without a variable.
 RUN_PTR="$(git rev-parse --git-dir)/cork-run"
-RUN_DIR=$(mktemp -d "${XDG_CACHE_HOME:-$HOME/.cache}/cork/run/$(git rev-parse --abbrev-ref HEAD | tr '/' '-').XXXXXX")
+# One full-mode run per worktree at a time: full mode commits fixes to this checkout's branch, so a
+# second concurrent run here would race the commits as well as this pointer. Refuse instead.
+[ -e "$RUN_PTR" ] && { echo "a cork run is already in progress in this worktree ($(cat "$RUN_PTR")) — finish it (Step 6 clears the pointer) or remove $RUN_PTR"; exit 1; }
+RUN_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/cork/run"; mkdir -p -m 700 "$RUN_ROOT"   # mktemp does not create parents
+RUN_DIR=$(mktemp -d "$RUN_ROOT/$(git rev-parse --abbrev-ref HEAD | tr '/' '-').XXXXXX")
 printf '%s\n' "$RUN_DIR" > "$RUN_PTR"            # outside the worktree
 STORY_FILE="$RUN_DIR/story.md"                    # the ticket (Linear MCP) or the user's stated contract — Write it now
 STANDARDS_FILE="$RUN_DIR/standards.md"
@@ -207,7 +211,9 @@ Read the findings from stdout. For each: apply the fix in the worktree (run test
 
 ### Step 6 — Push + PR
 
-Push the branch and open a PR with `gh`, summarizing what each pass caught.
+Push the branch and open a PR with `gh`, summarizing what each pass caught. Then clear the run
+pointer so the next run in this worktree can start: `rm -f "$(git rev-parse --git-dir)/cork-run"`
+(the run directory itself stays for the record). If a run was abandoned, the same `rm` unblocks Step 2.
 
 ## Review-only mode — parallel reviews → consolidated report
 
@@ -233,8 +239,11 @@ CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 # branch names, or one the user gives you. Write it once; without it the lanes only get the generic
 # "Review the branch changes for <ticket>." fallback (or a stale checkpoint if <ticket> has one).
 # Unique per fan-out: never the full-mode run's directory, and two review-only runs on the same
-# branch never share story, context or review-<model>.txt. Path persisted for later blocks.
-RUN_DIR=$(mktemp -d "${XDG_CACHE_HOME:-$HOME/.cache}/cork/run/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')-review.XXXXXX")
+# branch never share story, context or review-<model>.txt. This block is self-contained (every
+# command below uses $RUN_DIR set here), so concurrent fan-outs cannot cross; the pointer only
+# records the LAST fan-out for a human to find the report afterwards.
+RUN_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/cork/run"; mkdir -p -m 700 "$RUN_ROOT"   # mktemp does not create parents
+RUN_DIR=$(mktemp -d "$RUN_ROOT/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')-review.XXXXXX")
 printf '%s\n' "$RUN_DIR" > "$(git rev-parse --git-dir)/cork-review-run"; OUTDIR="$RUN_DIR"
 STORY="$OUTDIR/story.md"                      # <- fill from the PR body / ticket / user before fanning out
 STANDARDS_FILE="$OUTDIR/standards.md"; python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "{BASE}" > "$STANDARDS_FILE"   # for the lenses
