@@ -329,7 +329,7 @@ class ReviewDiffSourceTest(unittest.TestCase):
         copy = Path(self.tmp.name) / "copy.patch"   # a pure copy: destination listed, unchanged source not
         copy.write_text("diff --git a/src.txt b/dup.txt\nsimilarity index 100%\ncopy from src.txt\ncopy to dup.txt\n")
         self.assertEqual(orchestrate.read_diff_file(str(copy))[1], ["dup.txt"])
-        inhunk = Path(self.tmp.name) / "inhunk.patch"   # a source line reading `rename to x` inside a hunk is content, not a header
+        inhunk = Path(self.tmp.name) / "inhunk.patch"   # content lines inside a hunk start with ' ', '+', '-' or '\\', so a `+rename to x` line can never match; the outside-hunk conjunct is defensive
         inhunk.write_text("--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n a = 1\n+rename to evil.py\n")
         self.assertEqual(orchestrate.read_diff_file(str(inhunk))[1], ["a.py"])
 
@@ -398,6 +398,12 @@ class ReviewDiffSourceTest(unittest.TestCase):
             with redirect_stderr(err), self.assertRaises(SystemExit): orchestrate.main()
         finally: sys.argv = orig
         self.assertIn("usage: orchestrate.py standards show", err.getvalue())
+        for sub in ("status", "init"):
+            err = io.StringIO(); orig = sys.argv; sys.argv = ["orchestrate.py", "standards", sub, str(self.repo), "--base-ref", "trusted"]
+            try:
+                with redirect_stdout(io.StringIO()), redirect_stderr(err), self.assertRaises(SystemExit): orchestrate.main()
+            finally: sys.argv = orig
+            self.assertIn("applies to `standards show` only", err.getvalue())
 
     def test_required_context_files_are_always_included_or_the_review_fails(self):
         # an unchanged caller named with --context-file arrives whole, ahead of the changed
@@ -414,7 +420,8 @@ class ReviewDiffSourceTest(unittest.TestCase):
         prompt, out = self._review(diff_range=f"{self.c3}..HEAD", context_files=["huge.py", "./huge.py", str(self.repo / "b.py")])
         self.assertEqual(prompt.count("### huge.py"), 1); self.assertEqual(prompt.count("### b.py"), 1)
         self.assertNotIn("### ./huge.py", prompt); self.assertNotIn(str(self.repo), prompt)
-        self.assertNotIn("over 500 lines", out); self.assertIn("required context (2, always included): b.py", out)
+        self.assertNotIn("over 500 lines", out); self.assertIn("huge.py (changed, ", out)   # labelled as a changed file
+        self.assertIn("(1/2 changed paths)", out)   # the promoted changed file still counts in the denominator
         self._fails("git metadata", context_files=[".git/config"])
         self._fails("is not a file in the repository", context_files=["nope.py"])
         (Path(self.tmp.name) / "outside.py").write_text("secret = 1\n")       # exists, but outside the tree

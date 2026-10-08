@@ -1,6 +1,6 @@
 ---
 name: copilot-review-loop
-description: "Use when the user says to run the Copilot review loop on a branch or PR — iterative Copilot code review with automated comment resolution, re-requesting after each clean pass, stopping when Copilot has no comments or after a maximum number of passes."
+description: "Use when the user says to run the Copilot review loop on a branch or PR — iterative Copilot code review with automated comment resolution, re-requesting after each processed pass, stopping when Copilot approves with no inline or body-level findings, or after `max` non-approving passes (a budget stop)."
 ---
 
 # Copilot Review Loop
@@ -9,7 +9,7 @@ description: "Use when the user says to run the Copilot review loop on a branch 
 
 ## Overview
 
-Runs an iterative Copilot PR review cycle: request review → wait → process every comment (fix or push back) → re-request → repeat up to N times. Stops early if Copilot submits a pass with no comments.
+Runs an iterative Copilot PR review cycle: request review → wait → process every finding (fix or push back) → re-request → repeat up to N times. Stops early when Copilot approves with no inline or body-level findings; reaching N without an approval is a budget stop, reported as such.
 
 ## When invoked, do this immediately
 
@@ -98,6 +98,7 @@ one call. Two things gate a clean pass, and `totalCount == 0` alone is **not** o
   comments AND zero previously-missed findings.**
 
 ```bash
+CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"   # every block runs in a fresh shell
 gh api graphql -f query='
 { repository(owner: "{owner}", name: "{repo}") {
     pullRequest(number: {pr}) {
@@ -248,7 +249,7 @@ for t in unresolved:
 
 Read the preference once at loop start:
 
-Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it prints `true` (the default), pause as below; if `false`, behave autonomously.
+Run `CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"; python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it prints `true` (the default), pause as below; if `false`, behave autonomously.
 
 - **`true` (default):** after fetching this pass's unresolved comments (step 3), apply
   NOTHING yet. (1) **Pre-pass:** form your recommendation per comment (fix / push back +

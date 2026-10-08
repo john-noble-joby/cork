@@ -32,7 +32,7 @@ If `$CORK_HOME/orchestrate.py` does not exist, tell the user to set `CORK_HOME` 
 
 - Fix steps run with full context (worktree state, prior decisions, the whole conversation) — a cold `claude --print` had none of that.
 - The user sees the work happen live and can interject.
-- Blind-review property is preserved: each `--review-model` call is stateless — the prompt carries the story + diff + changed files + AGENTS.md and never prior review text. API and prompt-only lanes see nothing else; tree-capable harnesses (`claude`, `opencode`) can additionally read the repo from their working directory, still read-only.
+- Blind-review property is preserved: each `--review-model` call is stateless — the prompt carries the story + required context + diff + changed files + AGENTS.md and never prior review text. API and prompt-only lanes see nothing else; tree-capable harnesses (`claude`, `opencode`) can additionally read the repo from their working directory, still read-only.
 
 ## When invoked, do this
 
@@ -43,7 +43,7 @@ CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 python3 "$CORK_HOME/orchestrate.py" --version            # cork version — announce it (see below)
 git rev-parse --verify --quiet "{BASE}^{commit}" >/dev/null || { echo "base {BASE} does not resolve"; exit 1; }
 git merge-base "{BASE}" HEAD >/dev/null      || { echo "no merge base with {BASE}"; exit 1; }
-python3 "$CORK_HOME/orchestrate.py" preflight            # probe & select models for this seat
+python3 "$CORK_HOME/orchestrate.py" preflight | tee "$(git rev-parse --git-dir)/cork-preflight"   # probe & select models; persisted for Step 2 / R1 (per worktree, never committed)
 python3 "$CORK_HOME/orchestrate.py" standards status .   # show the active review-standards layers
 git rev-parse --abbrev-ref HEAD                         # current branch
 git rev-parse --abbrev-ref HEAD | grep -oP 'MXE-\d+'    # ticket ID, if branch follows convention
@@ -94,33 +94,42 @@ files, written once, outside the repository:
 # or a review-only fan-out beside a full-mode run — can never overwrite each other's story,
 # standards or context; its PATH is persisted in this worktree's git dir (never committed, never
 # shared with another checkout) so every later block finds it without a variable.
+cd {WORKTREE} || exit 1                          # every git/pointer/standards command below is about THIS checkout
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"       # Step 0's assignment did not survive to this block
 RUN_PTR="$(git rev-parse --git-dir)/cork-run"
 # One full-mode run per worktree at a time: full mode commits fixes to this checkout's branch, so a
 # second concurrent run here would race the commits as well as this pointer. Refuse instead.
 [ -e "$RUN_PTR" ] && { echo "a cork run is already in progress in this worktree ($(cat "$RUN_PTR")) — finish it (Step 6 clears the pointer) or remove $RUN_PTR"; exit 1; }
-RUN_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/cork/run"; mkdir -p -m 700 "$RUN_ROOT"   # mktemp does not create parents
+CACHE_HOME="${XDG_CACHE_HOME:-}"; case "$CACHE_HOME" in /*) ;; *) CACHE_HOME="$HOME/.cache";; esac   # XDG: empty or relative = default, never a path inside this worktree
+RUN_ROOT="$CACHE_HOME/cork/run"; mkdir -p "$RUN_ROOT" && chmod 700 "$RUN_ROOT"   # mktemp does not create parents; -m would not fix an existing dir
 RUN_DIR=$(mktemp -d "$RUN_ROOT/$(git rev-parse --abbrev-ref HEAD | tr '/' '-').XXXXXX")
 printf '%s\n' "$RUN_DIR" > "$RUN_PTR"            # outside the worktree
-STORY_FILE="$RUN_DIR/story.md"                    # the ticket (Linear MCP) or the user's stated contract — Write it now
+# Pin the trusted base to a commit id now: fix steps are tool-capable and could move {BASE}; the
+# standards, the lenses and every review diff use this id, and {BASE} survives only as the PR target.
+BASE_SHA=$(git rev-parse --verify "{BASE}^{commit}"); printf '%s\n' "$BASE_SHA" > "$RUN_DIR/base-sha"
+grep -E '^[a-z]+/' "$(git rev-parse --git-dir)/cork-preflight" > "$RUN_DIR/models.txt"   # the rotation Step 0 selected, one provider/model per line
+[ -s "$RUN_DIR/models.txt" ] || { echo "no models from preflight — re-run Step 0"; exit 1; }
+STORY_FILE="$RUN_DIR/story.md"; printf 'story file: %s\n' "$STORY_FILE"   # Write the ticket (Linear MCP) or the user's stated contract to this literal path next
 STANDARDS_FILE="$RUN_DIR/standards.md"
-python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "{BASE}" > "$STANDARDS_FILE"
+python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "$BASE_SHA" > "$STANDARDS_FILE"
 # Blast radius the diff does not show: callers of changed symbols, DI/registration wiring, the
 # covering tests, docs that restate the behaviour — plus any changed file the manifest later lists
 # as diff-only (over budget or over 500 lines) that the story depends on. Repo-relative paths, one
 # per line, persisted so every later block (and a re-run) rebuilds the same list.
-printf '%s\n' path/to/caller.py tests/path/covering_test.py > "$RUN_DIR/context.txt"   # <- from grep/LSP over the changed symbols
+printf '%s\n' path/to/caller.py tests/path/covering_test.py > "$RUN_DIR/context.txt"   # <- from grep/LSP over the changed symbols; `: > "$RUN_DIR/context.txt"` when there is genuinely none
 ```
 
 Every later command block starts by reading the persisted run path and rebuilding the array —
 copy this preamble verbatim rather than trusting a variable from an earlier call:
 
 ```bash
-RUN_DIR=$(cat "$(git rev-parse --git-dir)/cork-run")   # the run Step 2 started in this worktree
-STORY_FILE="$RUN_DIR/story.md"; STANDARDS_FILE="$RUN_DIR/standards.md"
+cd {WORKTREE} || exit 1
+CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
+RUN_PTR="$(git rev-parse --git-dir)/cork-run"; [ -s "$RUN_PTR" ] || { echo "no cork run in this worktree — run Step 2 first"; exit 1; }
+RUN_DIR=$(cat "$RUN_PTR")   # the run Step 2 started in this worktree
+STORY_FILE="$RUN_DIR/story.md"; STANDARDS_FILE="$RUN_DIR/standards.md"; BASE_SHA=$(cat "$RUN_DIR/base-sha")
 [ -s "$STORY_FILE" ] || { echo "no story at $STORY_FILE — write it first"; exit 1; }
-mapfile -t CONTEXT_FILES < "$RUN_DIR/context.txt"
-CONTEXT_ARGS=(); for f in "${CONTEXT_FILES[@]}"; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done
+CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done < "$RUN_DIR/context.txt"   # bash 3.2-safe; an empty file means no context
 ```
 
 Do not dispatch a lens until `$STORY_FILE` has content: the spec-and-test-coverage lens has
@@ -128,15 +137,16 @@ nothing to classify without it, and an unexpanded `{STORY_FILE}` placeholder is 
 review. The same `$STORY_FILE` goes to the model rotation in Steps 3+.
 
 Review your own diff with subagents, apply fixes, commit. Use the **lenses** in
-`$CORK_HOME/lenses/` (plus any under the repo's `code-review/lenses/`, read from the trusted
-base ref with `git show {BASE}:code-review/lenses/<name>.md`, never from the checkout): one
-read-only subagent per applicable lens, placeholders filled, run in parallel over
-`git diff {BASE}...HEAD`. `{BASE}` is the trusted ref exactly as selected in Step 0 (a
-remote-tracking ref such as `origin/develop`, or a local branch) — never prefix it again.
+`$CORK_HOME/lenses/` (plus any under the repo's `code-review/lenses/`, read from the pinned
+base with `git show "$BASE_SHA:code-review/lenses/<name>.md"`, never from the checkout): one
+read-only subagent per applicable lens, placeholders filled (`{BASE}` = `$BASE_SHA`), run in
+parallel over `git diff "$BASE_SHA"...HEAD`. `$BASE_SHA` is the commit id Step 2 pinned from
+`{BASE}` (the ref exactly as selected in Step 0, a remote-tracking ref such as `origin/develop`
+or a local branch — never prefixed again); the name is kept only for the PR target.
 **When the repository under review is cork itself** — compare **absolute** common dirs,
 `git rev-parse --path-format=absolute --git-common-dir` here and in `$CORK_HOME` (the plain
 form prints a relative `.git` in both, which matches for unrelated repositories) — the shipped
-lenses are branch material too: read them with `git -C "$CORK_HOME" show {BASE}:lenses/<name>.md`,
+lenses are branch material too: read them with `git -C "$CORK_HOME" show "$BASE_SHA:lenses/<name>.md"`,
 the same exception the engine applies to `standards/AGENTS.md`. Fill `{STORY_FILE}` with
 `$STORY_FILE` and `{STANDARDS}` with `$STANDARDS_FILE` from the block above (the rubric from the
 trusted ref through the engine's loader, never the checkout's standards files). Skip a lens
@@ -166,12 +176,14 @@ Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it p
   where wrong, and commit) — the flow described below.
 
 ```bash
+cd {WORKTREE} || exit 1
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-RUN_DIR=$(cat "$(git rev-parse --git-dir)/cork-run")   # Step 2 preamble: the persisted per-run path
+RUN_PTR="$(git rev-parse --git-dir)/cork-run"; [ -s "$RUN_PTR" ] || { echo "no cork run in this worktree — run Step 2 first"; exit 1; }
+RUN_DIR=$(cat "$RUN_PTR")   # Step 2 preamble: the persisted per-run path
 STORY_FILE="$RUN_DIR/story.md"; [ -s "$STORY_FILE" ] || { echo "no story at $STORY_FILE — write it first"; exit 1; }
-mapfile -t CONTEXT_FILES < "$RUN_DIR/context.txt"
-CONTEXT_ARGS=(); for f in "${CONTEXT_FILES[@]}"; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done
-python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch {BASE} --story-file "$STORY_FILE" "${CONTEXT_ARGS[@]}"
+BASE_SHA=$(cat "$RUN_DIR/base-sha")                     # the pinned base, not the movable {BASE}
+CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done < "$RUN_DIR/context.txt"   # bash 3.2-safe; an empty file means no context
+python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch "$BASE_SHA" --story-file "$STORY_FILE" "${CONTEXT_ARGS[@]}"
 ```
 
 The preamble is not decoration: this command runs in a fresh shell, so without it `--story-file`
@@ -230,42 +242,55 @@ Because no fixes land between passes, **every reviewer sees the identical diff**
 
 Dispatch concurrently, then collect when all return:
 
-- **Inputs first:** run the block below up to and including writing `$STORY`, `$STANDARDS_FILE` and `context.txt` before dispatching anything — lenses and models read the same files, and they live under a per-run `RUN_DIR` (unique per fan-out, path persisted in the worktree's git dir), not in shell variables, because nothing in a variable survives to the next tool call.
-- **Self-review:** dispatch the lenses in `$CORK_HOME/lenses/` (and the repo's `code-review/lenses/`, read from the trusted `{BASE}` ref; cork's own lenses too when the repo under review is cork, detected with absolute common dirs as in Step 2) as parallel read-only subagents over `git diff {BASE}...HEAD`, with `{STORY_FILE}` = `$STORY` and `{STANDARDS}` = `$STANDARDS_FILE`. Gather findings only — apply nothing.
-- **Each model from the `preflight` rotation** (captured in Step 0), all launched together (background processes, then `wait`):
+- **Inputs first (block 1):** allocate this fan-out's directory and persist everything the reviewers need — the pinned base, the rotation, the standards, the context list — then **Write** the story file at the path block 1 prints. Nothing in a shell variable survives to the next tool call, so block 2 reads all of it back from files.
+- **Self-review:** dispatch the lenses in `$CORK_HOME/lenses/` (and the repo's `code-review/lenses/`, read from the pinned base with `git show "$BASE_SHA:…"`; cork's own lenses too when the repo under review is cork, detected with absolute common dirs as in Step 2) as parallel read-only subagents over `git diff "$BASE_SHA"...HEAD`, with `{BASE}` = `$BASE_SHA`, `{STORY_FILE}` = the story file and `{STANDARDS}` = the standards file from block 1. Gather findings only — apply nothing.
+- **Each model from the persisted rotation (block 2),** all launched together (background processes, then `wait`).
+
+Block 1 — inputs:
 
 ```bash
+cd {WORKTREE} || exit 1
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-# The story every reviewer judges against: the PR body's acceptance section, the Linear story the
-# branch names, or one the user gives you. Write it once; without it the lanes only get the generic
-# "Review the branch changes for <ticket>." fallback (or a stale checkpoint if <ticket> has one).
 # Unique per fan-out: never the full-mode run's directory, and two review-only runs on the same
-# branch never share story, context or review-<model>.txt. This block is self-contained (every
-# command below uses $RUN_DIR set here), so concurrent fan-outs cannot cross; the pointer only
-# records the LAST fan-out for a human to find the report afterwards.
-RUN_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/cork/run"; mkdir -p -m 700 "$RUN_ROOT"   # mktemp does not create parents
+# branch never share story, context or review-<model>.txt. The pointer records the LAST fan-out so
+# block 2 (and a human afterwards) can find it; block 2 is self-contained apart from that pointer.
+CACHE_HOME="${XDG_CACHE_HOME:-}"; case "$CACHE_HOME" in /*) ;; *) CACHE_HOME="$HOME/.cache";; esac   # XDG: empty or relative = default
+RUN_ROOT="$CACHE_HOME/cork/run"; mkdir -p "$RUN_ROOT" && chmod 700 "$RUN_ROOT"
 RUN_DIR=$(mktemp -d "$RUN_ROOT/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')-review.XXXXXX")
-printf '%s\n' "$RUN_DIR" > "$(git rev-parse --git-dir)/cork-review-run"; OUTDIR="$RUN_DIR"
-STORY="$OUTDIR/story.md"                      # <- fill from the PR body / ticket / user before fanning out
-STANDARDS_FILE="$OUTDIR/standards.md"; python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "{BASE}" > "$STANDARDS_FILE"   # for the lenses
-# PREFLIGHT_MODELS is the space-separated list of "provider/model" lines from Step 0 preflight
+printf '%s\n' "$RUN_DIR" > "$(git rev-parse --git-dir)/cork-review-run"
+BASE_SHA=$(git rev-parse --verify "{BASE}^{commit}"); printf '%s\n' "$BASE_SHA" > "$RUN_DIR/base-sha"   # pinned: standards, lenses and diffs all use it
+grep -E '^[a-z]+/' "$(git rev-parse --git-dir)/cork-preflight" > "$RUN_DIR/models.txt"               # the rotation Step 0 selected
+[ -s "$RUN_DIR/models.txt" ] || { echo "no models from preflight — re-run Step 0"; exit 1; }
+python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "$BASE_SHA" > "$RUN_DIR/standards.md"   # for the lenses
 # Blast radius the diff does not show — callers of changed symbols, DI/registration wiring, covering
 # tests, restating docs, and any changed file the manifest lists as diff-only. Repo-relative paths,
-# one per line in context.txt; populate it here (this directory is this fan-out's alone), or the
-# lanes get no context at all. Shell variables do not survive tool calls — rebuild from the file.
-printf '%s\n' path/to/caller.py tests/path/covering_test.py > "$RUN_DIR/context.txt"   # <- from grep/LSP over the changed symbols
-mapfile -t CONTEXT_FILES < "$RUN_DIR/context.txt"
-CONTEXT_ARGS=(); for f in "${CONTEXT_FILES[@]}"; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done
-for M in $PREFLIGHT_MODELS; do
+# one per line; populate it here (this directory is this fan-out's alone), or the lanes get no context.
+printf '%s\n' path/to/caller.py tests/path/covering_test.py > "$RUN_DIR/context.txt"   # <- from grep/LSP over the changed symbols; `: > …` when there is none
+printf 'story file: %s\n' "$RUN_DIR/story.md"   # now Write it: the PR body's acceptance section, the Linear story the branch names, or the user's contract
+```
+
+Block 2 — fan-out (a fresh shell; everything comes from the files block 1 wrote):
+
+```bash
+cd {WORKTREE} || exit 1
+CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
+RUN_PTR="$(git rev-parse --git-dir)/cork-review-run"; [ -s "$RUN_PTR" ] || { echo "no review-only run in this worktree — run block 1 first"; exit 1; }
+RUN_DIR=$(cat "$RUN_PTR")
+STORY_FILE="$RUN_DIR/story.md"; [ -s "$STORY_FILE" ] || { echo "no story at $STORY_FILE — Write it first (block 1)"; exit 1; }
+BASE_SHA=$(cat "$RUN_DIR/base-sha")
+TICKET="$(git rev-parse --abbrev-ref HEAD | grep -oE '[A-Z]+-[0-9]+' | head -1)"; TICKET="${TICKET:-REVIEW}"   # a label only: --story-file carries the contract
+CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done < "$RUN_DIR/context.txt"   # bash 3.2-safe; an empty file means no context
+while read -r M; do
+  [ -n "$M" ] || continue
   safe="${M//\//-}"
-  python3 "$CORK_HOME/orchestrate.py" "${TICKET:-REVIEW}" {WORKTREE} \
-    --review-model "$M" --story-file "$STORY" --base-branch {BASE} "${CONTEXT_ARGS[@]}" --skip-validation \
-    > "$OUTDIR/review-${safe}.txt" 2>&1 &
-done
+  python3 "$CORK_HOME/orchestrate.py" "$TICKET" . \
+    --review-model "$M" --story-file "$STORY_FILE" --base-branch "$BASE_SHA" "${CONTEXT_ARGS[@]}" --skip-validation \
+    > "$RUN_DIR/review-${safe}.txt" 2>&1 &
+done < "$RUN_DIR/models.txt"
 wait
 ```
 
-Each `--review-model` call is stateless and read-only — the prompt carries the story + diff + changed files + AGENTS.md (never prior review text), tree-capable harnesses may also read the worktree, and the call only prints findings. Pass `--skip-validation` here to bypass both API availability requests and harness login probes already performed by preflight (one premium request saved per API model); without this flag, harness validation re-runs the CLI's login probe (no model turn is spent) but still does not check model access. With `--story-file` the positional ticket id is only a label; without a story flag it selects the checkpoint story for that id and appears in the generic fallback, so never rely on a placeholder to carry the contract. Copilot and OpenAI API lanes auto-route `gpt-5.x`/`gpt-6.x`/codex to `/responses`; CLI harnesses retain their own provider routing. If a model errors, drop it and keep the rest (see *Model availability* under full mode).
+Each `--review-model` call is stateless and read-only — the prompt carries the story + required context + diff + changed files + AGENTS.md (never prior review text), tree-capable harnesses may also read the worktree, and the call only prints findings. Pass `--skip-validation` here to bypass both API availability requests and harness login probes already performed by preflight (one premium request saved per API model); without this flag, harness validation re-runs the CLI's login probe (no model turn is spent) but still does not check model access. With `--story-file` the positional ticket id is only a label; without a story flag the engine looks for devit's persisted story for that id and otherwise uses the generic fallback (never the checkpoint summary), so never rely on a placeholder to carry the contract. Copilot and OpenAI API lanes auto-route `gpt-5.x`/`gpt-6.x`/codex to `/responses`; CLI harnesses retain their own provider routing. If a model errors, drop it and keep the rest (see *Model availability* under full mode).
 
 ### R2 — Consolidate into one report
 
@@ -288,7 +313,7 @@ Print the report and stop. If the user then wants fixes applied, that's a separa
 
 ## Notes
 
-- **Base branch** is `develop` for edge-fmt. Prefer `--base-branch origin/develop` after a `git fetch`: cork warns when a local base is behind its remote (the diff would then cover the base's own catch-up — 49 files instead of 10 on one run).
+- **Base branch** is `develop` for edge-fmt. Prefer `--base-branch origin/develop` after a `git fetch`: cork warns when a local base differs from its remote — behind, ahead or diverged (the diff would then cover the base's own catch-up — 49 files instead of 10 on one run).
 - **Budget and context:** API lanes get `review_budget_chars` of prompt (default 192k chars ≈ 48k tokens) and nothing outside the changed set; the manifest shows what fell off, `--context-file` adds what must not, and tree-capable harness lanes (`claude`, `opencode`) read the rest themselves — prefer one of those on the roster when the change's blast radius is the question.
 - **Run tests** after each fix before committing — don't commit a broken build. (Full mode only — review-only never writes code.)
 - **Review-only mode** is side-effect-free: parallel reviews → one consolidated report, nothing applied. Reach for it to review someone else's branch.

@@ -51,7 +51,8 @@ class ReviewDiffTest(unittest.TestCase):
                     "TEST-1", "/repo", "missing-base", "copilot/model", validate=True
                 )
 
-        run.assert_called_once_with(
+        self.assertLessEqual(run.call_count, 2)   # the toplevel lookup, then the base check — no diff
+        run.assert_any_call(
             [
                 "git",
                 "rev-parse",
@@ -342,6 +343,14 @@ class ReviewDiffTest(unittest.TestCase):
             orchestrate.review("opencode", "p/m", "", "story", "diff", {}, repo="/repo",
                                required={"ctx.py": "r" * 140_000})
         self.assertIn("byte argument limit", err.getvalue()); self.assertIn("required context", err.getvalue())
+        # the standards travel inside the same argv element on a lane with no system flag: a scaffold that
+        # fits alone but not with the prefix must still fail (mutation: prefix = "" survives otherwise)
+        cap = orchestrate._MAX_ARG_BYTES
+        err = io.StringIO()
+        with patch.object(orchestrate, "load_config", return_value={}), redirect_stderr(err), self.assertRaises(SystemExit):
+            orchestrate.review("opencode", "p/m", "S" * 30_000, "story", "diff", {}, repo="/repo",
+                               required={"ctx.py": "r" * (cap - 25_000)})
+        self.assertIn("byte argument limit", err.getvalue())
         # after an argv repack the manifest reports the effective byte budget, not the char one
         files = {"big.py": "x" * (orchestrate._MAX_ARG_BYTES - 2_000), "tiny.py": "y" * 100}
         fake_run = Mock(return_value=Mock(returncode=0, stdout="ok", stderr=""))

@@ -22,7 +22,8 @@ class ReviewStoryTest(unittest.TestCase):
                          "_probe", "require_base_ref", "git_toplevel", "pin_ref", "preflight", "resolve_story", "_state_path")
         }
         self._env = {k: os.environ.get(k) for k in ("XDG_CACHE_HOME",)}
-        os.environ["XDG_CACHE_HOME"] = str(Path(self.tmp.name) / "cache")   # no devit scratch unless a test writes one
+        self.cache = tempfile.TemporaryDirectory()   # outside the test repo: a cache inside the reviewed tree is rejected by design
+        os.environ["XDG_CACHE_HOME"] = self.cache.name   # no devit scratch unless a test writes one
         orchestrate.CONFIG_PATH = Path(self.tmp.name) / "config.json"
         orchestrate.require_base_ref = lambda repo, base: None  # the temp dir is not a git repo
         orchestrate.git_toplevel = lambda repo: repo
@@ -46,6 +47,7 @@ class ReviewStoryTest(unittest.TestCase):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+        self.cache.cleanup()
         self.tmp.cleanup()
 
     def test_unknown_user_in_story_path_fails_cleanly(self):
@@ -120,7 +122,7 @@ class ReviewStoryTest(unittest.TestCase):
         self.assertTrue(seen["preflight"])
 
     def test_headless_fresh_run_without_contract_warns_before_preflight(self):
-        # Copilot on PR #33: a fresh run resolves to the fallback, then Step 1 replaces it with
+        # Copilot on PR #33: a fresh run has no contract and the fallback must be reported, so
         # the implementer summary — so the warning must fire before preflight or never.
         orchestrate.CONFIG_PATH.write_text(json.dumps(orchestrate.DEFAULT_CONFIG))
         orchestrate._state_path = lambda tid: Path(self.tmp.name) / "no-checkpoint.json"
@@ -191,58 +193,34 @@ class ReviewStoryTest(unittest.TestCase):
         self.assertNotIn("checkpoint story", prompt)
         self.assertIn("Story: --story (12 chars)", output)
 
-    def test_done_summary_wins_over_legacy_checkpoint_summary(self):
+    def test_checkpoint_summaries_are_never_the_story(self):
+        # the checkpoint holds the implementer's own description of the work; grading against it
+        # has no spec axis, so without a flag or a persisted ticket the fallback is used and named
         prompt, output = self._api_prompt()
-        self.assertIn("## Story / Task\ndone checkpoint story", prompt)
-        self.assertNotIn("legacy checkpoint story", prompt)
-        self.assertIn("Story: checkpoint done.summary (21 chars)", output)
-
-    def test_legacy_checkpoint_summary_wins_over_fallback(self):
-        orchestrate.load_state = lambda tid: {"summary": "legacy checkpoint story"}
-        prompt, output = self._api_prompt()
-        self.assertIn("## Story / Task\nlegacy checkpoint story", prompt)
-        self.assertNotIn("Review the branch changes", prompt)
-        self.assertIn("Story: checkpoint summary (23 chars)", output)
-
-    def _scratch(self, name: str, text: str) -> Path:
-        assert Path(os.environ["XDG_CACHE_HOME"]).is_absolute(), "scratch writes must never land in the worktree"
-        d = Path(os.environ["XDG_CACHE_HOME"]) / "cork" / "devit" / "TASK-1"
-        d.mkdir(parents=True, exist_ok=True)
-        (d / name).write_text(text, encoding="utf-8")
-        return d / name
-
-    def test_devit_scratch_story_wins_over_checkpoint_and_md_over_txt(self):
-        self._scratch("story.txt", "bare ticket")
-        prompt, output = self._api_prompt()
-        self.assertIn("## Story / Task\nbare ticket", prompt)
+        self.assertIn("## Story / Task\nReview the branch changes for TASK-1.", prompt)
         self.assertNotIn("checkpoint story", prompt)
-        self.assertIn("Story: devit scratch ", output)
-        md = self._scratch("story.md", "ticket plus sweep")
-        prompt, output = self._api_prompt()
-        self.assertIn("## Story / Task\nticket plus sweep", prompt)
-        self.assertIn(f"Story: devit scratch {md} (", output)
+        self.assertIn("Story: fallback", output); self.assertIn("no story supplied", output)
 
-    def test_devit_scratch_story_loses_to_flags_and_skips_blank_or_odd_ids(self):
-        self._scratch("story.md", "scratch story")
-        prompt, _ = self._api_prompt(story_text="inline story")
-        self.assertIn("## Story / Task\ninline story", prompt)
-        self.assertNotIn("scratch story", prompt)
-        # a traversal id must not read a file that exists where the walk would land
-        cache = Path(os.environ["XDG_CACHE_HOME"]) / "cork"
-        (cache / "TASK-1").mkdir(parents=True); (cache / "TASK-1" / "story.md").write_text("escaped")
-        (cache / "devit" / "story.md").write_text("escaped")
-        self.assertIsNone(orchestrate._devit_scratch_story("../TASK-1"))   # one path component only
-        self.assertIsNone(orchestrate._devit_scratch_story(""))
-        (cache / "story.md").write_text("escaped"); (cache / "devit" / "story.txt").write_text("escaped")
-        self.assertIsNone(orchestrate._devit_scratch_story(".."))          # Path("..").name == ".."
-        self.assertIsNone(orchestrate._devit_scratch_story("."))
-        self._scratch("story.md", " \n"); self._scratch("story.txt", " \n")
-        self.assertIsNone(orchestrate._devit_scratch_story("TASK-1"))      # blank files are not a story
-
-    def test_empty_xdg_cache_home_means_the_default_not_the_cwd(self):
-        # Path("") is the current directory — the reviewed worktree — so a branch could supply the story
-        os.environ["XDG_CACHE_HOME"] = ""
+    def test_relative_or_in_repo_cache_never_supplies_the_story(self):
+        os.environ["XDG_CACHE_HOME"] = "cache"                                        # relative: the XDG rule says ignore it
         self.assertEqual(orchestrate._devit_scratch_dir("TASK-1"), Path.home() / ".cache" / "cork" / "devit" / "TASK-1")
+        inside = Path(self.tmp.name) / "cache"; os.environ["XDG_CACHE_HOME"] = str(inside)   # absolute, but inside the reviewed repo
+        (inside / "cork" / "devit" / "TASK-1").mkdir(parents=True)
+        (inside / "cork" / "devit" / "TASK-1" / "story.md").write_text("branch-authored contract")
+        self.assertIsNone(orchestrate._devit_scratch_story("TASK-1", self.tmp.name))   # provenance: a branch must not supply it
+        prompt, output = self._api_prompt()
+        self.assertNotIn("branch-authored", prompt); self.assertIn("Story: fallback", output)
+        # a scratch path symlinked into the repo is the same thing
+        outside = Path(self.cache.name) / "real"; (outside / "cork" / "devit" / "TASK-1").mkdir(parents=True)
+        (outside / "cork" / "devit" / "TASK-1" / "story.md").write_text("linked contract")
+        os.environ["XDG_CACHE_HOME"] = str(Path(self.tmp.name) / "link"); (Path(self.tmp.name) / "link").symlink_to(outside)
+        self.assertEqual(orchestrate._devit_scratch_story("TASK-1", self.tmp.name), ("linked contract", f"devit scratch {Path(self.tmp.name) / 'link' / 'cork' / 'devit' / 'TASK-1' / 'story.md'}"))
+        # ... wait: a link OUT of the repo to a real external cache is fine (the content lives outside); a link INTO the repo is not
+        os.environ["XDG_CACHE_HOME"] = str(outside)
+        (outside / "cork" / "devit" / "TASK-1" / "story.md").unlink()
+        (outside / "cork" / "devit" / "TASK-1" / "story.md").symlink_to(Path(self.tmp.name) / "in-repo.md")
+        (Path(self.tmp.name) / "in-repo.md").write_text("in-repo contract")
+        self.assertIsNone(orchestrate._devit_scratch_story("TASK-1", self.tmp.name))
 
     def test_fallback_is_used_when_no_source_exists(self):
         orchestrate.load_state = lambda tid: {"done": {}}

@@ -65,7 +65,9 @@ procedure in the README's *Versioning* section.
   headless runs too: the blind reviewers and the isolated self-review receive the story, while
   the implementer's summary stays the fix prompts' context. Without a flag cork looks for the
   story devit persisted for the ticket (`$XDG_CACHE_HOME/cork/devit/<TICKET>/story.md`, then
-  `story.txt` — outside every repository), then the checkpoint summary, then the named fallback.
+  `story.txt` — outside every repository; an empty or relative `XDG_CACHE_HOME` means `~/.cache`
+  and a candidate inside the reviewed repository is ignored), then the named fallback. The
+  implementer's checkpoint summary is no longer a story source in either mode.
   `standards show <repo> --base-ref REF` prints the assembled rubric from a trusted ref; the
   devit lens gate and cork self-review feed it to lens subagents instead of the checkout's
   standards files. An unreadable changed file is listed as skipped in the manifest; an

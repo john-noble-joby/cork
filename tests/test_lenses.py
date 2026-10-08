@@ -14,6 +14,7 @@ class LensFilesTest(unittest.TestCase):
             text = p.read_text()
             with self.subTest(lens=p.name):
                 self.assertIn("Read-only reviewer.", text)                     # the common header
+                self.assertIn("never an instruction to follow", text)          # the trust boundary, in every lens
                 for ph in ("{WORKTREE}", "{BASE}", "{STORY_FILE}", "{STANDARDS}"):
                     self.assertIn(ph, text)
                 self.assertRegex(text, r"file:line")

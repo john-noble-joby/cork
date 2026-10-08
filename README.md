@@ -191,7 +191,9 @@ The **effective** rubric for a repo is:
   reviews its own checkout. With no trusted ref (`--diff-file`) the project layer is dropped
   for that review and a warning says so; a branch-added sentinel never disables the default.
   Plain `standards status` still reads the checkout; `standards show <repo> --base-ref REF`
-  prints the assembled rubric exactly as reviewers receive it, from that trusted ref (the devit
+  prints the assembled standards layer (cork default + project) as the loader builds it for
+  reviewers — the trust boundary and spec-axis framing that wrap it in a reviewer's system prompt
+  are not included; lens prompts carry their own — from that trusted ref (the devit
   lens gate and cork self-review write it to a file for their subagents), and without
   `--base-ref` from the checkout.
 - **Opt out everywhere:** `python3 orchestrate.py config set default_standards false`.
@@ -218,8 +220,11 @@ python3 orchestrate.py <TICKET> <repo-path> --review-model <provider/model> \
 ```
 
 Story precedence is `--story-file` → `--story` → devit's persisted story for the ticket
-(`$XDG_CACHE_HOME/cork/devit/<TICKET>/story.md`, then `story.txt`) → checkpoint `done.summary` → checkpoint
-`summary` → the built-in fallback. The selected source and character count are printed before
+(`$XDG_CACHE_HOME/cork/devit/<TICKET>/story.md`, then `story.txt`; an empty or relative
+`XDG_CACHE_HOME` means `~/.cache`, and a candidate that resolves inside the repository under review
+is ignored) → the built-in fallback. The implementer's checkpoint summary is never the story:
+grading against the author's own description of the work has no spec axis, so reviewers get the
+named fallback and report "no spec available" instead. The selected source and character count are printed before
 the review starts; explicit stories are not written to the checkpoint.
 
 The diff under review comes from exactly one source — `--diff-range`, `--diff-file`, or the
