@@ -62,7 +62,12 @@ class InstallSafetyTest(unittest.TestCase):
         env.update(env_overrides)
         env["CLAUDE_SKILLS_DIR"] = str(destination)
         env.setdefault("CORK_HOME", str(repo))
-        env.setdefault("HOME", str(repo.parent / "home"))
+        # setdefault was a no-op here (HOME is always in os.environ), so the real ~/.local/bin/cork
+        # got relinked to a temp repo on every run. Redirect both unless a test says otherwise.
+        if "HOME" not in env_overrides:
+            env["HOME"] = str(repo.parent / "home")
+        if "CORK_BIN_DIR" not in env_overrides:
+            env["CORK_BIN_DIR"] = str(Path(env["HOME"]) / ".local" / "bin")
         Path(env["HOME"]).mkdir(parents=True, exist_ok=True)
         return subprocess.run(
             ["bash", "install.sh"],
@@ -111,6 +116,17 @@ class InstallSafetyTest(unittest.TestCase):
             f"exec {shlex.quote(real_mv)} \"$@\"\n"
         )
         wrapper.chmod(0o755)
+
+    def test_installer_links_the_shim_under_the_redirected_home_only(self):
+        # Reverting the HOME/CORK_BIN_DIR redirection to a setdefault (a no-op) would relink the
+        # real ~/.local/bin/cork to this temp repo on every test run — this test fails first.
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "dest"
+            result = self._run_real_install(dest)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            link = dest.parent / "home" / ".local" / "bin" / "cork"
+            self.assertTrue(link.is_symlink(), result.stdout)
+            self.assertEqual(os.readlink(link), str(ROOT / "bin" / "cork"))
 
     def test_nonexistent_destination_under_source_is_refused_without_dirtying_repo(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -313,6 +329,13 @@ esac
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertTrue((logical_parent / "statusline.py").is_file())
             self.assertFalse((physical_parent / "statusline.py").exists())
+            # the printed hook and update commands judge the LOGICAL skills path: here it is the default
+            # ($HOME/.claude/skills), so no CLAUDE_SKILLS_DIR prefix is printed — the physically resolved
+            # target must not leak into them (a later doctor/update would then look for statusline.py
+            # beside the physical dir, not beside the logical one where it was installed)
+            tail = result.stdout.split("Keep every session")[1]
+            self.assertNotIn("CLAUDE_SKILLS_DIR=", tail)
+            self.assertNotIn(str(physical_destination), tail)
 
     def test_trailing_dot_destination_keeps_statusline_outside_skills(self):
         for ending in (".", "./"):

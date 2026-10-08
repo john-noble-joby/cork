@@ -52,6 +52,21 @@ steps below are manual.
    installer says so. (The skills keep calling `$CORK_HOME/orchestrate.py` explicitly; the
    shim is for people.)
 
+   **Staying current.** Three things have to agree — the clone (engine), the skill copies, and
+   the `cork` link — and nothing checks that by itself. `cork doctor` does, in one line, and
+   `cork update` (`git pull --ff-only` + `install.sh`) refreshes the clone and the installed
+   copies where that is safe. Some reports need a hand: a foreign file or symlink at the link
+   path is left alone by the installer, a different `cork` earlier on `PATH` is yours to reorder,
+   and `update` refuses a dirty clone or one not on `main`. To have every Claude Code
+   session check, add to `hooks.SessionStart` in `~/.claude/settings.json` (the installer
+   prints this with your paths filled in; it runs the clone's own `bin/cork` so it works even
+   when the link is what is broken):
+   ```json
+   { "matcher": "", "hooks": [ { "type": "command", "command": "\"$HOME/dev/cork/bin/cork\" doctor", "timeout": 10 } ] }
+   ```
+   A colleague does the same three steps: clone, `./install.sh`, add the hook. `CORK_BIN_DIR`
+   overrides where the link goes (tests use it so the installer never touches a real home).
+
 3. **Choose providers, then authenticate.** Copilot is the default, but Claude-only reviews
    need only Claude Code's login. Run `config init`, configure your intended rotation (see
    *Harness reviewers* below), then get a Copilot token **only if using Copilot lanes**:
@@ -102,6 +117,8 @@ is the same thing from any directory (`bin/cork` resolves to the clone it was li
 | `python3 orchestrate.py preflight` | Probe the configured model rotation and select usable reviewers. |
 | `python3 orchestrate.py config init\|show\|get\|set` | Initialize, inspect, or update cork configuration. |
 | `python3 orchestrate.py standards status\|init` | Inspect or initialize the effective review standards. |
+| `cork doctor [--no-fetch]` | One line: version, and whether the clone is on `main` at `origin/main`, the installed skills and `statusline.py` match it byte for byte, the `cork` link (and the `cork` on PATH) point here, and `CORK_HOME` is this clone. A `⚠` line per problem; exit 0 always — made for a `SessionStart` hook. |
+| `cork update` | `git pull --ff-only` in the clone, then `install.sh`. Refuses a dirty tree or a clone not on `main`. |
 | `python3 orchestrate.py <TICKET> <repo> [options]` | Run the headless implementation and review pipeline. |
 
 ---

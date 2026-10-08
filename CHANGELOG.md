@@ -30,6 +30,21 @@ procedure in the README's *Versioning* section.
 ## [Unreleased]
 
 ### Added
+- **`cork doctor` and `cork update`** (closes #36). `doctor` prints one line per session — the
+  version, and whether the clone is on `main` at `origin/main`, every installed skill and
+  `statusline.py` match the clone byte for byte (stamps only move at a release, so content is
+  the drift signal; extra files left behind count), the `cork` link and the `cork` on PATH
+  resolve to this clone, and `CORK_HOME` is this clone — with a `⚠` line per problem and exit 0
+  even on an unexpected error or a non-UTF-8 stdout, so it runs as a `SessionStart` hook;
+  `install.sh` prints the hook snippet (running the clone's own `bin/cork`, with `CORK_BIN_DIR`
+  carried when it is not the default). `update` is `git pull --ff-only` plus `install.sh`,
+  refusing a dirty tree or a clone not on `main`. `install.sh` honours `CORK_BIN_DIR`, and the
+  installer tests now redirect `HOME` and the bin dir for real (the old `setdefault` was a
+  no-op, so every test run relinked the real `~/.local/bin/cork` to a temp repo).
+- **Preflight no longer drops Copilot's Gemini lane.** The probe sent an empty system message
+  (`"content": ""`), which `gemini-3.8-flash` through Copilot rejects with HTTP 400 "invalid
+  request body"; preflight read that as "other" and dropped the model on every run. An empty
+  system prompt is now omitted from chat, Responses and Anthropic request bodies.
 - **Long-tail review classes are swept before review, not discovered one pass at a time.**
   devit gains *Phase 3.5 — Pre-review sweep*: six artifacts pasted into the PR body — surface
   inventory for every new gate, input-domain table for every external value, contract probes
