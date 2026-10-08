@@ -49,6 +49,29 @@ class AnthropicExtractTest(unittest.TestCase):
         self.assertEqual(orchestrate._extract_anthropic_text({"content": []}), "")
 
 
+class EmptySystemPromptTest(unittest.TestCase):
+    # Copilot's Gemini lane answers {"role": "system", "content": ""} with HTTP 400; the probe
+    # sends no system prompt, so an empty one must be omitted from every provider's body.
+    def _payload(self, provider, model, system):
+        with patch.object(orchestrate, "_http_post_json", return_value=(200, {})) as http, \
+             patch.object(orchestrate, "_provider_headers", return_value={}), \
+             patch.object(orchestrate, "load_config", return_value={}):
+            if provider == "anthropic":
+                orchestrate._anthropic_call(model, system, "ok")
+            else:
+                orchestrate._openai_compatible_call(provider, model, system, "ok", max_out=16)
+            return http.call_args.args[2]
+
+    def test_empty_system_prompt_is_omitted_and_a_real_one_is_kept(self):
+        chat = self._payload("copilot", "gemini-3.8-flash", "")
+        self.assertEqual([m["role"] for m in chat["messages"]], ["user"])
+        self.assertEqual([m["role"] for m in self._payload("copilot", "gemini-3.8-flash", "rules")["messages"]], ["system", "user"])
+        self.assertNotIn("instructions", self._payload("copilot", "gpt-5.5", ""))
+        self.assertEqual(self._payload("copilot", "gpt-5.5", "rules")["instructions"], "rules")
+        self.assertNotIn("system", self._payload("anthropic", "claude-opus-5.5", ""))
+        self.assertEqual(self._payload("anthropic", "claude-opus-5.5", "rules")["system"], "rules")
+
+
 class CopilotRoutingTest(unittest.TestCase):
     def test_routes_and_extracts_each_model_family(self):
         cases = [
@@ -71,7 +94,7 @@ class CopilotRoutingTest(unittest.TestCase):
                      patch.object(orchestrate, "_http_post_json",
                                   return_value=(200, body)) as post:
                     result = orchestrate._call_and_extract(
-                        "copilot", model, "standards", "diff", max_out=16)
+                        "copilot", model, "standards", "diff", max_out=orchestrate._PROBE_MAX_OUT)
                 self.assertEqual(result, (200, "review findings", None))
                 url, _, payload, _ = post.call_args.args
                 endpoint = "/responses" if responses else "/chat/completions"
@@ -79,11 +102,11 @@ class CopilotRoutingTest(unittest.TestCase):
                 self.assertEqual(payload["model"], model)
                 if responses:
                     self.assertEqual(payload["input"], "diff")
-                    self.assertEqual(payload["max_output_tokens"], 16)
+                    self.assertEqual(payload["max_output_tokens"], orchestrate._PROBE_MAX_OUT)
                     self.assertEqual(payload["reasoning"], {"effort": "high"})
                 else:
                     self.assertEqual(payload["messages"][-1]["content"], "diff")
-                    self.assertEqual(payload["max_tokens"], 16)
+                    self.assertEqual(payload["max_tokens"], orchestrate._PROBE_MAX_OUT)
                     self.assertNotIn("reasoning_effort", payload)
 
     def test_review_effort_uses_config_or_legacy_default(self):

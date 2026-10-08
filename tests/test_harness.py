@@ -650,7 +650,7 @@ class ApiRoutingUnaffectedTest(HarnessBase):
         orchestrate._call_and_extract = lambda p, m, s, u, max_out=None, repo="": (
             seen.append((p, m, max_out)) or (200, "ok", None))
         self.assertEqual(orchestrate._probe("copilot", "gpt-4.1"), "ok")
-        self.assertEqual(seen, [("copilot", "gpt-4.1", 16)])
+        self.assertEqual(seen, [("copilot", "gpt-4.1", orchestrate._PROBE_MAX_OUT)])
 
     def test_eligible_rotation_api_missing_token_wording(self):
         import io

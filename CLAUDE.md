@@ -61,6 +61,8 @@ Copilot auth resolves in priority order: `CORK_COPILOT_TOKEN` → `CORK_AUTH_FIL
 ```bash
 python3 orchestrate.py ENG-123 ~/dev/target-repo
 cork ENG-123 ~/dev/target-repo      # same thing via the install.sh symlink
+cork doctor                         # is this clone current, skills in sync, link pointing here?
+cork update                         # git pull --ff-only + install.sh
 ```
 
 No third-party dependencies — Python 3.10+ stdlib only (Copilot API calls go
