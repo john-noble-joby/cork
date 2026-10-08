@@ -130,6 +130,25 @@ class DoctorTest(unittest.TestCase):
         _git(self.clone, "remote", "rename", "origin", "upstream")
         self.assertIn("no origin/main in the clone", self._doctor())
 
+    def test_git_failures_are_unknown_state_not_clean(self):
+        # a clone whose git commands fail must not read as "clean" or "0 behind"
+        not_a_repo = Path(self.tmp.name) / "plain"; not_a_repo.mkdir(); shutil.copy(ROOT / "VERSION", not_a_repo / "VERSION")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            orchestrate.cmd_doctor(not_a_repo, fetch=False)
+        self.assertIn("could not read the working tree state", out.getvalue()); self.assertNotIn("up to date", out.getvalue())
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit):
+            orchestrate.cmd_update(not_a_repo)
+        self.assertIn("not updating an unknown tree", err.getvalue())
+        # a rev-list failure on an otherwise fine clone is reported, not counted as zero
+        real = orchestrate._git_out
+        orchestrate._git_out = lambda cwd, *a, **k: None if "rev-list" in a else real(cwd, *a, **k)
+        try:
+            self.assertIn("could not compare the clone with origin/main", self._doctor())
+        finally:
+            orchestrate._git_out = real
+
     def test_fetch_runs_with_a_timeout(self):
         seen = {}
         real = orchestrate.subprocess.run

@@ -2646,18 +2646,25 @@ def _doctor_clone(clone: Path, fetch: bool) -> list[str]:
     # on main: a feature branch or detached HEAD at the same commit is not "current" either,
     # because the next checkout of main runs old code and `cork update` would not move main.
     problems: list[str] = []
+    status = _git_out(clone, "status", "--porcelain", "--untracked-files=no")
+    if status is None:   # git itself failed: unknown is not clean, and nothing below can be trusted either
+        return [f"could not read the working tree state of {clone} (git status failed) — is it a git checkout?"]
+    if status:
+        problems.append(f"clone {clone} has uncommitted changes — `cork update` refuses a dirty tree")
     branch = _git_out(clone, "symbolic-ref", "--short", "-q", "HEAD")
     if branch != "main":
         problems.append(f"clone is on {branch or 'a detached HEAD'}, not main — agents run this checkout; `cork update` only updates main")
-    if _git_out(clone, "status", "--porcelain", "--untracked-files=no"):
-        problems.append(f"clone {clone} has uncommitted changes — `cork update` refuses a dirty tree")
     if fetch and _git_out(clone, "fetch", "--quiet", "origin", timeout=8) is None:
         problems.append("could not fetch origin — freshness compared against the last fetch")
     if _git_out(clone, "rev-parse", "--verify", "--quiet", "origin/main^{commit}") is None:
         problems.append("no origin/main in the clone — cannot tell whether it is current")
         return problems
-    behind = int(_git_out(clone, "rev-list", "--count", "HEAD..origin/main") or 0)
-    ahead = int(_git_out(clone, "rev-list", "--count", "origin/main..HEAD") or 0)
+    behind_s = _git_out(clone, "rev-list", "--count", "HEAD..origin/main")
+    ahead_s = _git_out(clone, "rev-list", "--count", "origin/main..HEAD")
+    if behind_s is None or ahead_s is None:   # a failed comparison is not "no divergence"
+        problems.append("could not compare the clone with origin/main (git rev-list failed)")
+        return problems
+    behind, ahead = int(behind_s), int(ahead_s)
     if behind:
         problems.append(f"clone is {behind} commit(s) behind origin/main — run `cork update`")
     if ahead:
@@ -2793,11 +2800,14 @@ def cmd_doctor(clone: Path | None = None, fetch: bool = True) -> None:
 
 def cmd_update(clone: Path | None = None) -> None:
     clone = clone or _clone_root()
+    status = _git_out(clone, "status", "--porcelain", "--untracked-files=no")
+    if status is None:
+        fail(f"could not read the working tree state of {clone} (git status failed) — not updating an unknown tree")
+    if status:
+        fail(f"{clone} has uncommitted changes — commit or discard them, then re-run `cork update`")
     branch = _git_out(clone, "symbolic-ref", "--short", "-q", "HEAD")
     if branch != "main":   # pull would fast-forward whatever is checked out and leave main stale
         fail(f"{clone} is on {branch or 'a detached HEAD'} — check out main, then re-run `cork update`")
-    if _git_out(clone, "status", "--porcelain", "--untracked-files=no"):
-        fail(f"{clone} has uncommitted changes — commit or discard them, then re-run `cork update`")
     pull = subprocess.run(["git", "pull", "--ff-only", "origin", "main"], cwd=clone, capture_output=True, text=True)
     if pull.returncode != 0:
         fail(f"git pull --ff-only failed in {clone}:\n{pull.stderr.strip()}")
