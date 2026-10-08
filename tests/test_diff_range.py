@@ -390,6 +390,9 @@ class ReviewDiffSourceTest(unittest.TestCase):
         self.assertIn("BASE RULES", out)
         out, _ = show(str(self.repo))                                              # no ref: the checkout, as `status` reads it
         self.assertIn("BRANCH RULES", out)
+        # a ref with no project file while the checkout has one: the loader's ⚠ goes to stderr, not into the rubric
+        out, err = show(str(self.repo), "--base-ref", self.c1)
+        self.assertNotIn("⚠", out); self.assertNotIn("RULES", out); self.assertIn("no regular-file copy", err)
         err = io.StringIO(); orig = sys.argv; sys.argv = ["orchestrate.py", "standards", "show", str(self.repo), "--base-ref"]
         try:
             with redirect_stderr(err), self.assertRaises(SystemExit): orchestrate.main()

@@ -205,6 +205,7 @@ class ReviewStoryTest(unittest.TestCase):
         self.assertIn("Story: checkpoint summary (23 chars)", output)
 
     def _scratch(self, name: str, text: str) -> Path:
+        assert Path(os.environ["XDG_CACHE_HOME"]).is_absolute(), "scratch writes must never land in the worktree"
         d = Path(os.environ["XDG_CACHE_HOME"]) / "cork" / "devit" / "TASK-1"
         d.mkdir(parents=True, exist_ok=True)
         (d / name).write_text(text, encoding="utf-8")
@@ -235,11 +236,13 @@ class ReviewStoryTest(unittest.TestCase):
         (cache / "story.md").write_text("escaped"); (cache / "devit" / "story.txt").write_text("escaped")
         self.assertIsNone(orchestrate._devit_scratch_story(".."))          # Path("..").name == ".."
         self.assertIsNone(orchestrate._devit_scratch_story("."))
-        # an empty XDG_CACHE_HOME is the default, never the current directory (the reviewed worktree)
-        os.environ["XDG_CACHE_HOME"] = ""
-        self.assertEqual(orchestrate._devit_scratch_dir("TASK-1"), Path.home() / ".cache" / "cork" / "devit" / "TASK-1")
         self._scratch("story.md", " \n"); self._scratch("story.txt", " \n")
         self.assertIsNone(orchestrate._devit_scratch_story("TASK-1"))      # blank files are not a story
+
+    def test_empty_xdg_cache_home_means_the_default_not_the_cwd(self):
+        # Path("") is the current directory — the reviewed worktree — so a branch could supply the story
+        os.environ["XDG_CACHE_HOME"] = ""
+        self.assertEqual(orchestrate._devit_scratch_dir("TASK-1"), Path.home() / ".cache" / "cork" / "devit" / "TASK-1")
 
     def test_fallback_is_used_when_no_source_exists(self):
         orchestrate.load_state = lambda tid: {"done": {}}

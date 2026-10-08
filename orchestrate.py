@@ -2487,7 +2487,8 @@ def cmd_standards_show(repo: str, base_ref: str | None) -> None:
     if base_ref is not None:
         require_base_ref(repo, base_ref)
         base_ref = pin_ref(repo, base_ref)
-    text, label = load_agent_instructions(repo, set() if base_ref else None, base_ref)
+    with contextlib.redirect_stdout(sys.stderr):   # loader ⚠ diagnostics must not land in the redirected rubric file
+        text, label = load_agent_instructions(repo, set() if base_ref else None, base_ref)
     print(f"standards: {label or 'none'}", file=sys.stderr, flush=True)
     if text:
         print(text)
@@ -3094,9 +3095,10 @@ def main() -> None:
         state = {"version": 2, "ticket_id": tid, "done": {}}
 
     # The story the reviewers grade against is the ticket (a flag or devit's persisted copy),
-    # not the implementer's own description of its work — `summary` below stays the fix
-    # prompts' context. Resolved before preflight so a bad --story-file fails before any probe
-    # spends quota, and again after Step 1 when only the fresh checkpoint summary is left.
+    # never the implementer's own description of its work — `summary` below is the fix and PR
+    # prompts' context only. Without a contract the reviewers get the named fallback and report
+    # "no spec available", which is the truth. Resolved before preflight so a bad --story-file
+    # fails before any probe spends quota.
     story, story_source = resolve_story(tid, args.story_file, args.story, state)
     # Warned here, not after Step 1: on a fresh run the fallback is replaced by the Step 1
     # summary below, so this is the only moment the missing contract is visible.
@@ -3137,8 +3139,6 @@ def main() -> None:
         state["done"]["summary"]   = summary
         mark_done_v2(tid, state)
         step_done(1, total, f"Claude Code: implement {tid}")
-        if story_source.startswith(("checkpoint", "fallback")):
-            story, story_source = resolve_story(tid, args.story_file, args.story, state)
     else:
         skip(1, total, f"Claude Code: implement {tid}")
     print(f"  Story: {story_source} ({len(story)} chars)")
