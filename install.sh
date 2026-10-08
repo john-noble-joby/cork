@@ -288,6 +288,7 @@ fi
 echo
 shim="$REPO/bin/cork"
 bin_dir="${CORK_BIN_DIR:-$HOME/.local/bin}"   # CORK_BIN_DIR: tests and non-standard layouts; never the real home by accident
+case "$bin_dir" in /*) ;; *) bin_dir="$PWD/$bin_dir" ;; esac   # a relative override is resolved here, once: the printed hook runs from another cwd
 link="$bin_dir/cork"
 # Only a link that is recognisably cork's (its target is some clone's bin/cork, present or
 # deleted) is repointed; a regular file or a symlink to anything else is the user's and is

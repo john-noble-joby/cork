@@ -160,6 +160,14 @@ class DoctorTest(unittest.TestCase):
         (Path(self.tmp.name) / "other-clone").mkdir()
         self.assertIn("is not this clone", self._doctor())
 
+    def test_empty_env_overrides_mean_the_defaults_not_the_cwd(self):
+        # install.sh uses ${VAR:-default}; a hook inheriting an empty variable must agree with it
+        os.environ["CORK_BIN_DIR"] = ""; os.environ["CLAUDE_SKILLS_DIR"] = ""; os.environ["CORK_HOME"] = ""
+        self.assertEqual(orchestrate._bin_dir(), Path.home() / ".local" / "bin")
+        self.assertEqual(orchestrate._skills_dir(), Path.home() / ".claude" / "skills")
+        out = self._doctor()
+        self.assertIn("CORK_HOME=" + str(Path.home() / "dev" / "cork"), out)   # the skills' default, not the cwd
+
     def test_statusline_and_path_drift_are_reported(self):
         (self.skills.parent / "statusline.py").write_text("stale")
         self.assertIn("statusline.py at", self._doctor())

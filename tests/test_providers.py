@@ -49,6 +49,29 @@ class AnthropicExtractTest(unittest.TestCase):
         self.assertEqual(orchestrate._extract_anthropic_text({"content": []}), "")
 
 
+class EmptySystemPromptTest(unittest.TestCase):
+    # Copilot's Gemini lane answers {"role": "system", "content": ""} with HTTP 400; the probe
+    # sends no system prompt, so an empty one must be omitted from every provider's body.
+    def _payload(self, provider, model, system):
+        with patch.object(orchestrate, "_http_post_json", return_value=(200, {})) as http, \
+             patch.object(orchestrate, "_provider_headers", return_value={}), \
+             patch.object(orchestrate, "load_config", return_value={}):
+            if provider == "anthropic":
+                orchestrate._anthropic_call(model, system, "ok")
+            else:
+                orchestrate._openai_compatible_call(provider, model, system, "ok", max_out=16)
+            return http.call_args.args[2]
+
+    def test_empty_system_prompt_is_omitted_and_a_real_one_is_kept(self):
+        chat = self._payload("copilot", "gemini-3.8-flash", "")
+        self.assertEqual([m["role"] for m in chat["messages"]], ["user"])
+        self.assertEqual([m["role"] for m in self._payload("copilot", "gemini-3.8-flash", "rules")["messages"]], ["system", "user"])
+        self.assertNotIn("instructions", self._payload("copilot", "gpt-5.5", ""))
+        self.assertEqual(self._payload("copilot", "gpt-5.5", "rules")["instructions"], "rules")
+        self.assertNotIn("system", self._payload("anthropic", "claude-opus-5.5", ""))
+        self.assertEqual(self._payload("anthropic", "claude-opus-5.5", "rules")["system"], "rules")
+
+
 class CopilotRoutingTest(unittest.TestCase):
     def test_routes_and_extracts_each_model_family(self):
         cases = [

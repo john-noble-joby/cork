@@ -851,7 +851,7 @@ def _anthropic_call(model: str, system: str, user_msg: str,
     return _http_post_json(
         f"{PROVIDER_BASE['anthropic']}/v1/messages",
         _provider_headers("anthropic"),
-        {"model": model, "max_tokens": max_tokens, "system": system,
+        {"model": model, "max_tokens": max_tokens, **({"system": system} if system else {}),
          "messages": [{"role": "user", "content": user_msg}]},
         timeout=timeout,
     )
@@ -1579,16 +1579,19 @@ def _openai_compatible_call(provider: str, model: str, system: str,
     # max_out caps output tokens — set small for preflight probes; None = review-sized.
     base = PROVIDER_BASE[provider]
     headers = _provider_headers(provider)
+    # An empty system prompt is omitted, not sent as "": the probe sends none, and Copilot's
+    # Gemini lane answers an empty system message with HTTP 400 "invalid request body", which
+    # preflight read as "other" and dropped the model on every run.
     if _uses_responses_api(model):
         return _http_post_json(f"{base}/responses", headers, {
-            "model": model, "instructions": system, "input": user_msg,
+            "model": model, **({"instructions": system} if system else {}), "input": user_msg,
             "max_output_tokens": max_out or _RESPONSES_MAX_OUTPUT,
             "reasoning": {"effort": load_config(quiet=True).get("responses_effort", _DEFAULT_RESPONSES_EFFORT)},
         }, timeout)
     payload = {
         "model": model,
-        "messages": [{"role": "system", "content": system},
-                     {"role": "user", "content": user_msg}],
+        "messages": ([{"role": "system", "content": system}] if system else [])
+                    + [{"role": "user", "content": user_msg}],
     }
     if max_out is not None:
         payload["max_tokens"] = max_out
@@ -1863,11 +1866,10 @@ def _probe(provider: str, model: str, details: dict | None = None) -> str:
         if details is not None:
             details.update(result)
         return result["status"]
-    # A cheap availability probe — cap output hard so it can't burn review-sized
-    # quota (the classification only needs the HTTP status, not the content).
+    # A cheap availability probe — cap output hard so it can't burn review-sized quota. The
+    # classification needs only the HTTP status: a reasoning model that spends the whole cap
+    # thinking returns 200 with empty content, and 200 is "ok" regardless of the text.
     try:
-        # 256, not 16: a reasoning model (gemini-3.8-flash spends ~86 reasoning tokens on "ok")
-        # returns 200 with empty content when starved, and an empty probe reads as "other".
         status, text, _ = _call_and_extract(provider, model, "", "ok", max_out=_PROBE_MAX_OUT)
     except (TimeoutError, socket.timeout):
         return "timeout"
@@ -2614,7 +2616,7 @@ def _version() -> str:
         return f"cork {ver}"
 
 
-_PROBE_MAX_OUT = 256
+_PROBE_MAX_OUT = 16   # output cap for availability probes; only the HTTP status is classified
 
 
 def _clone_root() -> Path:
@@ -2622,11 +2624,13 @@ def _clone_root() -> Path:
 
 
 def _skills_dir() -> Path:
-    return Path(os.environ.get("CLAUDE_SKILLS_DIR", str(Path.home() / ".claude" / "skills")))
+    # Empty counts as unset, matching install.sh's `${VAR:-default}`: a hook inheriting
+    # `CLAUDE_SKILLS_DIR=` must not turn the check onto the current directory.
+    return Path(os.environ.get("CLAUDE_SKILLS_DIR") or str(Path.home() / ".claude" / "skills"))
 
 
 def _bin_dir() -> Path:
-    return Path(os.environ.get("CORK_BIN_DIR", str(Path.home() / ".local" / "bin")))
+    return Path(os.environ.get("CORK_BIN_DIR") or str(Path.home() / ".local" / "bin"))
 
 
 def _git_out(cwd: Path, *args: str, timeout: int | None = None) -> str | None:
@@ -2741,7 +2745,7 @@ def _doctor_shim(clone: Path, bin_dir: Path) -> list[str]:
 def _doctor_cork_home(clone: Path) -> list[str]:
     # The skills run `python3 "$CORK_HOME/orchestrate.py"` — that path, not the link, is what
     # agents execute. Default mirrors the skills' own fallback.
-    cork_home = Path(os.environ.get("CORK_HOME", str(Path.home() / "dev" / "cork"))).expanduser()
+    cork_home = Path(os.environ.get("CORK_HOME") or str(Path.home() / "dev" / "cork")).expanduser()   # empty = unset, as the skills' ${CORK_HOME:-…}
     try:
         if not cork_home.exists():
             return [f"CORK_HOME={cork_home} does not exist — skills would run nothing"]

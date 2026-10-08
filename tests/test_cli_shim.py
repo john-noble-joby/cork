@@ -97,6 +97,13 @@ class InstallLinksShimTest(unittest.TestCase):
             self.assertIn(f"\"command\": \"CORK_BIN_DIR='{custom}' CLAUDE_SKILLS_DIR='{dest}' '{SHIM}' doctor\"", out)
             self.assertIn(f"Update later with: CORK_BIN_DIR='{custom}' CLAUDE_SKILLS_DIR='{dest}' '{SHIM}' update", out)
             self.assertFalse((home2 / ".local" / "bin" / "cork").exists())   # the default dir was not touched
+            # a relative override is resolved against the installer's cwd once, so the printed hook (run from
+            # any cwd later) checks the same link that was created
+            home3 = Path(tmp) / "home3"; home3.mkdir()
+            out = self._install(home3, dest, CORK_BIN_DIR="rel bin").stdout
+            self.assertTrue((ROOT / "rel bin" / "cork").is_symlink(), out)
+            self.assertIn(f"CORK_BIN_DIR='{ROOT / 'rel bin'}' ", out)
+            import shutil as _sh; _sh.rmtree(ROOT / "rel bin")
             # a single quote in a path is closed, escaped and reopened — still one shell word
             quoted = Path(tmp) / "it's bin"
             out = self._install(home2, dest, CORK_BIN_DIR=str(quoted)).stdout

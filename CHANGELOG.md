@@ -41,9 +41,10 @@ procedure in the README's *Versioning* section.
   refusing a dirty tree or a clone not on `main`. `install.sh` honours `CORK_BIN_DIR`, and the
   installer tests now redirect `HOME` and the bin dir for real (the old `setdefault` was a
   no-op, so every test run relinked the real `~/.local/bin/cork` to a temp repo).
-- **Preflight probes give reasoning models room to answer.** The probe allowed 16 output tokens;
-  `gemini-3.8-flash` spends ~86 reasoning tokens before its first visible one, so the seat's
-  Gemini lane came back empty and was dropped as "other" on every preflight. The budget is 256.
+- **Preflight no longer drops Copilot's Gemini lane.** The probe sent an empty system message
+  (`"content": ""`), which `gemini-3.8-flash` through Copilot rejects with HTTP 400 "invalid
+  request body"; preflight read that as "other" and dropped the model on every run. An empty
+  system prompt is now omitted from chat, Responses and Anthropic request bodies.
 - **Long-tail review classes are swept before review, not discovered one pass at a time.**
   devit gains *Phase 3.5 — Pre-review sweep*: six artifacts pasted into the PR body — surface
   inventory for every new gate, input-domain table for every external value, contract probes
