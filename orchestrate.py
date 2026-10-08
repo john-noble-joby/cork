@@ -1708,11 +1708,13 @@ def _budget_files(files: dict[str, str], budget: int,
             break
         included.append(entry); names.append(name)
         used += cost
+    # Neutral wording only: an omission's reason (budget, size, unreadable) is the manifest's to
+    # state; a remark in the prompt was once turned into a finding by a reviewer.
     if not included:
-        return "(files omitted — diff too large; see diff section)", []
+        return "(no changed-file contents included; the diff below is the review material)", []
     block = "\n\n".join(included)
     if len(included) < len(files):
-        block += f"\n\n_(+{len(files) - len(included)} files omitted for token budget — see diff)_"
+        block += f"\n\n_({len(files) - len(included)} more changed files are not included here; the diff below covers their changes)_"
     return block, names
 
 

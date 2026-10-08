@@ -43,7 +43,9 @@ CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 python3 "$CORK_HOME/orchestrate.py" --version            # cork version — announce it (see below)
 git rev-parse --verify --quiet "{BASE}^{commit}" >/dev/null || { echo "base {BASE} does not resolve"; exit 1; }
 git merge-base "{BASE}" HEAD >/dev/null      || { echo "no merge base with {BASE}"; exit 1; }
-python3 "$CORK_HOME/orchestrate.py" preflight | tee "$(git rev-parse --git-dir)/cork-preflight"   # probe & select models; persisted for Step 2 / R1 (per worktree, never committed)
+PF="$(git rev-parse --git-dir)/cork-preflight"           # per worktree, never committed; Step 2 / R1 read the rotation back from it
+python3 "$CORK_HOME/orchestrate.py" preflight > "$PF" || { cat "$PF"; echo "preflight failed — fix auth/config before anything else"; exit 1; }
+cat "$PF"                                               # probe & select models for this seat
 python3 "$CORK_HOME/orchestrate.py" standards status .   # show the active review-standards layers
 git rev-parse --abbrev-ref HEAD                         # current branch
 git rev-parse --abbrev-ref HEAD | grep -oP 'MXE-\d+'    # ticket ID, if branch follows convention
@@ -198,8 +200,8 @@ outside the repository, so no lane can reach it through the tree: not the API mo
 harnesses without tree access (`codex`, `pi`), and not the tree-capable ones (`claude`,
 `opencode`) either, because it is not in the tree they can read. The story file is the only
 way the contract reaches any reviewer. Without the flag `orchestrate.py` falls back to the
-story devit persisted for the ticket, then the checkpoint summary, then a generic fallback —
-a call whose output says `Story: fallback` reviewed with no spec and must be re-run.
+story devit persisted for the ticket, then a generic fallback (never the implementer's
+checkpoint summary) — a call whose output says `Story: fallback` reviewed with no spec and must be re-run.
 
 `{MODEL}` is the full `provider/model` ref printed by `preflight` (e.g. `copilot/gpt-5.5`); `orchestrate.py` splits it (a bare id defaults to `copilot`).
 
