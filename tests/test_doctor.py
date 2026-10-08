@@ -82,6 +82,9 @@ class DoctorTest(unittest.TestCase):
         # a file the clone no longer ships is drift too: install.sh replaces directories in full
         (self.skills / "cork-setup" / "OLD.md").write_text("left behind")
         self.assertIn("skill cork-setup installed copy differs from the clone (OLD.md (not in clone))", self._doctor())
+        (self.skills / "cork-setup" / "OLD.md").unlink()
+        (self.skills / "cork-setup" / "dangling").symlink_to(Path(self.tmp.name) / "nowhere")   # a broken symlink is drift too
+        self.assertIn("(dangling (not in clone))", self._doctor())
 
     def test_shim_states(self):
         (self.bin / "cork").unlink(); (self.bin / "cork").symlink_to(Path(self.tmp.name) / "gone" / "bin" / "cork")
@@ -95,9 +98,11 @@ class DoctorTest(unittest.TestCase):
         out = self._doctor()
         self.assertIn("no `cork` command", out)
         self.assertIn("`cork` is not on PATH", out)        # a broken link does not hide PATH drift: both reported at once
-        # the clone's own shim missing must be a line, not a FileNotFoundError from samefile()
+        # the clone's own shim missing must be a line, not a FileNotFoundError from samefile() — and the
+        # link and PATH checks still run against where the shim should be, so other-clone drift shows too
         (self.bin / "cork").symlink_to(ROOT / "bin" / "cork"); (self.clone / "bin" / "cork").unlink()
-        self.assertIn("this clone has no bin/cork", self._doctor())
+        out = self._doctor()
+        self.assertIn("this clone has no bin/cork", out); self.assertIn("points at another clone", out)
 
     def test_dirty_clone_is_reported_and_blocks_update(self):
         (self.clone / "VERSION").write_text("9.9.9\n")

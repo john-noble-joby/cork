@@ -333,7 +333,7 @@ shq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
 # against the defaults instead of the copies just made.
 env_prefix=""
 [ "$bin_dir" = "$HOME/.local/bin" ] || env_prefix="CORK_BIN_DIR=$(shq "$bin_dir") "
-[ "$DEST" = "$HOME/.claude/skills" ] || env_prefix="${env_prefix}CLAUDE_SKILLS_DIR=$(shq "$DEST") "
+[ "$dest_logical" = "$HOME/.claude/skills" ] || env_prefix="${env_prefix}CLAUDE_SKILLS_DIR=$(shq "$dest_logical") "   # the logical path, as given: statusline.py lives beside it
 hook_cmd="${env_prefix}$(shq "$shim") doctor"   # the clone's bin/cork: works whether or not the link was made; doctor still checks the link
 hook_json="$(python3 -c 'import json, sys; sys.stdout.write(json.dumps(sys.argv[1])[1:-1])' "$hook_cmd")"   # a real encoder: control characters too
 echo "Keep every session on the latest cork: add this entry to hooks.SessionStart in ~/.claude/settings.json"

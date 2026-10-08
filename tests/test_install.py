@@ -329,6 +329,13 @@ esac
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertTrue((logical_parent / "statusline.py").is_file())
             self.assertFalse((physical_parent / "statusline.py").exists())
+            # the printed hook and update commands judge the LOGICAL skills path: here it is the default
+            # ($HOME/.claude/skills), so no CLAUDE_SKILLS_DIR prefix is printed — the physically resolved
+            # target must not leak into them (a later doctor/update would then look for statusline.py
+            # beside the physical dir, not beside the logical one where it was installed)
+            tail = result.stdout.split("Keep every session")[1]
+            self.assertNotIn("CLAUDE_SKILLS_DIR=", tail)
+            self.assertNotIn(str(physical_destination), tail)
 
     def test_trailing_dot_destination_keeps_statusline_outside_skills(self):
         for ending in (".", "./"):

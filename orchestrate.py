@@ -2704,32 +2704,50 @@ def _doctor_skills(clone: Path, skills_dir: Path) -> list[str]:
 
 
 def _skill_drift(src_dir: Path, dst_dir: Path) -> list[str]:
-    # Both directions: a file changed or missing in the installed copy, and a file left behind
-    # there that the clone no longer ships — install.sh replaces the directory in full, so an
-    # extra file means the copy predates the clone.
-    rel = lambda root, p: p.relative_to(root).as_posix()
-    src_files = {rel(src_dir, p): p for p in src_dir.rglob("*") if p.is_file()}
-    dst_files = {rel(dst_dir, p): p for p in dst_dir.rglob("*") if p.is_file()}
-    changed = [r for r, p in src_files.items() if r not in dst_files or dst_files[r].read_bytes() != p.read_bytes()]
-    extra = [f"{r} (not in clone)" for r in dst_files if r not in src_files]
+    # Both directions: an entry changed or missing in the installed copy, and an entry left
+    # behind there that the clone no longer ships — install.sh replaces the directory in full,
+    # so anything extra (a stale file, a broken symlink) means the copy predates the clone.
+    # Symlinks are inventoried as symlinks and compared by target, never followed.
+    src, dst = _inventory(src_dir), _inventory(dst_dir)
+    changed = [r for r, v in src.items() if r not in dst or dst[r] != v]
+    extra = [f"{r} (not in clone)" for r in dst if r not in src]
     return sorted(changed) + sorted(extra)
+
+
+def _inventory(root: Path) -> dict[str, tuple[str, bytes | str]]:
+    out: dict[str, tuple[str, bytes | str]] = {}
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for name in dirnames + filenames:
+            p = Path(dirpath) / name
+            r = p.relative_to(root).as_posix()
+            if p.is_symlink():
+                out[r] = ("link", os.readlink(p))
+            elif p.is_file():
+                out[r] = ("file", p.read_bytes())
+    return out
 
 
 def _doctor_shim(clone: Path, bin_dir: Path) -> list[str]:
     # Two independent questions, both always answered: is the configured link right, and does
     # the `cork` a shell finds on PATH run this clone? A broken link must not hide PATH drift.
     link, shim = bin_dir / "cork", clone / "bin" / "cork"
-    if not shim.is_file():
-        return [f"this clone has no bin/cork ({shim}) — the checkout is incomplete"]
     problems: list[str] = []
+    if not shim.is_file():   # reported, and the link and PATH checks still run against where the shim should be
+        problems.append(f"this clone has no bin/cork ({shim}) — the checkout is incomplete")
+
+    def is_shim(p: Path) -> bool:   # a dangling p never raises: resolve() is non-strict and samefile() is guarded
+        if shim.exists():
+            return p.exists() and p.resolve().samefile(shim)
+        return p.resolve() == shim.resolve()
+
     try:
         if not link.exists() and not link.is_symlink():
             problems.append(f"no `cork` command at {link} — run install.sh")
         elif not link.is_symlink():
             problems.append(f"{link} is a regular file, not cork's symlink — leaving it to you")
-        elif not link.exists():
+        elif not link.exists() and not is_shim(link):
             problems.append(f"{link} is a dangling symlink → {os.readlink(link)} — run install.sh")
-        elif not link.resolve().samefile(shim):
+        elif not is_shim(link):
             problems.append(f"{link} points at another clone ({link.resolve()}) — run install.sh from the clone agents should use")
     except OSError as e:   # permissions, a symlink loop: report, never crash a hook
         problems.append(f"could not check {link} ({e})")
@@ -2737,7 +2755,7 @@ def _doctor_shim(clone: Path, bin_dir: Path) -> list[str]:
         on_path = shutil.which("cork")
         if on_path is None:
             problems.append(f"`cork` is not on PATH in this shell ({bin_dir}) — skills use explicit paths; add it to type `cork`")
-        elif not Path(on_path).resolve().samefile(shim):
+        elif not is_shim(Path(on_path)):
             problems.append(f"`cork` on PATH is {on_path}, not {link} — a different cork answers when you type it")
     except OSError as e:
         problems.append(f"could not check the `cork` on PATH ({e})")
