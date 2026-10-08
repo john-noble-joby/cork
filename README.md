@@ -59,7 +59,7 @@ steps below are manual.
    prints this with your paths filled in; it runs the clone's own `bin/cork` so it works even
    when the link is what is broken):
    ```json
-   { "matcher": "", "hooks": [ { "type": "command", "command": "'~/dev/cork/bin/cork' doctor", "timeout": 10 } ] }
+   { "matcher": "", "hooks": [ { "type": "command", "command": "\"$HOME/dev/cork/bin/cork\" doctor", "timeout": 10 } ] }
    ```
    A colleague does the same three steps: clone, `./install.sh`, add the hook. `CORK_BIN_DIR`
    overrides where the link goes (tests use it so the installer never touches a real home).

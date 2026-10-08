@@ -91,8 +91,10 @@ class DoctorTest(unittest.TestCase):
         self.assertIn("points at another clone", self._doctor())
         (self.bin / "cork").unlink(); (self.bin / "cork").write_text("#!/bin/sh\n")
         self.assertIn("regular file", self._doctor())
-        (self.bin / "cork").unlink()
-        self.assertIn("no `cork` command", self._doctor())
+        (self.bin / "cork").unlink(); os.environ["PATH"] = str(self.bin)   # only our (now empty) bin dir on PATH
+        out = self._doctor()
+        self.assertIn("no `cork` command", out)
+        self.assertIn("`cork` is not on PATH", out)        # a broken link does not hide PATH drift: both reported at once
         # the clone's own shim missing must be a line, not a FileNotFoundError from samefile()
         (self.bin / "cork").symlink_to(ROOT / "bin" / "cork"); (self.clone / "bin" / "cork").unlink()
         self.assertIn("this clone has no bin/cork", self._doctor())

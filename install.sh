@@ -324,13 +324,21 @@ echo
 # The hook runs in a fresh shell: a non-default CORK_BIN_DIR must travel inside the command, or a
 # later `doctor` checks ~/.local/bin instead of the link it was actually installed at. Paths are
 # single-quoted for the shell, then backslashes and double quotes escaped for JSON.
-hook_cmd="'$shim' doctor"   # the clone's bin/cork: works whether or not the link was made; doctor still checks the link
-[ "$bin_dir" = "$HOME/.local/bin" ] || hook_cmd="CORK_BIN_DIR='$bin_dir' $hook_cmd"
+# Shell-quote a path for the printed commands: wrap in single quotes, with every embedded single
+# quote closed, escaped and reopened ('\''), so a path with a quote or a space stays one word.
+shq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+# The hook and the update command run in a fresh shell: every non-default location this install
+# used (bin dir, skills dir) must travel inside the command, or a later run checks or reinstalls
+# against the defaults instead of the copies just made.
+env_prefix=""
+[ "$bin_dir" = "$HOME/.local/bin" ] || env_prefix="CORK_BIN_DIR=$(shq "$bin_dir") "
+[ "$DEST" = "$HOME/.claude/skills" ] || env_prefix="${env_prefix}CLAUDE_SKILLS_DIR=$(shq "$DEST") "
+hook_cmd="${env_prefix}$(shq "$shim") doctor"   # the clone's bin/cork: works whether or not the link was made; doctor still checks the link
 hook_json="${hook_cmd//\\/\\\\}"; hook_json="${hook_json//\"/\\\"}"
 echo "Keep every session on the latest cork: add this entry to hooks.SessionStart in ~/.claude/settings.json"
 echo "(it prints one line per session — the version, and whether the clone, skills and \`cork\` link agree):"
 echo "  { \"matcher\": \"\", \"hooks\": [ { \"type\": \"command\", \"command\": \"$hook_json\", \"timeout\": 10 } ] }"
-echo "Update later with: '$shim' update   (git pull --ff-only + this installer; the clone must be on main)"
+echo "Update later with: ${env_prefix}$(shq "$shim") update   (git pull --ff-only + this installer; the clone must be on main)"
 echo
 if [ "$rc" -eq 0 ]; then
   echo "Next: restart Claude Code, then say \"set up cork\" to finish configuration."

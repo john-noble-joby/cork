@@ -2710,26 +2710,32 @@ def _skill_drift(src_dir: Path, dst_dir: Path) -> list[str]:
 
 
 def _doctor_shim(clone: Path, bin_dir: Path) -> list[str]:
+    # Two independent questions, both always answered: is the configured link right, and does
+    # the `cork` a shell finds on PATH run this clone? A broken link must not hide PATH drift.
     link, shim = bin_dir / "cork", clone / "bin" / "cork"
+    if not shim.is_file():
+        return [f"this clone has no bin/cork ({shim}) — the checkout is incomplete"]
+    problems: list[str] = []
     try:
-        if not shim.is_file():
-            return [f"this clone has no bin/cork ({shim}) — the checkout is incomplete"]
         if not link.exists() and not link.is_symlink():
-            return [f"no `cork` command at {link} — run install.sh"]
-        if not link.is_symlink():
-            return [f"{link} is a regular file, not cork's symlink — leaving it to you"]
-        if not link.exists():
-            return [f"{link} is a dangling symlink → {os.readlink(link)} — run install.sh"]
-        if not link.resolve().samefile(shim):
-            return [f"{link} points at another clone ({link.resolve()}) — run install.sh from the clone agents should use"]
+            problems.append(f"no `cork` command at {link} — run install.sh")
+        elif not link.is_symlink():
+            problems.append(f"{link} is a regular file, not cork's symlink — leaving it to you")
+        elif not link.exists():
+            problems.append(f"{link} is a dangling symlink → {os.readlink(link)} — run install.sh")
+        elif not link.resolve().samefile(shim):
+            problems.append(f"{link} points at another clone ({link.resolve()}) — run install.sh from the clone agents should use")
+    except OSError as e:   # permissions, a symlink loop: report, never crash a hook
+        problems.append(f"could not check {link} ({e})")
+    try:
         on_path = shutil.which("cork")
         if on_path is None:
-            return [f"`cork` is not on PATH in this shell ({bin_dir}) — skills use explicit paths; add it to type `cork`"]
-        if not Path(on_path).resolve().samefile(shim):
-            return [f"`cork` on PATH is {on_path}, not {link} — a different cork answers when you type it"]
-    except OSError as e:   # permissions, a symlink loop: report, never crash a hook
-        return [f"could not check {link} ({e})"]
-    return []
+            problems.append(f"`cork` is not on PATH in this shell ({bin_dir}) — skills use explicit paths; add it to type `cork`")
+        elif not Path(on_path).resolve().samefile(shim):
+            problems.append(f"`cork` on PATH is {on_path}, not {link} — a different cork answers when you type it")
+    except OSError as e:
+        problems.append(f"could not check the `cork` on PATH ({e})")
+    return problems
 
 
 def _doctor_cork_home(clone: Path) -> list[str]:

@@ -86,14 +86,24 @@ class InstallLinksShimTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"; home.mkdir(); dest = Path(tmp) / "skills"
             out = self._install(home, dest).stdout
-            self.assertIn(f"\"command\": \"'{SHIM}' doctor\"", out)   # the clone's shim, default dir: no env prefix
+            # default bin dir → no CORK_BIN_DIR prefix; the (non-default) skills dir of this install is carried
+            self.assertIn(f"\"command\": \"CLAUDE_SKILLS_DIR='{dest}' '{SHIM}' doctor\"", out)
             self.assertNotIn("CORK_BIN_DIR=", out)
             home2 = Path(tmp) / "home2"; home2.mkdir()
             custom = Path(tmp) / "my bin"            # a space: the snippet must stay one shell word per path
             out = self._install(home2, dest, CORK_BIN_DIR=str(custom)).stdout
             self.assertTrue((custom / "cork").is_symlink())
-            self.assertIn(f"\"command\": \"CORK_BIN_DIR='{custom}' '{SHIM}' doctor\"", out)
+            # both non-default locations travel inside the hook command and the update command
+            self.assertIn(f"\"command\": \"CORK_BIN_DIR='{custom}' CLAUDE_SKILLS_DIR='{dest}' '{SHIM}' doctor\"", out)
+            self.assertIn(f"Update later with: CORK_BIN_DIR='{custom}' CLAUDE_SKILLS_DIR='{dest}' '{SHIM}' update", out)
             self.assertFalse((home2 / ".local" / "bin" / "cork").exists())   # the default dir was not touched
+            # a single quote in a path is closed, escaped and reopened — still one shell word
+            quoted = Path(tmp) / "it's bin"
+            out = self._install(home2, dest, CORK_BIN_DIR=str(quoted)).stdout
+            self.assertIn("CORK_BIN_DIR='" + str(quoted).replace("'", "'\\''") + "' ", out)
+            import shlex
+            cmd = next(l for l in out.splitlines() if "Update later with:" in l).split("Update later with: ", 1)[1].split("   (")[0]
+            self.assertEqual(shlex.split(cmd)[:2], [f"CORK_BIN_DIR={quoted}", f"CLAUDE_SKILLS_DIR={dest}"])
 
     def test_install_repoints_cork_links_but_leaves_foreign_files_and_links_alone(self):
         with tempfile.TemporaryDirectory() as tmp:
