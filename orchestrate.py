@@ -2694,7 +2694,9 @@ def _doctor_skills(clone: Path, skills_dir: Path) -> list[str]:
                             f"{', …' if len(stale) > 3 else ''}) — run `cork update`")
     src_status, dst_status = clone / "statusline.py", skills_dir.parent / "statusline.py"
     try:
-        if src_status.is_file() and (not dst_status.is_file() or dst_status.read_bytes() != src_status.read_bytes()):
+        if not src_status.is_file():
+            problems.append(f"this clone has no statusline.py ({src_status}) — the checkout is incomplete; install.sh would fail")
+        elif not dst_status.is_file() or dst_status.read_bytes() != src_status.read_bytes():
             problems.append(f"statusline.py at {dst_status} differs from the clone — run `cork update`")
     except OSError as e:
         problems.append(f"statusline.py could not be compared ({e})")

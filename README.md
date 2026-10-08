@@ -54,7 +54,10 @@ steps below are manual.
 
    **Staying current.** Three things have to agree — the clone (engine), the skill copies, and
    the `cork` link — and nothing checks that by itself. `cork doctor` does, in one line, and
-   `cork update` fixes it (`git pull --ff-only` + `install.sh`). To have every Claude Code
+   `cork update` (`git pull --ff-only` + `install.sh`) refreshes the clone and the installed
+   copies where that is safe. Some reports need a hand: a foreign file or symlink at the link
+   path is left alone by the installer, a different `cork` earlier on `PATH` is yours to reorder,
+   and `update` refuses a dirty clone or one not on `main`. To have every Claude Code
    session check, add to `hooks.SessionStart` in `~/.claude/settings.json` (the installer
    prints this with your paths filled in; it runs the clone's own `bin/cork` so it works even
    when the link is what is broken):

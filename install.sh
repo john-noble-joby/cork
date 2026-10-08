@@ -335,7 +335,7 @@ env_prefix=""
 [ "$bin_dir" = "$HOME/.local/bin" ] || env_prefix="CORK_BIN_DIR=$(shq "$bin_dir") "
 [ "$DEST" = "$HOME/.claude/skills" ] || env_prefix="${env_prefix}CLAUDE_SKILLS_DIR=$(shq "$DEST") "
 hook_cmd="${env_prefix}$(shq "$shim") doctor"   # the clone's bin/cork: works whether or not the link was made; doctor still checks the link
-hook_json="${hook_cmd//\\/\\\\}"; hook_json="${hook_json//\"/\\\"}"
+hook_json="$(python3 -c 'import json, sys; sys.stdout.write(json.dumps(sys.argv[1])[1:-1])' "$hook_cmd")"   # a real encoder: control characters too
 echo "Keep every session on the latest cork: add this entry to hooks.SessionStart in ~/.claude/settings.json"
 echo "(it prints one line per session — the version, and whether the clone, skills and \`cork\` link agree):"
 echo "  { \"matcher\": \"\", \"hooks\": [ { \"type\": \"command\", \"command\": \"$hook_json\", \"timeout\": 10 } ] }"

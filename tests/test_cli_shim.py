@@ -53,9 +53,10 @@ class CorkShimTest(unittest.TestCase):
 class InstallLinksShimTest(unittest.TestCase):
     def _install(self, home: Path, destination: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
+        env.pop("CORK_BIN_DIR", None); env.pop("CLAUDE_SKILLS_DIR", None)   # never inherit a developer's overrides
         env.update(env_overrides)
         env["HOME"] = str(home)
-        env["CLAUDE_SKILLS_DIR"] = str(destination)
+        env.setdefault("CLAUDE_SKILLS_DIR", str(destination))
         env["CORK_HOME"] = str(ROOT)
         return subprocess.run(["bash", "install.sh"], cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
                               capture_output=True, text=True)
@@ -104,6 +105,13 @@ class InstallLinksShimTest(unittest.TestCase):
             self.assertTrue((ROOT / "rel bin" / "cork").is_symlink(), out)
             self.assertIn(f"CORK_BIN_DIR='{ROOT / 'rel bin'}' ", out)
             import shutil as _sh; _sh.rmtree(ROOT / "rel bin")
+            # a control character in a path still yields valid JSON (a real encoder, not two hand-escaped chars)
+            home4 = Path(tmp) / "home4"; home4.mkdir()
+            tabbed = Path(tmp) / "tab\there"
+            out = self._install(home4, dest, CORK_BIN_DIR=str(tabbed)).stdout
+            import json as _json
+            snippet = next(l for l in out.splitlines() if '"matcher"' in l)
+            self.assertIn(str(tabbed), _json.loads(snippet)["hooks"][0]["command"])
             # a single quote in a path is closed, escaped and reopened — still one shell word
             quoted = Path(tmp) / "it's bin"
             out = self._install(home2, dest, CORK_BIN_DIR=str(quoted)).stdout

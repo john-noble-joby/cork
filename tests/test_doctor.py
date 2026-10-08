@@ -171,6 +171,9 @@ class DoctorTest(unittest.TestCase):
     def test_statusline_and_path_drift_are_reported(self):
         (self.skills.parent / "statusline.py").write_text("stale")
         self.assertIn("statusline.py at", self._doctor())
+        (self.clone / "statusline.py").unlink()
+        self.assertIn("this clone has no statusline.py", self._doctor())   # an incomplete clone is never "up to date"
+        shutil.copy(ROOT / "statusline.py", self.clone / "statusline.py")
         shutil.copy(ROOT / "statusline.py", self.skills.parent / "statusline.py")
         os.environ["PATH"] = "/nonexistent-bin"
         self.assertIn("`cork` is not on PATH", self._doctor())
