@@ -235,6 +235,9 @@ class ReviewStoryTest(unittest.TestCase):
         (cache / "story.md").write_text("escaped"); (cache / "devit" / "story.txt").write_text("escaped")
         self.assertIsNone(orchestrate._devit_scratch_story(".."))          # Path("..").name == ".."
         self.assertIsNone(orchestrate._devit_scratch_story("."))
+        # an empty XDG_CACHE_HOME is the default, never the current directory (the reviewed worktree)
+        os.environ["XDG_CACHE_HOME"] = ""
+        self.assertEqual(orchestrate._devit_scratch_dir("TASK-1"), Path.home() / ".cache" / "cork" / "devit" / "TASK-1")
         self._scratch("story.md", " \n"); self._scratch("story.txt", " \n")
         self.assertIsNone(orchestrate._devit_scratch_story("TASK-1"))      # blank files are not a story
 

@@ -1390,6 +1390,8 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
             names.append(header_path(line.removeprefix("rename from ")))   # the old path: deleted, like --no-renames shows it
         elif not (old_left > 0 or new_left > 0) and line.startswith("rename to "):
             pending = header_path(line.removeprefix("rename to "))         # the new path, until a `+++` header confirms it
+        elif not (old_left > 0 or new_left > 0) and line.startswith("copy to "):
+            pending = header_path(line.removeprefix("copy to "))           # a pure copy: destination only; the source is unchanged
         if old_left > 0 or new_left > 0:
             if line.startswith("\\"):           # `\ No newline at end of file` is not counted
                 pass
@@ -2681,7 +2683,9 @@ def cmd_auth_print_token(as_json: bool = False) -> None:
 def _devit_scratch_dir(tid: str) -> Path:
     # Where the devit skill persists the fetched story for a ticket (Phase 0) — outside every
     # repository, so nothing on the branch under review can author it.
-    cache = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+    # Empty counts as unset, exactly like devit's `${XDG_CACHE_HOME:-$HOME/.cache}`: Path("") is the
+    # current directory — the reviewed worktree — and a branch must never supply the story.
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache"))
     return cache / "cork" / "devit" / tid
 
 

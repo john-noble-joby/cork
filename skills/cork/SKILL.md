@@ -94,6 +94,7 @@ files, written once, outside the repository:
 # or a review-only fan-out beside a full-mode run — can never overwrite each other's story,
 # standards or context; its PATH is persisted in this worktree's git dir (never committed, never
 # shared with another checkout) so every later block finds it without a variable.
+CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"       # Step 0's assignment did not survive to this block
 RUN_PTR="$(git rev-parse --git-dir)/cork-run"
 # One full-mode run per worktree at a time: full mode commits fixes to this checkout's branch, so a
 # second concurrent run here would race the commits as well as this pointer. Refuse instead.

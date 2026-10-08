@@ -326,6 +326,9 @@ class ReviewDiffSourceTest(unittest.TestCase):
         binrename.write_text("diff --git a/old.bin b/new.bin\nsimilarity index 100%\nrename from old.bin\nrename to new.bin\n"
                              'diff --git "a/caf\\303\\251.bin" "b/th\\303\\251.bin"\nsimilarity index 98%\nrename from "caf\\303\\251.bin"\nrename to "th\\303\\251.bin"\nBinary files differ\n')
         self.assertEqual(orchestrate.read_diff_file(str(binrename))[1], ["old.bin", "new.bin", "café.bin", "thé.bin"])
+        copy = Path(self.tmp.name) / "copy.patch"   # a pure copy: destination listed, unchanged source not
+        copy.write_text("diff --git a/src.txt b/dup.txt\nsimilarity index 100%\ncopy from src.txt\ncopy to dup.txt\n")
+        self.assertEqual(orchestrate.read_diff_file(str(copy))[1], ["dup.txt"])
         inhunk = Path(self.tmp.name) / "inhunk.patch"   # a source line reading `rename to x` inside a hunk is content, not a header
         inhunk.write_text("--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n a = 1\n+rename to evil.py\n")
         self.assertEqual(orchestrate.read_diff_file(str(inhunk))[1], ["a.py"])

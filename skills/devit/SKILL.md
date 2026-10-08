@@ -237,6 +237,9 @@ fixes touched, and only then start the model rotation.
 Write the standards the lenses apply **once, from the trusted ref, through the engine's loader**:
 
 ```bash
+CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"                                  # nothing from earlier blocks survives here
+SWEEP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cork/devit/<TICKET>"; BASE=$(cat "$SWEEP_DIR/base")
+[ -n "$BASE" ] || { echo "no persisted base in $SWEEP_DIR (Phase 2)"; exit 1; }
 python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "origin/$BASE" > "$SWEEP_DIR/standards.md"
 ```
 
