@@ -116,7 +116,7 @@ is the same thing from any directory (`bin/cork` resolves to the clone it was li
 | `python3 orchestrate.py login` | Give cork its own refreshable Copilot token through GitHub's device flow. |
 | `python3 orchestrate.py preflight` | Probe the configured model rotation and select usable reviewers. |
 | `python3 orchestrate.py config init\|show\|get\|set` | Initialize, inspect, or update cork configuration. |
-| `python3 orchestrate.py standards status\|init` | Inspect or initialize the effective review standards. |
+| `python3 orchestrate.py standards status\|init\|show` | Inspect, initialize or print the effective review standards (`show --base-ref REF` reads them from a trusted ref). |
 | `cork doctor [--no-fetch]` | One line: version, and whether the clone is on `main` at `origin/main`, the installed skills and `statusline.py` match it byte for byte, the `cork` link (and the `cork` on PATH) point here, and `CORK_HOME` is this clone. A `⚠` line per problem; exit 0 always — made for a `SessionStart` hook. |
 | `cork update` | `git pull --ff-only` in the clone, then `install.sh`. Refuses a dirty tree or a clone not on `main`. |
 | `python3 orchestrate.py <TICKET> <repo> [options]` | Run the headless implementation and review pipeline. |
@@ -196,7 +196,12 @@ The **effective** rubric for a repo is:
   reviewed like any other file. The same holds for cork's own `standards/AGENTS.md` when cork
   reviews its own checkout. With no trusted ref (`--diff-file`) the project layer is dropped
   for that review and a warning says so; a branch-added sentinel never disables the default.
-  Plain `standards status` still reads the checkout.
+  Plain `standards status` still reads the checkout; `standards show <repo> --base-ref REF`
+  prints the assembled standards layer (cork default + project) as the loader builds it for
+  reviewers — the trust boundary and spec-axis framing that wrap it in a reviewer's system prompt
+  are not included — from that trusted ref (so a review subagent can be handed the rubric as a
+  file), and without
+  `--base-ref` from the checkout.
 - **Opt out everywhere:** `python3 orchestrate.py config set default_standards false`.
 - **Scope of the opt-out:** these toggles control what `orchestrate.py` injects into API
   reviewers and the devit implementer prompt. The installed `coding-standards` skill is a
@@ -212,16 +217,20 @@ Two ways to run it:
   [--base-branch <branch>]` runs the whole loop in subprocesses, checkpointing after each
   step (resume by re-running; `--reset` to start over).
 
-Review-only usage accepts the contract directly for both API and harness lanes:
+Review-only and headless runs both accept the contract directly, for API and harness lanes alike:
 
 ```bash
 python3 orchestrate.py <TICKET> <repo-path> --review-model <provider/model> \
-  [--story-file <path> | --story <text>] \
+  [--story-file <path> | --story <text>] [--context-file <path> ...] \
   [--base-branch <branch> [--diff-range <A..B>] | --diff-file <path>] [--skip-validation]
 ```
 
-Story precedence is `--story-file` → `--story` → checkpoint `done.summary` → checkpoint
-`summary` → the built-in fallback. The selected source and character count are printed before
+Story precedence is `--story-file` → `--story` → devit's persisted story for the ticket
+(`$XDG_CACHE_HOME/cork/devit/<TICKET>/story.md` or `story.txt`, whichever is newer (`story.md` on a tie); an empty or relative
+`XDG_CACHE_HOME` means `~/.cache`, and a candidate that resolves inside the repository under review
+is ignored) → the built-in fallback. The implementer's checkpoint summary is never the story:
+grading against the author's own description of the work has no spec axis, so reviewers get the
+named fallback and report "no spec available" instead. The selected source and character count are printed before
 the review starts; explicit stories are not written to the checkpoint.
 
 The diff under review comes from exactly one source — `--diff-range`, `--diff-file`, or the
@@ -241,6 +250,7 @@ applies the same empty-diff guard.
 | `--base-branch BRANCH` | Diff `merge-base(BRANCH, HEAD)...HEAD` (default `origin/develop`). |
 | `--diff-range A..B` | Review `git diff A..B` (or `A...B`) instead — e.g. `old-head..new-head` so a fix round reviews only its delta. Both endpoints must resolve; standards still come from `--base-branch`. |
 | `--diff-file PATH` | Review a unified diff read from PATH; changed files come from its `+++ b/<path>` headers. Paths must carry git's `a/`/`b/` prefixes (`git diff`, or `diff -urN a b`); `diff --git` lines are optional and an unprefixed header is refused. |
+| `--context-file PATH` (repeatable) | Any repo file the reviewer must see whole — typically an unchanged dependency (a caller of a changed symbol, DI wiring, the covering tests, restating docs), or a changed file the manifest listed as diff-only (over budget or over 500 lines) that a focused packet forces into full context. Always included in full under `## Required Context`; the review fails rather than dropping it when it does not fit the budget. |
 | `--skip-validation` | Skip the model availability probe. |
 
 Keep stories to a few KB: large stories crowd changed-file contents out of API lane budgets, while
@@ -275,6 +285,15 @@ the rejected source plus the `login` recovery command. `gpt-5.x`/`gpt-6.x`/codex
 routed to the `/responses` endpoint automatically on both the Copilot and the native OpenAI API
 lanes (the same model-family gate applies to each); other OpenAI-compatible models use
 `/chat/completions`.
+
+`review_budget_chars` (default 192000) is the size of the prompt an API review may carry —
+standards, story, diff, required context and as many changed files as fit, smallest first.
+Every review prints an **input manifest**: the budget split, the files sent with full contents,
+and the files the model saw diff-only (over budget, over 500 lines, or not readable in the
+tree). Raise the budget on a seat whose models have 200k+ token windows by editing the field in
+`config.json` directly (`config set` covers only the boolean preferences); the manifest tells
+you what the current value drops. Only named `--context-file` inputs can fail a review for
+size; without them an over-budget diff is reviewed diff-only, and the manifest says so.
 
 `responses_effort` controls reasoning for Responses API calls (both reviews and probes):
 `"low"`, `"medium"` (the backward-compatible default), or `"high"`. Edit this field in

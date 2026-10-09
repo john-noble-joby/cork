@@ -1,4 +1,6 @@
 import io
+import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -17,8 +19,11 @@ class ReviewStoryTest(unittest.TestCase):
             name: getattr(orchestrate, name)
             for name in ("CONFIG_PATH", "load_agent_instructions", "git_diff_branch",
                          "_git_changed_names", "_file_contents", "load_state", "_call_and_extract",
-                         "_probe", "require_base_ref", "git_toplevel", "pin_ref")
+                         "_probe", "require_base_ref", "git_toplevel", "pin_ref", "preflight", "resolve_story", "_state_path")
         }
+        self._env = {k: os.environ.get(k) for k in ("XDG_CACHE_HOME",)}
+        self.cache = tempfile.TemporaryDirectory()   # outside the test repo: a cache inside the reviewed tree is rejected by design
+        os.environ["XDG_CACHE_HOME"] = self.cache.name   # no devit scratch unless a test writes one
         orchestrate.CONFIG_PATH = Path(self.tmp.name) / "config.json"
         orchestrate.require_base_ref = lambda repo, base: None  # the temp dir is not a git repo
         orchestrate.git_toplevel = lambda repo: repo
@@ -37,6 +42,12 @@ class ReviewStoryTest(unittest.TestCase):
     def tearDown(self):
         for name, value in self._originals.items():
             setattr(orchestrate, name, value)
+        for k, v in self._env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        self.cache.cleanup()
         self.tmp.cleanup()
 
     def test_unknown_user_in_story_path_fails_cleanly(self):
@@ -67,17 +78,138 @@ class ReviewStoryTest(unittest.TestCase):
                 self.assertEqual(args[3], "copilot/model")
                 self.assertEqual({k: kwargs.get(k) for k in expected}, expected)
 
-    def test_story_flags_require_review_model(self):
+    def test_story_flags_are_accepted_without_review_model(self):
+        # Headless runs grade against the ticket too (Copilot on PR #33): the flags must pass
+        # argparse and reach the headless flow. require_base_ref is the first headless call
+        # after parsing; raising there proves parsing accepted the flag and nothing ran before.
+        class Reached(Exception):
+            pass
+
+        def stop(repo, base):
+            raise Reached()
+        orchestrate.require_base_ref = stop
         for argv in (["orchestrate.py", "TASK-1", self.tmp.name, "--story", "x"],
                      ["orchestrate.py", "TASK-1", self.tmp.name, "--story-file", str(self.story_file)]):
             with self.subTest(flag=argv[3]):
-                orig = sys.argv; sys.argv = argv; self.addCleanup(setattr, sys, "argv", orig)
-                err = io.StringIO()
-                with redirect_stderr(err), self.assertRaises(SystemExit) as cm:
-                    orchestrate.main()
-                self.assertEqual(cm.exception.code, 2)          # argparse usage error, before any run
-                self.assertIn("--review-model", err.getvalue())
-                sys.argv = orig
+                orig = sys.argv; sys.argv = argv
+                try:
+                    with self.assertRaises(Reached):
+                        orchestrate.main()
+                finally:
+                    sys.argv = orig
+
+    def test_headless_story_file_is_read_before_preflight(self):
+        # A bad --story-file must fail before any probe spends Copilot quota and before Step 1.
+        self.story_file.write_text("ticket contract", encoding="utf-8")
+        orchestrate.CONFIG_PATH.write_text(json.dumps(orchestrate.DEFAULT_CONFIG))
+        seen = {}
+
+        def fake_preflight(*a, **k):
+            seen["preflight"] = True
+            raise SystemExit(99)   # stop here: the story was already resolved by then
+        orchestrate.preflight = fake_preflight
+        self.addCleanup(setattr, orchestrate, "preflight", self._originals.get("preflight"))
+        orchestrate.resolve_story = lambda *a, **k: (seen.setdefault("story_args", a), ("S", "src"))[1]
+        self.addCleanup(setattr, orchestrate, "resolve_story", self._originals["resolve_story"])
+        orig = sys.argv; sys.argv = ["orchestrate.py", "TASK-1", self.tmp.name, "--story-file", str(self.story_file)]
+        try:
+            with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+                orchestrate.main()
+        finally:
+            sys.argv = orig
+        self.assertEqual(cm.exception.code, 99)
+        self.assertEqual(seen["story_args"][1], str(self.story_file))
+        self.assertTrue(seen["preflight"])
+
+    def test_headless_fresh_run_without_contract_warns_before_preflight(self):
+        # Copilot on PR #33: a fresh run has no contract, so the reviewers get the generic fallback
+        # story rather than the implementer's summary. That has to be reported before preflight
+        # exits the process, or the warning is never seen.
+        orchestrate.CONFIG_PATH.write_text(json.dumps(orchestrate.DEFAULT_CONFIG))
+        orchestrate._state_path = lambda tid: Path(self.tmp.name) / "no-checkpoint.json"
+        self.addCleanup(setattr, orchestrate, "_state_path", self._originals["_state_path"])
+
+        def fake_preflight(*a, **k):
+            raise SystemExit(99)
+        orchestrate.preflight = fake_preflight
+        out = io.StringIO(); orig = sys.argv; sys.argv = ["orchestrate.py", "TASK-1", self.tmp.name]
+        try:
+            with redirect_stdout(out), self.assertRaises(SystemExit) as cm:
+                orchestrate.main()
+        finally:
+            sys.argv = orig
+        self.assertEqual(cm.exception.code, 99)
+        self.assertIn("no story supplied", out.getvalue())
+
+    def _scratch(self, name: str, text: str) -> Path:
+        assert Path(os.environ["XDG_CACHE_HOME"]).is_absolute(), "scratch writes must never land in the worktree"
+        d = Path(os.environ["XDG_CACHE_HOME"]) / "cork" / "devit" / "TASK-1"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text(text, encoding="utf-8")
+        return d / name
+
+    def test_devit_scratch_story_wins_over_fallback_and_md_over_txt(self):
+        self._scratch("story.txt", "bare ticket")
+        prompt, output = self._api_prompt()
+        self.assertIn("## Story / Task\nbare ticket", prompt)
+        self.assertIn("Story: devit scratch ", output)
+        md = self._scratch("story.md", "ticket plus sweep")   # written later → newer → wins
+        prompt, output = self._api_prompt()
+        self.assertIn("## Story / Task\nticket plus sweep", prompt)
+        self.assertIn(f"Story: devit scratch {md} (", output)
+
+    def test_devit_scratch_story_loses_to_flags_and_skips_blank_or_odd_ids(self):
+        self._scratch("story.md", "scratch story")
+        prompt, _ = self._api_prompt(story_text="inline story")
+        self.assertIn("## Story / Task\ninline story", prompt)
+        self.assertNotIn("scratch story", prompt)
+        # a traversal id must not read a file that exists where the walk would land
+        cache = Path(os.environ["XDG_CACHE_HOME"]) / "cork"
+        (cache / "TASK-1").mkdir(parents=True); (cache / "TASK-1" / "story.md").write_text("escaped")
+        (cache / "devit" / "story.md").write_text("escaped")
+        self.assertIsNone(orchestrate._devit_scratch_story("../TASK-1"))   # one path component only
+        self.assertIsNone(orchestrate._devit_scratch_story(""))
+        (cache / "story.md").write_text("escaped"); (cache / "devit" / "story.txt").write_text("escaped")
+        self.assertIsNone(orchestrate._devit_scratch_story(".."))          # Path("..").name == ".."
+        self.assertIsNone(orchestrate._devit_scratch_story("."))
+        self._scratch("story.md", " \n"); self._scratch("story.txt", " \n")
+        self.assertIsNone(orchestrate._devit_scratch_story("TASK-1"))      # blank files are not a story
+
+    def test_env_path_rules_differ_for_xdg_and_explicit_cork_overrides(self):
+        d = Path("/default/x")
+        os.environ["CORK_TEST_PATH"] = ""
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d), d)                       # empty = default
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d, xdg=True), d)
+        os.environ["CORK_TEST_PATH"] = "rel/auth.json"
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d, xdg=True), d)             # XDG: relative is invalid
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d), (Path.cwd() / "rel/auth.json").resolve())   # cork override: as before
+        os.environ["CORK_TEST_PATH"] = "/abs/auth.json"
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d), Path("/abs/auth.json"))
+        os.environ["CORK_TEST_PATH"] = "~no-such-user-cork/x"
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d), d)                       # bad ~user: default, no traceback
+        loop = Path(self.tmp.name) / "loop"; loop.symlink_to(loop)                            # a symlink cycle, absolute and relative
+        os.environ["CORK_TEST_PATH"] = str(loop / "auth.json")
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d), d)
+        os.environ["CORK_TEST_PATH"] = str(loop / "cache")
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d, xdg=True), d)
+        link = Path(self.tmp.name) / "link"; link.symlink_to(Path(self.tmp.name) / "real"); (Path(self.tmp.name) / "real").mkdir()
+        os.environ["CORK_TEST_PATH"] = str(link / "auth.json")
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d), link / "auth.json")       # a healthy absolute symlink keeps its path
+        os.environ.pop("CORK_TEST_PATH")
+
+    def test_empty_xdg_cache_home_means_the_default_not_the_cwd(self):
+        # Path("") is the current directory — the reviewed worktree — so a branch could supply the story
+        os.environ["XDG_CACHE_HOME"] = ""
+        self.assertEqual(orchestrate._devit_scratch_dir("TASK-1"), Path.home() / ".cache" / "cork" / "devit" / "TASK-1")
+
+    def test_newest_scratch_candidate_wins_so_a_refreshed_ticket_beats_a_stale_sweep(self):
+        md = self._scratch("story.md", "old story + old sweep"); txt = self._scratch("story.txt", "refreshed ticket")
+        os.utime(md, (1_000_000, 1_000_000)); os.utime(txt, (2_000_000, 2_000_000))
+        self.assertEqual(orchestrate._devit_scratch_story("TASK-1"), ("refreshed ticket", f"devit scratch {txt}"))
+        os.utime(md, (3_000_000, 3_000_000))                      # a newer story.md (Phase 4 rebuilt it) wins again
+        self.assertEqual(orchestrate._devit_scratch_story("TASK-1")[0], "old story + old sweep")
+        os.utime(txt, (3_000_000, 3_000_000))                     # tie: the richer story.md
+        self.assertEqual(orchestrate._devit_scratch_story("TASK-1")[0], "old story + old sweep")
 
     def _api_prompt(self, **kwargs) -> tuple[str, str]:
         seen = {}
@@ -116,7 +248,8 @@ class ReviewStoryTest(unittest.TestCase):
                                        validate=False, story_file=str(self.story_file))
         finally:
             orchestrate.subprocess.run = original_run
-        self.assertIn("## Story / Task\nharness acceptance contract", calls[0][1]["input"])
+        lane_call = next(c for c in calls if "input" in c[1])   # git helpers (stale-base check) also go through run()
+        self.assertIn("## Story / Task\nharness acceptance contract", lane_call[1]["input"])
 
     def test_story_file_wins_over_every_other_source(self):
         self.story_file.write_text("file story", encoding="utf-8")
@@ -131,18 +264,34 @@ class ReviewStoryTest(unittest.TestCase):
         self.assertNotIn("checkpoint story", prompt)
         self.assertIn("Story: --story (12 chars)", output)
 
-    def test_done_summary_wins_over_legacy_checkpoint_summary(self):
+    def test_checkpoint_summaries_are_never_the_story(self):
+        # the checkpoint holds the implementer's own description of the work; grading against it
+        # has no spec axis, so without a flag or a persisted ticket the fallback is used and named
         prompt, output = self._api_prompt()
-        self.assertIn("## Story / Task\ndone checkpoint story", prompt)
-        self.assertNotIn("legacy checkpoint story", prompt)
-        self.assertIn("Story: checkpoint done.summary (21 chars)", output)
+        self.assertIn("## Story / Task\nReview the branch changes for TASK-1.", prompt)
+        self.assertNotIn("checkpoint story", prompt)
+        self.assertIn("Story: fallback", output); self.assertIn("no story supplied", output)
 
-    def test_legacy_checkpoint_summary_wins_over_fallback(self):
-        orchestrate.load_state = lambda tid: {"summary": "legacy checkpoint story"}
+    def test_relative_or_in_repo_cache_never_supplies_the_story(self):
+        os.environ["XDG_CACHE_HOME"] = "cache"                                        # relative: the XDG rule says ignore it
+        self.assertEqual(orchestrate._devit_scratch_dir("TASK-1"), Path.home() / ".cache" / "cork" / "devit" / "TASK-1")
+        inside = Path(self.tmp.name) / "cache"; os.environ["XDG_CACHE_HOME"] = str(inside)   # absolute, but inside the reviewed repo
+        (inside / "cork" / "devit" / "TASK-1").mkdir(parents=True)
+        (inside / "cork" / "devit" / "TASK-1" / "story.md").write_text("branch-authored contract")
+        self.assertIsNone(orchestrate._devit_scratch_story("TASK-1", self.tmp.name))   # provenance: a branch must not supply it
         prompt, output = self._api_prompt()
-        self.assertIn("## Story / Task\nlegacy checkpoint story", prompt)
-        self.assertNotIn("Review the branch changes", prompt)
-        self.assertIn("Story: checkpoint summary (23 chars)", output)
+        self.assertNotIn("branch-authored", prompt); self.assertIn("Story: fallback", output)
+        # a scratch path symlinked into the repo is the same thing
+        outside = Path(self.cache.name) / "real"; (outside / "cork" / "devit" / "TASK-1").mkdir(parents=True)
+        (outside / "cork" / "devit" / "TASK-1" / "story.md").write_text("linked contract")
+        os.environ["XDG_CACHE_HOME"] = str(Path(self.tmp.name) / "link"); (Path(self.tmp.name) / "link").symlink_to(outside)
+        self.assertEqual(orchestrate._devit_scratch_story("TASK-1", self.tmp.name), ("linked contract", f"devit scratch {Path(self.tmp.name) / 'link' / 'cork' / 'devit' / 'TASK-1' / 'story.md'}"))
+        # ... wait: a link OUT of the repo to a real external cache is fine (the content lives outside); a link INTO the repo is not
+        os.environ["XDG_CACHE_HOME"] = str(outside)
+        (outside / "cork" / "devit" / "TASK-1" / "story.md").unlink()
+        (outside / "cork" / "devit" / "TASK-1" / "story.md").symlink_to(Path(self.tmp.name) / "in-repo.md")
+        (Path(self.tmp.name) / "in-repo.md").write_text("in-repo contract")
+        self.assertIsNone(orchestrate._devit_scratch_story("TASK-1", self.tmp.name))
 
     def test_fallback_is_used_when_no_source_exists(self):
         orchestrate.load_state = lambda tid: {"done": {}}

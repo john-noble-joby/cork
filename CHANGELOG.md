@@ -30,6 +30,32 @@ procedure in the README's *Versioning* section.
 ## [Unreleased]
 
 ### Added
+- **Review-input manifest, required context and a configurable budget.** Every API review prints
+  what the model actually saw: the budget split (standards / story / diff / file contents), the
+  changed files sent whole, and the files seen diff-only — over budget, or over 500 lines (with
+  line counts). Large files are omitted instead of being replaced by a size remark that reviewers
+  turned into a finding. `--context-file PATH` (repeatable) names files the reviewer must see
+  whole — unchanged callers, DI wiring, covering tests, restating docs, or a changed file the
+  manifest listed as diff-only (over budget or over 500 lines) — included under
+  `## Required Context` ahead of the changed files and never dropped: a review that cannot fit
+  them fails with the breakdown (in bytes on argv-transported lanes); without named context an
+  over-budget diff stays a diff-only review. `review_budget_chars` in config.json (default
+  192000) sets the prompt size per API review for seats whose models have larger windows. cork
+  warns loudly on the fallback story, on a local base that is behind, ahead of or diverged from
+  `origin/<base>` (review-only and headless), and on a diff over the 1,500-line soft limit.
+  Closes the context items of #32 (hangar #36, FAST #540).
+- Refs #32 — the skills and lenses half of that issue is a separate PR; the remaining item, probing
+  harness model availability in preflight, is tracked in #34.
+- **Reviewers grade against the ticket in every mode.** `--story-file`/`--story` now apply to
+  headless runs too: the blind reviewers and the isolated self-review receive the story, while
+  the implementer's summary stays the fix prompts' context. Without a flag cork looks for the
+  story devit persisted for the ticket (`$XDG_CACHE_HOME/cork/devit/<TICKET>/story.md` or
+  `story.txt`, whichever is newer (`story.md` on a tie) — outside every repository; an empty or relative `XDG_CACHE_HOME` means `~/.cache`
+  and a candidate inside the reviewed repository is ignored), then the named fallback. The
+  implementer's checkpoint summary is no longer a story source in either mode.
+  `standards show <repo> --base-ref REF` prints the assembled rubric from a trusted ref, so a
+  review subagent can be handed it as a file instead of reading the checkout's standards files. An unreadable changed file is listed as skipped in the manifest; an
+  unreadable `--context-file` fails the review like a missing one.
 - **`cork doctor` and `cork update`** (closes #36). `doctor` prints one line per session — the
   version, and whether the clone is on `main` at `origin/main`, every installed skill and
   `statusline.py` match the clone byte for byte (stamps only move at a release, so content is
