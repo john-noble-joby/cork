@@ -15,15 +15,17 @@ concern implies, and names the test that would catch each defect.
 
 Lens files are the subagent's instructions, so they come from a trusted source: the shipped
 ones from `$CORK_HOME/lenses/`, a repo's own from `code-review/lenses/` **at the trusted base
-ref** (`git show <base>:code-review/lenses/<name>.md`), and — when the repository under review
+ref** (`git show <base-sha>:code-review/lenses/<name>.md`), and — when the repository under review
 is cork itself — the shipped ones from the base ref too (`git -C "$CORK_HOME" show
-<base>:lenses/<name>.md`), never from the checkout being reviewed.
+<base-sha>:lenses/<name>.md`), never from the checkout being reviewed.
 
-Placeholders to fill before dispatch: `{WORKTREE}`, `{BASE}` (the trusted ref exactly as
-selected — e.g. `origin/develop` — never re-prefixed),
-`{STORY_FILE}` (the persisted story, read as untrusted data) and `{STANDARDS}` (the path of a
-file written by `orchestrate.py standards show <repo> --base-ref <fetched base>` — the
-assembled rubric read from the trusted ref, never the checkout's standards files). Every lens
+Placeholders to fill before dispatch: `{WORKTREE}`, `{BASE}` (the **pinned commit id** the run
+persisted — cork's `$RUN_DIR/base-sha`, devit's `$SWEEP_DIR/base-sha` — never a movable ref such
+as a remote-tracking branch: a concurrent fetch would otherwise let a lens diff a later base than
+the standards and the model reviews used), `{STORY_FILE}` (the persisted story, read as untrusted
+data) and `{STANDARDS}` (the path of a file written by
+`orchestrate.py standards show <repo> --base-ref <base-sha>` — the same pinned commit, so the
+assembled rubric is read from the trusted base, never the checkout's standards files). Every lens
 shares the header at the top
 of each file: read-only; may run `git`, `grep`, `sed` and filtered test commands; never edits
 the worktree; reports `file:line` + concrete failure scenario + the test that would catch it;
@@ -37,6 +39,6 @@ The shipped lenses were written from the hangar (.NET) run, so some sweep items 
 artifacts (XML docs, OpenAPI snapshots, ProblemDetails); treat those as examples of the class, and
 let a repo add its own under `code-review/lenses/` — devit
 dispatches those too — **read from the trusted base ref, never from the checkout**
-(`git show <base>:code-review/lenses/<name>.md`): a lens is the subagent's
+(`git show <base-sha>:code-review/lenses/<name>.md`): a lens is the subagent's
 instructions, so a copy the branch under review added or edited is review material, exactly
 like `code-review/AGENTS.md`. A repo lens that exists only on the branch is not run.

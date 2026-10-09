@@ -182,7 +182,7 @@ never skip spec-and-test-coverage.
 
 **Division of labour (do not blur):** each reviewer model is a *read-only reviewer* — it only returns findings on the current diff. It never edits the worktree, never commits, never applies its own suggestions. **You — the active Claude Code session — are the only thing that writes code.** You read each model's findings, decide what's valid, apply the fixes yourself, run tests, and commit. The `--review-model` call is a one-shot, stateless "give me your review of this diff" — nothing more.
 
-Rotation — use the `provider/model` lines printed by `preflight` in Step 0, in order. One review→fix cycle per model: (1) the model reviews the diff, (2) you apply/reject its findings and commit. Save the strongest model for last so it reviews after the others' fixes have landed. (For Copilot API lanes, `gpt-5.x`/`gpt-6.x`/codex use `/responses` automatically; harness lanes use their configured CLI instead.)
+Rotation — use the entries of `$RUN_DIR/models.txt`, in order: the roster Step 1 probed and persisted after the lock, which is what the run reviews with even when it differs from Step 0's confirmation line. One review→fix cycle per model: (1) the model reviews the diff, (2) you apply/reject its findings and commit. Save the strongest model for last so it reviews after the others' fixes have landed. (For Copilot API lanes, `gpt-5.x`/`gpt-6.x`/codex use `/responses` automatically; harness lanes use their configured CLI instead.)
 
 **Interactive review (default on).** Read the preference once before the rotation:
 
@@ -208,6 +208,7 @@ RUN_DIR=$(cat "$RUN_PTR")   # Step 1's lock: the persisted per-run path
 STORY_FILE="$RUN_DIR/story.md"; [ -s "$STORY_FILE" ] || { echo "no story at $STORY_FILE — write it first"; exit 1; }
 BASE_SHA=$(cat "$RUN_DIR/base-sha")                     # the pinned base, not the movable {BASE}
 CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done < "$RUN_DIR/context.txt"   # bash 3.2-safe; an empty file means no context
+grep -qxF "{MODEL}" "$RUN_DIR/models.txt" || { echo "{MODEL} is not in this run's roster:"; cat "$RUN_DIR/models.txt"; exit 1; }   # the persisted rotation, not Step 0's output
 python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch "$BASE_SHA" --story-file "$STORY_FILE" "${CONTEXT_ARGS[@]}"
 ```
 
@@ -226,7 +227,7 @@ way the contract reaches any reviewer. Without the flag `orchestrate.py` falls b
 story devit persisted for the ticket, then a generic fallback (never the implementer's
 checkpoint summary) — a call whose output says `Story: fallback` reviewed with no spec and must be re-run.
 
-`{MODEL}` is the full `provider/model` ref printed by `preflight` (e.g. `copilot/gpt-5.5`); `orchestrate.py` splits it (a bare id defaults to `copilot`).
+`{MODEL}` is one line of `$RUN_DIR/models.txt` — a full `provider/model` ref (e.g. `copilot/gpt-5.5`); `orchestrate.py` splits it (a bare id defaults to `copilot`). Walk the file top to bottom; the guard above refuses a model the run did not select.
 
 This command **only prints the model's review to stdout** — it makes no changes. Applying the findings is your job (next paragraph).
 

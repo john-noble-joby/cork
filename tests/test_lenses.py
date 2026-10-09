@@ -33,6 +33,14 @@ class LensFilesTest(unittest.TestCase):
             self.assertIn(f"`{p.name}`", readme)
         self.assertIn("never skip spec-and-test-coverage", readme)
 
+    def test_readme_requires_the_pinned_commit_for_base_and_standards(self):
+        # Copilot on PR #45: the placeholder guidance offered a movable ref as the {BASE} example,
+        # contradicting the skills' pinned-base invariant
+        readme = (ROOT / "lenses" / "README.md").read_text()
+        self.assertNotIn("origin/develop", readme)
+        self.assertIn("--base-ref <base-sha>", readme)
+        self.assertIn("pinned commit id", readme)
+
 
 if __name__ == "__main__":
     unittest.main()
