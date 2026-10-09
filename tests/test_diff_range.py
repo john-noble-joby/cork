@@ -318,7 +318,7 @@ class ReviewDiffSourceTest(unittest.TestCase):
         self.assertEqual(orchestrate.read_diff_file(str(patch))[1], ["gone.py", "x.bin", "b.py"])
         prompt, out = self._review(diff_file=str(patch))
         self.assertIn("### b.py", prompt); self.assertIn("(1/3 changed paths)", out)
-        self.assertIn("not readable in the tree — deleted, submodule, renamed-from (2): gone.py, x.bin", out)
+        self.assertIn("not sent as text — deleted, submodule, renamed-from, binary (2): gone.py, x.bin", out)
         rename = Path(self.tmp.name) / "rename.patch"   # a rename with content: old path from `rename from`, new from +++, once
         rename.write_text("diff --git a/old name.py b/new name.py\nsimilarity index 90%\nrename from old name.py\nrename to new name.py\n--- a/old name.py\n+++ b/new name.py\n@@ -1 +1 @@\n-x\n+y\n")
         self.assertEqual(orchestrate.read_diff_file(str(rename))[1], ["old name.py", "new name.py"])
@@ -347,7 +347,13 @@ class ReviewDiffSourceTest(unittest.TestCase):
         # a deleted file shows up in the manifest as not readable, not as nothing
         _git(self.repo, "rm", "-q", "b.py"); _git(self.repo, "commit", "-qm", "drop b")
         _, out = self._review(diff_range=f"{self.c3}..HEAD")
-        self.assertIn("not readable in the tree — deleted, submodule, renamed-from (1): b.py", out)
+        self.assertIn("not sent as text — deleted, submodule, renamed-from, binary (1): b.py", out)
+
+    def test_binary_changed_file_is_listed_not_sent_as_text(self):
+        # a NUL in a changed file would crash an argv lane into a silent skip; it is a manifest entry instead
+        (self.repo / "img.bin").write_bytes(b"\x89PNG\x00\x00data")
+        files, large, skipped = orchestrate._read_changed(str(self.repo), ["img.bin", "a.py"])
+        self.assertEqual(skipped, ["img.bin"]); self.assertIn("a.py", files); self.assertNotIn("img.bin", files)
 
     def test_required_context_with_nul_bytes_is_refused_not_silently_skipped(self):
         (self.repo / "blob.bin").write_bytes(b"ctx\x00more")

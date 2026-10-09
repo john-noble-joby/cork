@@ -1464,8 +1464,8 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
 
 def _read_changed(cwd: str, names: list[str]) -> tuple[dict[str, str], dict[str, int], list[str]]:
     # One pass over the changed set, one predicate for every category: (contents of files up
-    # to MAX_FILE_LINES, name → line count for larger ones, names that cannot be read at all —
-    # deleted paths, submodule pointers, the old side of a rename). Each category is named in
+    # to MAX_FILE_LINES, name → line count for larger ones, names not sent as text — deleted
+    # paths, submodule pointers, the old side of a rename, binary files). Each category is named in
     # the review-input manifest; nothing is dropped silently and nothing is replaced by a
     # remark the model could mistake for a finding.
     contents: dict[str, str] = {}
@@ -1488,6 +1488,9 @@ def _read_changed(cwd: str, names: list[str]) -> tuple[dict[str, str], dict[str,
                 continue
             text = resolved.read_bytes().decode("utf-8", errors="replace")   # no universal-newline translation
         except OSError:   # unreadable (permissions, vanished mid-run): named as skipped, like a deleted path
+            skipped.append(name)
+            continue
+        if "\x00" in text:   # binary: never sent as text — on an argv lane a NUL would make the whole review a silent skip
             skipped.append(name)
             continue
         # Count and send on "\n" only: str.splitlines() also breaks on \f, \v, \x1c-\x1e and \x85,
@@ -2208,7 +2211,7 @@ def _print_manifest(system: str, story: str, diff: str, files: dict[str, str],
         print(f"  → diff-only, over {MAX_FILE_LINES} lines ({len(large)}): "
               + ", ".join(f"{_safe_name(n)} ({c:,} lines)" for n, c in sorted(large.items())), flush=True)
     if skipped:
-        print(f"  → diff-only, not readable in the tree — deleted, submodule, renamed-from ({len(skipped)}): "
+        print(f"  → diff-only, not sent as text — deleted, submodule, renamed-from, binary ({len(skipped)}): "
               + ", ".join(_safe_name(n) for n in sorted(skipped)), flush=True)
     if not included and files:
         print("  → no changed file fit the budget: this is a diff-only review", flush=True)
