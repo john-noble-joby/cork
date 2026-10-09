@@ -1440,6 +1440,8 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
             elif line.startswith("+++ /dev/null"):       # a deletion: the old path is the changed path
                 if (o := old_re.match(prev)):
                     names.append(_unquote_git_path(o.group(1)) if o.group(1) is not None else o.group(2))
+                else:   # same rule as the b/ side: an unprefixed deletion must not pass as a diff with no changed file
+                    fail(f"--diff-file {p}: header {prev!r} lacks the a/ prefix — cork needs git-style a/ b/ paths")
             else:
                 fail(f"--diff-file {p}: header {line!r} lacks the b/ prefix — cork needs git-style a/ b/ paths")
         prev = line
@@ -2186,7 +2188,9 @@ def _review_system(instructions: str) -> str:
 def _safe_name(name: str) -> str:
     # Changed-file names come from the branch; git allows control characters in them, and an
     # ESC or newline printed raw can clear or forge the terminal lines around the manifest.
-    return "".join(c if (c.isprintable() or c == " ") else f"\\x{ord(c):02x}" for c in name)
+    # A literal backslash is escaped too, or a name containing the four characters `\x0a`
+    # would read exactly like one containing a newline.
+    return "".join("\\\\" if c == "\\" else c if (c.isprintable() or c == " ") else f"\\x{ord(c):02x}" for c in name)
 
 
 def _print_manifest(system: str, story: str, diff: str, files: dict[str, str],

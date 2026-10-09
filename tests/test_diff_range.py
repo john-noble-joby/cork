@@ -143,6 +143,9 @@ class ReviewDiffSourceTest(unittest.TestCase):
         self.assertEqual(orchestrate.read_diff_file(str(patch))[1], ["a.py"])   # a deletion keeps its old path
         patch.write_text("--- a.py\n+++ a.py\n@@ -1 +1 @@\n-a = 1\n+a = 2\n")
         self._fails("lacks the b/ prefix", diff_file=str(patch))
+        # Copilot on PR #44: an unprefixed deletion slipped through as a diff with no changed file
+        patch.write_text("--- victim.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-a = 1\n")
+        self._fails("lacks the a/ prefix", diff_file=str(patch))
 
     def test_changed_submodule_directory_is_skipped(self):
         # a changed submodule pointer lists the submodule *directory* in --name-only; reading it

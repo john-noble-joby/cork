@@ -331,6 +331,10 @@ class ReviewDiffTest(unittest.TestCase):
             self.assertNotIn(raw, text)
         self.assertIn("evil\\x1bname.py", text.replace("[2J", ""))   # escaped as the literal \x1b, bracket sequence left inert
         self.assertIn("big\\x0a.py", text); self.assertIn("ctx\\x07.py", text); self.assertIn("gone\\x0d.py", text)
+        # Copilot on PR #44: a literal backslash must not read like an escape — `fake\x0a.py` (four
+        # characters, no newline) and `fake<LF>.py` must render differently
+        self.assertNotEqual(orchestrate._safe_name("fake\\x0a.py"), orchestrate._safe_name("fake\n.py"))
+        self.assertEqual(orchestrate._safe_name("fake\\x0a.py"), "fake\\\\x0a.py")
 
     def test_required_context_guard_measures_the_real_scaffolding_not_the_packing_reserve(self):
         # Copilot on PR #33: counting the 500-char reserve as content rejected inputs that fit.
