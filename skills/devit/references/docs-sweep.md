@@ -43,8 +43,8 @@ and every piece of text that claims to describe it**.
 
 ## Inputs
 
-- Repository: `{WORKTREE}` (the branch is checked out). Base ref: `{BASE_REF}` — the fetched
-  **remote-tracking** ref, e.g. `origin/develop`, exactly as the reviewers' `--base-branch`
+- Repository: `{WORKTREE}` (the branch is checked out). Base ref: `{BASE_REF}` — the **pinned base commit id** the caller
+  read from its scratch dir (`$SWEEP_DIR/base-sha`), exactly what the reviewers pass as `--base-branch`
   receives it. Never a bare local branch name: a local `develop` may be stale or absent, and
   the sweep would then inventory a different diff from the one the reviewers see.
 - The change: `git diff {BASE_REF}...HEAD` — run it yourself. The branch's commit messages:
