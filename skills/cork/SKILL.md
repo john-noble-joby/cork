@@ -43,9 +43,7 @@ CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 python3 "$CORK_HOME/orchestrate.py" --version            # cork version — announce it (see below)
 git rev-parse --verify --quiet "{BASE}^{commit}" >/dev/null || { echo "base {BASE} does not resolve"; exit 1; }
 git merge-base "{BASE}" HEAD >/dev/null      || { echo "no merge base with {BASE}"; exit 1; }
-PF="$(git rev-parse --git-dir)/cork-preflight"           # per worktree, never committed; Step 2 / R1 read the rotation back from it
-python3 "$CORK_HOME/orchestrate.py" preflight > "$PF" || { cat "$PF"; echo "preflight failed — fix auth/config before anything else"; exit 1; }
-cat "$PF"                                               # probe & select models for this seat
+python3 "$CORK_HOME/orchestrate.py" preflight || { echo "preflight failed — fix auth/config before anything else"; exit 1; }   # probe & select models for this seat (for the confirmation line only; nothing is persisted before the lock)
 python3 "$CORK_HOME/orchestrate.py" standards status .   # show the active review-standards layers
 git rev-parse --abbrev-ref HEAD                         # current branch
 git rev-parse --abbrev-ref HEAD | grep -oP 'MXE-\d+'    # ticket ID, if branch follows convention
@@ -60,7 +58,7 @@ If `standards status` shows *no project standards* and the default is on, mentio
 
 Capture the `--version` output (e.g. `cork 0.5.0 (a1b2c3d)`) and lead the confirmation line with it, so every run announces exactly which cork the agent is using.
 
-**Rotation** — `preflight` probes each `provider/model` entry in the ranked config rotation and prints the ones that succeed (e.g. `copilot/gpt-5.5`, `copilot/gpt-4.1`, `copilot/claude-opus-4.7`). Use those printed lines, in order, as the reviewer rotation for this run. If a model later errors mid-run, drop it and continue with the rest. The rotation comes from `~/.config/cork/config.json` (`CORK_CONFIG_FILE` overrides the path) — `config`/`config init` manage that file.
+**Rotation** — `preflight` probes each `provider/model` entry in the ranked config rotation and prints the ones that succeed (e.g. `copilot/gpt-5.5`, `copilot/gpt-4.1`, `copilot/claude-opus-4.7`). Those lines are what you show the user in the confirmation line; the rotation the run actually uses is probed again in Step 1 (or review-only block 1) after the worktree lock is claimed and persisted as `$RUN_DIR/models.txt`, so no shared file exists before the lock. If a model later errors mid-run, drop it and continue with the rest. The rotation comes from `~/.config/cork/config.json` (`CORK_CONFIG_FILE` overrides the path) — `config`/`config init` manage that file.
 
 **Mode** — from the user's phrasing: "review only" / "review this branch" / "don't fix" → **review-only mode** (gather context here, then jump to the *Review-only mode* section). Otherwise → **full mode** (the Step 1–6 flow below).
 
@@ -102,10 +100,14 @@ RUN_DIR=$(mktemp -d "$RUN_ROOT/$(git rev-parse --abbrev-ref HEAD | tr '/' '-').X
   || { rm -rf "$RUN_DIR"; echo "another cork run claimed this worktree first ($(cat "$RUN_PTR" 2>/dev/null)) — wait for it or remove $RUN_PTR"; exit 1; }
 # Pin the trusted base to a commit id before anything can move {BASE}: the standards, the lenses
 # and every review diff use this id, and {BASE} survives only as the PR target.
-BASE_SHA=$(git rev-parse --verify "{BASE}^{commit}"); printf '%s\n' "$BASE_SHA" > "$RUN_DIR/base-sha"
-grep -E '^[a-z]+/' "$(git rev-parse --git-dir)/cork-preflight" > "$RUN_DIR/models.txt"   # the rotation Step 0 selected, one provider/model per line
-[ -s "$RUN_DIR/models.txt" ] || { echo "no models from preflight — re-run Step 0"; exit 1; }
-printf 'RUN_DIR=%s  BASE_SHA=%s\n' "$RUN_DIR" "$BASE_SHA"
+BASE_SHA=$(git rev-parse --verify "{BASE}^{commit}") && printf '%s\n' "$BASE_SHA" > "$RUN_DIR/base-sha" || { echo "cannot pin {BASE} into $RUN_DIR"; exit 1; }
+# The rotation is probed again HERE, into this run's own directory: a file shared per worktree and
+# written in Step 0 (before the lock) could be truncated or replaced by a second session between
+# the confirmation and this claim, persisting another run's roster. One ≤16-token probe per model.
+python3 "$CORK_HOME/orchestrate.py" preflight > "$RUN_DIR/preflight.txt" || { cat "$RUN_DIR/preflight.txt"; echo "preflight failed"; exit 1; }
+grep -E '^[a-z]+/' "$RUN_DIR/preflight.txt" > "$RUN_DIR/models.txt"   # the selected rotation, one provider/model per line — this is the roster the run uses
+[ -s "$RUN_DIR/models.txt" ] || { echo "no models selected by preflight — fix auth/config"; exit 1; }
+printf 'RUN_DIR=%s  BASE_SHA=%s  rotation:\n' "$RUN_DIR" "$BASE_SHA"; cat "$RUN_DIR/models.txt"   # if it differs from Step 0's roster, say so before continuing
 ```
 
 Then, if the branch has no commits vs `$BASE_SHA`, implement the story now (in-session) and
@@ -281,9 +283,10 @@ CACHE_HOME="${XDG_CACHE_HOME:-}"; case "$CACHE_HOME" in /*) ;; *) CACHE_HOME="$H
 RUN_ROOT="$CACHE_HOME/cork/run"; { mkdir -p "$RUN_ROOT" && chmod 700 "$RUN_ROOT"; } || { echo "cannot prepare $RUN_ROOT"; exit 1; }
 RUN_DIR=$(mktemp -d "$RUN_ROOT/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')-review.XXXXXX") || { echo "mktemp failed under $RUN_ROOT"; exit 1; }   # fail here, not with an empty RUN_DIR later
 printf '%s\n' "$RUN_DIR" > "$(git rev-parse --git-dir)/cork-review-run"
-BASE_SHA=$(git rev-parse --verify "{BASE}^{commit}"); printf '%s\n' "$BASE_SHA" > "$RUN_DIR/base-sha"   # pinned: standards, lenses and diffs all use it
-grep -E '^[a-z]+/' "$(git rev-parse --git-dir)/cork-preflight" > "$RUN_DIR/models.txt"               # the rotation Step 0 selected
-[ -s "$RUN_DIR/models.txt" ] || { echo "no models from preflight — re-run Step 0"; exit 1; }
+BASE_SHA=$(git rev-parse --verify "{BASE}^{commit}") && printf '%s\n' "$BASE_SHA" > "$RUN_DIR/base-sha" || { echo "cannot pin {BASE} into $RUN_DIR"; exit 1; }   # pinned: standards, lenses and diffs all use it
+python3 "$CORK_HOME/orchestrate.py" preflight > "$RUN_DIR/preflight.txt" || { cat "$RUN_DIR/preflight.txt"; echo "preflight failed"; exit 1; }   # probed into THIS fan-out's directory, never a shared per-worktree file (see Step 1)
+grep -E '^[a-z]+/' "$RUN_DIR/preflight.txt" > "$RUN_DIR/models.txt"
+[ -s "$RUN_DIR/models.txt" ] || { echo "no models selected by preflight — fix auth/config"; exit 1; }
 python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "$BASE_SHA" > "$RUN_DIR/standards.md" || { echo "standards show failed — no rubric, refusing to dispatch"; exit 1; }   # for the lenses
 # Blast radius the diff does not show — callers of changed symbols, DI/registration wiring, covering
 # tests, restating docs, and any changed file the manifest lists as diff-only. Repo-relative paths,

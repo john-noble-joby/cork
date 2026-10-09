@@ -111,7 +111,7 @@ BASE=develop                   # or what the user said
 # Persist the choice: shell variables do not survive to later tool calls (see Phase 0), and
 # Phase 4/5 must use the same base — a fresh shell would otherwise expand to `origin/`.
 SWEEP_DIR="$( d="${XDG_CACHE_HOME:-}"; case "$d" in /*) printf %s "$d";; *) printf %s "$HOME/.cache";; esac )/cork/devit/<TICKET>"
-mkdir -p "$SWEEP_DIR" && printf '%s\n' "$BASE" > "$SWEEP_DIR/base"   # Phase 0 ran in another shell; do not assume the dir exists
+{ mkdir -p "$SWEEP_DIR" && printf '%s\n' "$BASE" > "$SWEEP_DIR/base"; } || { echo "cannot persist the base under $SWEEP_DIR — not creating a worktree later phases could not locate"; exit 1; }   # Phase 0 ran in another shell; do not assume the dir exists
 # Explicit refspec: update origin/$BASE itself — a bare `git fetch origin $BASE` only guarantees
 # FETCH_HEAD, so an overridden base with no remote-tracking ref would fail here and an existing
 # one could start from stale code. Phase 4's --base-branch and the docs sweep use the same ref.
@@ -119,10 +119,10 @@ git fetch origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch of $BASE failed — not creating a worktree from a possibly stale origin/$BASE"; exit 1; }
 # Pin the trusted base to a commit id: later phases are tool-capable and could move origin/$BASE;
 # standards, lenses and every review diff use this id, and the name survives only for the PR target.
-BASE_SHA=$(git rev-parse --verify "origin/$BASE^{commit}"); printf '%s\n' "$BASE_SHA" > "$SWEEP_DIR/base-sha"
+BASE_SHA=$(git rev-parse --verify "origin/$BASE^{commit}") && printf '%s\n' "$BASE_SHA" > "$SWEEP_DIR/base-sha" || { echo "cannot pin origin/$BASE"; exit 1; }
 BR="feature/<TICKET>-<slug>"   # or bugfix/<TICKET>-<slug>
 git worktree add ".worktrees/$BR" -b "$BR" "$BASE_SHA"   # from the pinned commit, not the ref: a concurrent fetch cannot move the start point
-cd ".worktrees/$BR" && printf '%s\n' "$PWD" > "$SWEEP_DIR/worktree"   # persisted: every later fresh-shell block cd's here first
+cd ".worktrees/$BR" && printf '%s\n' "$PWD" > "$SWEEP_DIR/worktree" || { echo "worktree created but its path could not be persisted — remove .worktrees/$BR and retry"; exit 1; }   # persisted: every later fresh-shell block cd's here first
 ```
 
 **Standards check (non-blocking):** now that you're in the worktree, run
