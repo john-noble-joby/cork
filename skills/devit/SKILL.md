@@ -121,7 +121,7 @@ git fetch origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
 # standards, lenses and every review diff use this id, and the name survives only for the PR target.
 BASE_SHA=$(git rev-parse --verify "origin/$BASE^{commit}") && printf '%s\n' "$BASE_SHA" > "$SWEEP_DIR/base-sha" || { echo "cannot pin origin/$BASE"; exit 1; }
 BR="feature/<TICKET>-<slug>"   # or bugfix/<TICKET>-<slug>
-git worktree add ".worktrees/$BR" -b "$BR" "$BASE_SHA"   # from the pinned commit, not the ref: a concurrent fetch cannot move the start point
+git worktree add ".worktrees/$BR" -b "$BR" "$BASE_SHA" || { echo "worktree add failed — not entering .worktrees/$BR (a leftover directory from an interrupted run would be the wrong checkout)"; exit 1; }   # from the pinned commit, not the ref: a concurrent fetch cannot move the start point
 cd ".worktrees/$BR" && printf '%s\n' "$PWD" > "$SWEEP_DIR/worktree" || { echo "worktree created but its path could not be persisted — remove .worktrees/$BR and retry"; exit 1; }   # persisted: every later fresh-shell block cd's here first
 ```
 
@@ -314,11 +314,15 @@ CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--contex
 python3 "$CORK_HOME/orchestrate.py" preflight > "$SWEEP_DIR/preflight.txt" || { cat "$SWEEP_DIR/preflight.txt"; echo "preflight failed — fix auth/config"; exit 1; }
 grep -E '^[a-z]+/' "$SWEEP_DIR/preflight.txt" > "$SWEEP_DIR/models.txt"; [ -s "$SWEEP_DIR/models.txt" ] || { echo "no models selected by preflight"; exit 1; }
 cat "$SWEEP_DIR/models.txt"   # <MODEL> below is each of these lines in turn, strongest last; one review→fix→commit cycle per line
+git rev-parse HEAD > "$SWEEP_DIR/cork-head" || exit 1   # the commit this lane is GIVEN — record it before the call, never after its fixes land (see below)
 python3 "$CORK_HOME/orchestrate.py" <TICKET> . --review-model <MODEL> --base-branch "$BASE_SHA" --story-file "$SWEEP_DIR/story.md" "${CONTEXT_ARGS[@]}"
 ```
 
-After the last fix commit of this phase, record what cork has reviewed, so Phase 6 can diff
-against it from a fresh shell: `git rev-parse HEAD > "$SWEEP_DIR/cork-head"` (recompute `SWEEP_DIR`).
+`cork-head` is the commit a lane actually reviewed, written immediately **before** each
+`--review-model` call (the line above, repeated per model). Applying that model's findings
+produces a commit no lane has seen, and Phase 6 measures "fixes since the last cork pass" as
+`$LAST..HEAD` — so recording the post-fix HEAD would hide the last model's fix batch from the
+very check that exists to catch it. Never advance the marker after a fix commit.
 
 The reviewer prompt then carries `## Pre-review sweep` inside `## Story / Task`, which is
 what the standards' *Long-tail classes* section tells reviewers to check. Without the flag,
@@ -436,8 +440,8 @@ BASE_SHA=$(cat "$SWEEP_DIR/base-sha"); LAST=$(cat "$SWEEP_DIR/cork-head")   # co
 printf '\n' | cat "$SWEEP_DIR/story.txt" - "$SWEEP" > "$SWEEP_DIR/story.md" || { echo "cannot build $SWEEP_DIR/story.md"; exit 1; }
 [ -f "$SWEEP_DIR/context.txt" ] || { echo "no persisted context list at $SWEEP_DIR/context.txt — a failed redirection would NOT stop this shell, and the lanes would silently get no context"; exit 1; }
 CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done < "$SWEEP_DIR/context.txt"
+git rev-parse HEAD > "$SWEEP_DIR/cork-head" || exit 1   # BEFORE the fan-out: the input head is what gets reviewed; the fix batch committed afterwards must stay in the next $LAST..HEAD
 # per model (each line of "$SWEEP_DIR/models.txt", the roster Phase 4 persisted): python3 "$CORK_HOME/orchestrate.py" <TICKET> . --review-model <MODEL> --diff-range "$LAST..HEAD" --base-branch "$BASE_SHA" --story-file "$SWEEP_DIR/story.md" "${CONTEXT_ARGS[@]}" --skip-validation
-# afterwards, once the batch is committed: git rev-parse HEAD > "$SWEEP_DIR/cork-head"
 ```
 
 (Pauses per reviewer when `interactive_review` is on — see Notes.)
@@ -468,11 +472,18 @@ CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--contex
 ```
 
 Fix findings as one batch with the
-defect-class rule, commit, refresh the sweep artifacts and `context.txt` the batch touched (as
-after every other fix batch), and — if the batch exceeded ~100 lines **or touched a file no cork
-lane saw** (the same two triggers as Phase 6) — run the fan-out once more
-over that delta. Only then proceed to Phase 7. On the hangar run three models reviewed a
-700-line branch once; the merged branch was 1,800 lines and nothing had re-read it.
+defect-class rule, commit, and refresh the sweep artifacts and `context.txt` the batch touched (as
+after every other fix batch). The commit that merges must have been read by something: if the
+batch changed **any tracked file**, re-run the **lenses** over that delta (`git diff <input
+head>...HEAD`, cheap and local) and fix what they find the same way, at most once more; if it
+also exceeded ~100 lines **or touched a file no cork lane saw** (the same two triggers as Phase
+6), re-run the **models** over the delta too. A fix batch that stays within already-seen files
+and under the threshold gets the lens re-read only — the models' re-read is deliberately gated
+on size and novelty, not on every commit, or the final gate never converges. Whatever remains
+unread after that (the lens-pass fixes, if any) is named by commit in the Phase 7 summary as
+"not re-reviewed", never left implicit. Only then proceed to Phase 7. On the hangar run three
+models reviewed a 700-line branch once; the merged branch was 1,800 lines and nothing had
+re-read it.
 
 ## Phase 7 — Finish (surface pushbacks)
 
@@ -483,6 +494,8 @@ Print a final summary:
   human can scan them.
 - Any Phase 6 budget stop and the long-tail class it exposed — that is a Phase 3.5 gap to
   feed back into the sweep.
+- Commits no lane re-read after the Phase 6.5 batch (the "not re-reviewed" list), by SHA, or
+  "every merged commit was reviewed" — the reader must not have to reconstruct which it is.
 - The final `pre-review-sweep.md` path and one line per artifact (a–f: what was inventoried,
   how many rows/cells/probes, what the docs sweep fixed), so the human can check the inventory
   against the merged PR body.

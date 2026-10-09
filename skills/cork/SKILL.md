@@ -310,6 +310,7 @@ REVIEW_PTR="$(git rev-parse --git-dir)/cork-review-run"; printf '%s\n' "$RUN_DIR
 # leads to a run that was never dispatched. Disarmed below once the inputs are all persisted.
 trap '[ "$(cat "$REVIEW_PTR" 2>/dev/null)" = "$RUN_DIR" ] && rm -f "$REVIEW_PTR"; rm -rf "$RUN_DIR"' EXIT
 BASE_SHA=$(git rev-parse --verify "{BASE}^{commit}") && printf '%s\n' "$BASE_SHA" > "$RUN_DIR/base-sha" || { echo "cannot pin {BASE} into $RUN_DIR"; exit 1; }   # pinned: standards, lenses and diffs all use it
+[ -n "$(git diff "$BASE_SHA"...HEAD)" ] || { echo "empty diff vs the pinned $BASE_SHA — {BASE} moved past HEAD since Step 0; nothing to dispatch"; exit 1; }   # checked against the pin, while the trap still cleans up
 python3 "$CORK_HOME/orchestrate.py" preflight > "$RUN_DIR/preflight.txt" || { cat "$RUN_DIR/preflight.txt"; echo "preflight failed"; exit 1; }   # probed into THIS fan-out's directory, never a shared per-worktree file (see Step 1)
 grep -E '^[a-z]+/' "$RUN_DIR/preflight.txt" > "$RUN_DIR/models.txt"
 [ -s "$RUN_DIR/models.txt" ] || { echo "no models selected by preflight — fix auth/config"; exit 1; }
