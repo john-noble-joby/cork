@@ -310,11 +310,12 @@ CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--contex
 while read -r M; do
   [ -n "$M" ] || continue
   safe="${M//%/%25}"; safe="${safe//\//%2F}"   # injective: opencode/a-b/c and opencode/a/b-c must not share a file
-  python3 "$CORK_HOME/orchestrate.py" "$TICKET" . \
-    --review-model "$M" --story-file "$STORY_FILE" --base-branch "$BASE_SHA" "${CONTEXT_ARGS[@]}" --skip-validation \
-    > "$RUN_DIR/review-${safe}.txt" 2>&1 &
+  ( python3 "$CORK_HOME/orchestrate.py" "$TICKET" . \
+      --review-model "$M" --story-file "$STORY_FILE" --base-branch "$BASE_SHA" "${CONTEXT_ARGS[@]}" --skip-validation \
+      > "$RUN_DIR/review-${safe}.txt" 2>&1; echo $? > "$RUN_DIR/review-${safe}.status" ) &   # a bare `wait` discards exit statuses
 done < "$RUN_DIR/models.txt"
 wait
+grep -L '^0$' "$RUN_DIR"/review-*.status 2>/dev/null | sed 's/\.status$//; s/^/failed lane: /'   # R2 counts only lanes with status 0
 ```
 
 Each `--review-model` call is stateless and read-only — the prompt carries the story + required context + diff + changed files + AGENTS.md (never prior review text), tree-capable harnesses may also read the worktree, and the call only prints findings. Pass `--skip-validation` here to bypass both API availability requests and harness login probes already performed by preflight (one premium request saved per API model); without this flag, harness validation re-runs the CLI's login probe (no model turn is spent) but still does not check model access. With `--story-file` the positional ticket id is only a label; without a story flag the engine looks for devit's persisted story for that id and otherwise uses the generic fallback (never the checkpoint summary), so never rely on a placeholder to carry the contract. Copilot and OpenAI API lanes auto-route `gpt-5.x`/`gpt-6.x`/codex to `/responses`; CLI harnesses retain their own provider routing. If a model errors, drop it and keep the rest (see *Model availability* under full mode).
@@ -330,9 +331,11 @@ Merge the self-review and every model's findings into a single markdown report:
 - **Per finding:** `path:line` · description · suggested fix · **flagged by** (which reviewers — e.g. `gpt-4.1, opus, self`). Keep overlap as a confidence signal: something 4/5 reviewers caught is high-confidence; a lone flag is weaker.
 - **Dedupe:** merge near-identical findings across models into one entry rather than repeating them.
 - **Uncertain / needs human judgment:** a trailing section aggregating items reviewers flagged as judgment calls or out of scope.
-- **Lanes and inputs — first, not last:** the rotation that **actually completed** (a lane whose
-  file holds the `[… — skipped]` sentinel reviewed nothing; preflight's probe can pass hours
-  before the seat drops a model) and, per lane, the review-input manifest's omissions. A
+- **Lanes and inputs — first, not last:** the rotation that **actually completed** — a lane counts
+  only when its `.status` file holds `0` **and** its output is neither empty nor the
+  `[… — skipped]` sentinel; a lane that printed a manifest and then exited non-zero reviewed
+  nothing (preflight's probe can pass hours before the seat drops a model) — and, per lane, the
+  review-input manifest's omissions. A
   "no findings" from a lane that saw 15 of 29 files diff-only is evidence about 15 files.
   Say what was inspected versus executed, and keep coverage gaps apart from current defects.
 

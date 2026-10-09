@@ -119,10 +119,10 @@ git fetch origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch of $BASE failed — not creating a worktree from a possibly stale origin/$BASE"; exit 1; }
 # Pin the trusted base to a commit id: later phases are tool-capable and could move origin/$BASE;
 # standards, lenses and every review diff use this id, and the name survives only for the PR target.
-git rev-parse --verify "origin/$BASE^{commit}" > "$SWEEP_DIR/base-sha"
+BASE_SHA=$(git rev-parse --verify "origin/$BASE^{commit}"); printf '%s\n' "$BASE_SHA" > "$SWEEP_DIR/base-sha"
 BR="feature/<TICKET>-<slug>"   # or bugfix/<TICKET>-<slug>
-git worktree add ".worktrees/$BR" -b "$BR" "origin/$BASE"
-cd ".worktrees/$BR"
+git worktree add ".worktrees/$BR" -b "$BR" "$BASE_SHA"   # from the pinned commit, not the ref: a concurrent fetch cannot move the start point
+cd ".worktrees/$BR" && printf '%s\n' "$PWD" > "$SWEEP_DIR/worktree"   # persisted: every later fresh-shell block cd's here first
 ```
 
 **Standards check (non-blocking):** now that you're in the worktree, run
@@ -199,6 +199,7 @@ has scrolled away; the Write tool needs the literal path), and it starts with th
 
 ```bash
 SWEEP_DIR="$( d="${XDG_CACHE_HOME:-}"; case "$d" in /*) printf %s "$d";; *) printf %s "$HOME/.cache";; esac )/cork/devit/<TICKET>"   # recomputed, not inherited (see Phase 0)
+cd "$(cat "$SWEEP_DIR/worktree")" || { echo "no persisted worktree in $SWEEP_DIR (Phase 2)"; exit 1; }   # fresh shell: re-enter the feature worktree
 SWEEP="$SWEEP_DIR/pre-review-sweep.md"
 ```
 
@@ -244,6 +245,7 @@ Write the standards the lenses apply **once, from the trusted ref, through the e
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"                                  # nothing from earlier blocks survives here
 SWEEP_DIR="$( d="${XDG_CACHE_HOME:-}"; case "$d" in /*) printf %s "$d";; *) printf %s "$HOME/.cache";; esac )/cork/devit/<TICKET>"; BASE_SHA=$(cat "$SWEEP_DIR/base-sha")
+cd "$(cat "$SWEEP_DIR/worktree")" || { echo "no persisted worktree in $SWEEP_DIR (Phase 2)"; exit 1; }   # fresh shell: re-enter the feature worktree
 [ -n "$BASE_SHA" ] || { echo "no pinned base in $SWEEP_DIR (Phase 2)"; exit 1; }
 python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "$BASE_SHA" > "$SWEEP_DIR/standards.md" || { echo "standards show failed — no rubric, refusing to dispatch"; exit 1; }
 ```
@@ -286,6 +288,7 @@ instruction to the subagent) — the same trust boundary the engine states for A
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"                                  # a fresh shell: re-derive, like every block that runs the engine
 SWEEP_DIR="$( d="${XDG_CACHE_HOME:-}"; case "$d" in /*) printf %s "$d";; *) printf %s "$HOME/.cache";; esac )/cork/devit/<TICKET>"; SWEEP="$SWEEP_DIR/pre-review-sweep.md"   # recomputed
+cd "$(cat "$SWEEP_DIR/worktree")" || { echo "no persisted worktree in $SWEEP_DIR (Phase 2)"; exit 1; }   # fresh shell: re-enter the feature worktree
 BASE_SHA=$(cat "$SWEEP_DIR/base-sha")   # pinned in Phase 2; never rely on a variable surviving to here, never re-resolve origin/$BASE
 # story.txt: Phase 0, rewritten in Phase 1 after a split. pre-review-sweep.md: Phase 3.5. Refuse without both.
 [ -s "$SWEEP_DIR/story.txt" ] && [ -s "$SWEEP" ] && [ -n "$BASE_SHA" ] || { echo "missing story.txt, sweep or pinned base in $SWEEP_DIR"; exit 1; }
@@ -410,6 +413,7 @@ story is rebuilt first (the sweep may have moved since Phase 4):
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 SWEEP_DIR="$( d="${XDG_CACHE_HOME:-}"; case "$d" in /*) printf %s "$d";; *) printf %s "$HOME/.cache";; esac )/cork/devit/<TICKET>"; SWEEP="$SWEEP_DIR/pre-review-sweep.md"
+cd "$(cat "$SWEEP_DIR/worktree")" || { echo "no persisted worktree in $SWEEP_DIR (Phase 2)"; exit 1; }   # fresh shell: re-enter the feature worktree
 BASE_SHA=$(cat "$SWEEP_DIR/base-sha"); LAST=$(cat "$SWEEP_DIR/cork-head")   # cork-head: written after the last cork pass
 [ -n "$BASE_SHA" ] && [ -n "$LAST" ] && [ -s "$SWEEP_DIR/story.txt" ] && [ -s "$SWEEP" ] || { echo "missing pinned base, cork-head, story or sweep in $SWEEP_DIR"; exit 1; }
 printf '\n' | cat "$SWEEP_DIR/story.txt" - "$SWEEP" > "$SWEEP_DIR/story.md"
@@ -435,6 +439,7 @@ rebuilds every input from the files it persisted:
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"                                                  # a fresh shell
 SWEEP_DIR="$( d="${XDG_CACHE_HOME:-}"; case "$d" in /*) printf %s "$d";; *) printf %s "$HOME/.cache";; esac )/cork/devit/<TICKET>"; SWEEP="$SWEEP_DIR/pre-review-sweep.md"   # recomputed
+cd "$(cat "$SWEEP_DIR/worktree")" || { echo "no persisted worktree in $SWEEP_DIR (Phase 2)"; exit 1; }   # fresh shell: re-enter the feature worktree
 BASE_SHA=$(cat "$SWEEP_DIR/base-sha"); [ -n "$BASE_SHA" ] || { echo "no pinned base in $SWEEP_DIR"; exit 1; }
 [ -s "$SWEEP_DIR/story.txt" ] && [ -s "$SWEEP" ] || { echo "missing story.txt or sweep in $SWEEP_DIR"; exit 1; }   # same guard as Phase 4
 printf '\n' | cat "$SWEEP_DIR/story.txt" - "$SWEEP" > "$SWEEP_DIR/story.md"              # story + current sweep, as in Phase 4
@@ -444,7 +449,8 @@ CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--contex
 ```
 
 Fix findings as one batch with the
-defect-class rule, commit, and — if the batch exceeded ~100 lines — run the fan-out once more
+defect-class rule, commit, and — if the batch exceeded ~100 lines **or touched a file no cork
+lane saw** (the same two triggers as Phase 6) — run the fan-out once more
 over that delta. Only then proceed to Phase 7. On the hangar run three models reviewed a
 700-line branch once; the merged branch was 1,800 lines and nothing had re-read it.
 

@@ -163,7 +163,7 @@ What counts as proof, for the implementer's tests and the reviewer's report alik
 - **Failed state first.** Drive the component into the failure, prove it was recorded, then assert what must be absent (keys in health, logs, error bodies). A disabled or empty monitor proves nothing.
 - **Both modes, both shapes.** Every supported credential mode; malformed *successful* responses as well as error bodies.
 - **Changed contracts through unchanged consumers.** Defaults, routes, env names and schemas are traced into callers, installed configs and guides the diff did not touch; the devit surface inventory and `--context-file` exist for this.
-- **Inspected vs executed; gaps vs defects.** The report separates what was read from what was run, and what is uncovered from what is wrong. A reviewer that saw a file diff-only (the review-input manifest says so) has no evidence about that file.
+- **Inspected vs executed; gaps vs defects.** The report separates what was read from what was run, and what is uncovered from what is wrong. A reviewer that saw a file diff-only (the review-input manifest says so) has hunk-level evidence about it, not whole-file coverage: its "no findings" says nothing about the lines it never received.
 - **Size is not a finding.** A large file is reported only with a concrete consequence.
 - **Advice is a claim.** Probe another reviewer's proposed fix before adopting it.
 
