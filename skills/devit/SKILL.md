@@ -423,8 +423,14 @@ CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--contex
 ## Phase 6.5 — Final cork re-review (mandatory)
 
 The diff that will merge is not the diff cork reviewed in Phase 4. Run a cork **review-only**
-fan-out over the whole final diff and read the manifest. Nothing from Phase 4's shell is still
-set, so the block rebuilds every input from the files it persisted:
+pass over the whole final diff — **both halves of it**: the lens self-review (every applicable
+lens from Phase 3.75, dispatched as parallel read-only subagents over `git diff "$BASE_SHA"...HEAD`
+with `{STORY_FILE}` = `$SWEEP_DIR/story.md` and `{STANDARDS}` = `$SWEEP_DIR/standards.md`,
+regenerated first with `standards show . --base-ref "$BASE_SHA"`; never skip
+spec-and-test-coverage) **and** the model fan-out below — then read the manifest. The Copilot
+loop's fixes were never seen by a lens, so a models-only final pass would let a state,
+spec/test or docs defect through. Nothing from Phase 4's shell is still set, so the block
+rebuilds every input from the files it persisted:
 
 ```bash
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"                                                  # a fresh shell
@@ -432,6 +438,7 @@ SWEEP_DIR="$( d="${XDG_CACHE_HOME:-}"; case "$d" in /*) printf %s "$d";; *) prin
 BASE_SHA=$(cat "$SWEEP_DIR/base-sha"); [ -n "$BASE_SHA" ] || { echo "no pinned base in $SWEEP_DIR"; exit 1; }
 [ -s "$SWEEP_DIR/story.txt" ] && [ -s "$SWEEP" ] || { echo "missing story.txt or sweep in $SWEEP_DIR"; exit 1; }   # same guard as Phase 4
 printf '\n' | cat "$SWEEP_DIR/story.txt" - "$SWEEP" > "$SWEEP_DIR/story.md"              # story + current sweep, as in Phase 4
+python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "$BASE_SHA" > "$SWEEP_DIR/standards.md"   # for the lenses, from the pinned base
 CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done < "$SWEEP_DIR/context.txt"   # bash 3.2-safe; an empty file means no context
 # then, per model: python3 "$CORK_HOME/orchestrate.py" <TICKET> . --review-model <MODEL> --base-branch "$BASE_SHA" --story-file "$SWEEP_DIR/story.md" "${CONTEXT_ARGS[@]}" --skip-validation
 ```
