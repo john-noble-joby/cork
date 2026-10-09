@@ -288,7 +288,7 @@ TICKET="$(git rev-parse --abbrev-ref HEAD | grep -oE '[A-Z]+-[0-9]+' | head -1)"
 CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done < "$RUN_DIR/context.txt"   # bash 3.2-safe; an empty file means no context
 while read -r M; do
   [ -n "$M" ] || continue
-  safe="${M//\//-}"
+  safe="${M//%/%25}"; safe="${safe//\//%2F}"   # injective: opencode/a-b/c and opencode/a/b-c must not share a file
   python3 "$CORK_HOME/orchestrate.py" "$TICKET" . \
     --review-model "$M" --story-file "$STORY_FILE" --base-branch "$BASE_SHA" "${CONTEXT_ARGS[@]}" --skip-validation \
     > "$RUN_DIR/review-${safe}.txt" 2>&1 &

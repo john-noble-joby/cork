@@ -326,6 +326,9 @@ class ReviewDiffSourceTest(unittest.TestCase):
         binrename.write_text("diff --git a/old.bin b/new.bin\nsimilarity index 100%\nrename from old.bin\nrename to new.bin\n"
                              'diff --git "a/caf\\303\\251.bin" "b/th\\303\\251.bin"\nsimilarity index 98%\nrename from "caf\\303\\251.bin"\nrename to "th\\303\\251.bin"\nBinary files differ\n')
         self.assertEqual(orchestrate.read_diff_file(str(binrename))[1], ["old.bin", "new.bin", "café.bin", "thé.bin"])
+        spacey = Path(self.tmp.name) / "spacey.patch"   # an unquoted path containing " b/": the split whose sides agree wins
+        spacey.write_text("diff --git a/foo b/bar b/foo b/bar\nBinary files a/foo b/bar and b/foo b/bar differ\n")
+        self.assertEqual(orchestrate.read_diff_file(str(spacey))[1], ["foo b/bar"])
         copy = Path(self.tmp.name) / "copy.patch"   # a pure copy: destination listed, unchanged source not
         copy.write_text("diff --git a/src.txt b/dup.txt\nsimilarity index 100%\ncopy from src.txt\ncopy to dup.txt\n")
         self.assertEqual(orchestrate.read_diff_file(str(copy))[1], ["dup.txt"])

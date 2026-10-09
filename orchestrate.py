@@ -1379,12 +1379,21 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
     prev = ""
 
     def git_section_path(line: str) -> str | None:
+        # `diff --git a/<p> b/<p>`: both sides name the same path. An unquoted path may itself
+        # contain " b/", so every candidate separator is tried and the split whose two sides
+        # agree wins; a rename header (sides differ) is left to `rename to` or `+++`.
         g = git_re.match(line)
-        if not g:
+        if g and g.group(1) is not None and g.group(3) is not None:   # both sides C-quoted: unambiguous
+            a, b = _unquote_git_path(g.group(1)), _unquote_git_path(g.group(3))
+            return b if a == b else None
+        rest = line[len("diff --git "):]
+        if not rest.startswith("a/"):
             return None
-        a = _unquote_git_path(g.group(1)) if g.group(1) is not None else g.group(2)
-        b = _unquote_git_path(g.group(3)) if g.group(3) is not None else g.group(4)
-        return b if a == b else None   # a rename header is ambiguous; `rename to` or `+++` names the new path
+        for i in [k for k in range(len(rest)) if rest.startswith(" b/", k)]:
+            a, b = rest[2:i], rest[i + 3:]
+            if a and a == b:
+                return b
+        return None
 
     def header_path(rest: str) -> str:   # `rename from`/`rename to` operands, C-quoted when git quotes them
         return _unquote_git_path(rest[1:-1]) if rest.startswith('"') and rest.endswith('"') else rest
@@ -2723,12 +2732,16 @@ def _devit_scratch_dir(tid: str) -> Path:
 
 
 def _devit_scratch_story(tid: str, repo: str | None = None) -> tuple[str, str] | None:
-    # story.md (story + pre-review sweep, Phase 4 onward) beats story.txt (the bare ticket).
-    # Provenance: a candidate that resolves inside the repository under review — an absolute
-    # cache root placed in the tree, or a scratch path symlinked into it — is not a story.
+    # Candidates: story.md (story + pre-review sweep, derived in Phase 4) and story.txt (the bare
+    # ticket, written in Phase 0 and rewritten after a split). The NEWEST non-blank one wins, so a
+    # story.md left over from an earlier run cannot outrank a refreshed story.txt; on a tie the
+    # richer story.md is preferred. Provenance: a candidate that resolves inside the repository
+    # under review — an absolute cache root placed in the tree, or a scratch path symlinked into
+    # it — is not a story.
     if not tid or tid in (".", "..") or Path(tid).name != tid:   # one plain path component; never walk elsewhere
         return None
-    for name in ("story.md", "story.txt"):
+    best: tuple[float, int, str, Path] | None = None
+    for rank, name in enumerate(("story.md", "story.txt")):
         path = _devit_scratch_dir(tid) / name
         try:   # every probe inside the guard: an unreadable cache is "no persisted story", not a crash
             resolved = path.resolve()
@@ -2736,11 +2749,12 @@ def _devit_scratch_story(tid: str, repo: str | None = None) -> tuple[str, str] |
                 print(f"  ⚠ devit scratch {path} resolves inside the repository under review — ignored", flush=True)
                 continue
             text = resolved.read_text(encoding="utf-8")
+            mtime = resolved.stat().st_mtime
         except (OSError, UnicodeError, RuntimeError):
             continue
-        if text.strip():
-            return text, f"devit scratch {path}"
-    return None
+        if text.strip() and (best is None or (mtime, -rank) > (best[0], -best[1])):
+            best = (mtime, rank, text, path)
+    return (best[2], f"devit scratch {best[3]}") if best else None
 
 
 def _read_story_file(story_file: str) -> tuple[str, str]:

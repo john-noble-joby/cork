@@ -63,6 +63,8 @@ acceptance criteria, type/labels, and links.
   printf '%s\n' "$SWEEP_DIR"                         # the Write tool gets a literal path — use this printed one
   ```
   Then `Write` `<printed path>/story.txt` with the title, description and acceptance criteria
+  (and `rm -f <printed path>/story.md` — the engine prefers the newest candidate, but a stale
+  derived story.md from an earlier run should not linger beside a fresh ticket)
   exactly as fetched, as markdown (`<TICKET>: <title>`, the description, then
   `## Acceptance criteria` and the criteria). The Write tool does not expand shell variables,
   so pass the absolute path the snippet printed, never `$SWEEP_DIR/…`.
