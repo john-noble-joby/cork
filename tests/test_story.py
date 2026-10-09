@@ -140,6 +140,54 @@ class ReviewStoryTest(unittest.TestCase):
         self.assertEqual(cm.exception.code, 99)
         self.assertIn("no story supplied", out.getvalue())
 
+    def _scratch(self, name: str, text: str) -> Path:
+        assert Path(os.environ["XDG_CACHE_HOME"]).is_absolute(), "scratch writes must never land in the worktree"
+        d = Path(os.environ["XDG_CACHE_HOME"]) / "cork" / "devit" / "TASK-1"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text(text, encoding="utf-8")
+        return d / name
+
+    def test_devit_scratch_story_wins_over_fallback_and_md_over_txt(self):
+        self._scratch("story.txt", "bare ticket")
+        prompt, output = self._api_prompt()
+        self.assertIn("## Story / Task\nbare ticket", prompt)
+        self.assertIn("Story: devit scratch ", output)
+        md = self._scratch("story.md", "ticket plus sweep")   # written later → newer → wins
+        prompt, output = self._api_prompt()
+        self.assertIn("## Story / Task\nticket plus sweep", prompt)
+        self.assertIn(f"Story: devit scratch {md} (", output)
+
+    def test_devit_scratch_story_loses_to_flags_and_skips_blank_or_odd_ids(self):
+        self._scratch("story.md", "scratch story")
+        prompt, _ = self._api_prompt(story_text="inline story")
+        self.assertIn("## Story / Task\ninline story", prompt)
+        self.assertNotIn("scratch story", prompt)
+        # a traversal id must not read a file that exists where the walk would land
+        cache = Path(os.environ["XDG_CACHE_HOME"]) / "cork"
+        (cache / "TASK-1").mkdir(parents=True); (cache / "TASK-1" / "story.md").write_text("escaped")
+        (cache / "devit" / "story.md").write_text("escaped")
+        self.assertIsNone(orchestrate._devit_scratch_story("../TASK-1"))   # one path component only
+        self.assertIsNone(orchestrate._devit_scratch_story(""))
+        (cache / "story.md").write_text("escaped"); (cache / "devit" / "story.txt").write_text("escaped")
+        self.assertIsNone(orchestrate._devit_scratch_story(".."))          # Path("..").name == ".."
+        self.assertIsNone(orchestrate._devit_scratch_story("."))
+        self._scratch("story.md", " \n"); self._scratch("story.txt", " \n")
+        self.assertIsNone(orchestrate._devit_scratch_story("TASK-1"))      # blank files are not a story
+
+    def test_empty_xdg_cache_home_means_the_default_not_the_cwd(self):
+        # Path("") is the current directory — the reviewed worktree — so a branch could supply the story
+        os.environ["XDG_CACHE_HOME"] = ""
+        self.assertEqual(orchestrate._devit_scratch_dir("TASK-1"), Path.home() / ".cache" / "cork" / "devit" / "TASK-1")
+
+    def test_newest_scratch_candidate_wins_so_a_refreshed_ticket_beats_a_stale_sweep(self):
+        md = self._scratch("story.md", "old story + old sweep"); txt = self._scratch("story.txt", "refreshed ticket")
+        os.utime(md, (1_000_000, 1_000_000)); os.utime(txt, (2_000_000, 2_000_000))
+        self.assertEqual(orchestrate._devit_scratch_story("TASK-1"), ("refreshed ticket", f"devit scratch {txt}"))
+        os.utime(md, (3_000_000, 3_000_000))                      # a newer story.md (Phase 4 rebuilt it) wins again
+        self.assertEqual(orchestrate._devit_scratch_story("TASK-1")[0], "old story + old sweep")
+        os.utime(txt, (3_000_000, 3_000_000))                     # tie: the richer story.md
+        self.assertEqual(orchestrate._devit_scratch_story("TASK-1")[0], "old story + old sweep")
+
     def _api_prompt(self, **kwargs) -> tuple[str, str]:
         seen = {}
 
