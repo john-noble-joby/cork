@@ -98,6 +98,11 @@ RUN_DIR=$(mktemp -d "$RUN_ROOT/$(git rev-parse --abbrev-ref HEAD | tr '/' '-').X
 # check above and here; the loser removes the directory it just made and stops.
 ( set -o noclobber; printf '%s\n' "$RUN_DIR" > "$RUN_PTR" ) 2>/dev/null \
   || { rm -rf "$RUN_DIR"; echo "another cork run claimed this worktree first ($(cat "$RUN_PTR" 2>/dev/null)) — wait for it or remove $RUN_PTR"; exit 1; }
+# Until this block completes, any failure below (base pin, preflight) must give back what it just
+# claimed, or every retry reports an active run until someone removes the pointer by hand. The trap
+# releases the pointer only while it still names THIS directory (never another run's claim), then
+# removes the half-built directory; it is disarmed once the run state is complete.
+trap '[ "$(cat "$RUN_PTR" 2>/dev/null)" = "$RUN_DIR" ] && rm -f "$RUN_PTR"; rm -rf "$RUN_DIR"' EXIT
 # Pin the trusted base to a commit id before anything can move {BASE}: the standards, the lenses
 # and every review diff use this id, and {BASE} survives only as the PR target.
 BASE_SHA=$(git rev-parse --verify "{BASE}^{commit}") && printf '%s\n' "$BASE_SHA" > "$RUN_DIR/base-sha" || { echo "cannot pin {BASE} into $RUN_DIR"; exit 1; }
@@ -107,6 +112,7 @@ BASE_SHA=$(git rev-parse --verify "{BASE}^{commit}") && printf '%s\n' "$BASE_SHA
 python3 "$CORK_HOME/orchestrate.py" preflight > "$RUN_DIR/preflight.txt" || { cat "$RUN_DIR/preflight.txt"; echo "preflight failed"; exit 1; }
 grep -E '^[a-z]+/' "$RUN_DIR/preflight.txt" > "$RUN_DIR/models.txt"   # the selected rotation, one provider/model per line — this is the roster the run uses
 [ -s "$RUN_DIR/models.txt" ] || { echo "no models selected by preflight — fix auth/config"; exit 1; }
+trap - EXIT   # run state complete: from here the lock is held on purpose, until Step 6 clears it
 printf 'RUN_DIR=%s  BASE_SHA=%s  rotation:\n' "$RUN_DIR" "$BASE_SHA"; cat "$RUN_DIR/models.txt"   # if it differs from Step 0's roster, say so before continuing
 ```
 
@@ -283,7 +289,11 @@ CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 CACHE_HOME="${XDG_CACHE_HOME:-}"; case "$CACHE_HOME" in /*) ;; *) CACHE_HOME="$HOME/.cache";; esac   # XDG: empty or relative = default
 RUN_ROOT="$CACHE_HOME/cork/run"; { mkdir -p "$RUN_ROOT" && chmod 700 "$RUN_ROOT"; } || { echo "cannot prepare $RUN_ROOT"; exit 1; }
 RUN_DIR=$(mktemp -d "$RUN_ROOT/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')-review.XXXXXX") || { echo "mktemp failed under $RUN_ROOT"; exit 1; }   # fail here, not with an empty RUN_DIR later
-printf '%s\n' "$RUN_DIR" > "$(git rev-parse --git-dir)/cork-review-run"
+REVIEW_PTR="$(git rev-parse --git-dir)/cork-review-run"; printf '%s\n' "$RUN_DIR" > "$REVIEW_PTR"
+# Same rule as Step 1: a failure before this block completes removes the half-built directory and
+# clears the pointer only while it still names this directory, so "find the last report" never
+# leads to a run that was never dispatched. Disarmed below once the inputs are all persisted.
+trap '[ "$(cat "$REVIEW_PTR" 2>/dev/null)" = "$RUN_DIR" ] && rm -f "$REVIEW_PTR"; rm -rf "$RUN_DIR"' EXIT
 BASE_SHA=$(git rev-parse --verify "{BASE}^{commit}") && printf '%s\n' "$BASE_SHA" > "$RUN_DIR/base-sha" || { echo "cannot pin {BASE} into $RUN_DIR"; exit 1; }   # pinned: standards, lenses and diffs all use it
 python3 "$CORK_HOME/orchestrate.py" preflight > "$RUN_DIR/preflight.txt" || { cat "$RUN_DIR/preflight.txt"; echo "preflight failed"; exit 1; }   # probed into THIS fan-out's directory, never a shared per-worktree file (see Step 1)
 grep -E '^[a-z]+/' "$RUN_DIR/preflight.txt" > "$RUN_DIR/models.txt"
@@ -293,6 +303,7 @@ python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "$BASE_SHA" > "$
 # tests, restating docs, and any changed file the manifest lists as diff-only. Repo-relative paths,
 # one per line; populate it here (this directory is this fan-out's alone), or the lanes get no context.
 printf '%s\n' path/to/caller.py tests/path/covering_test.py > "$RUN_DIR/context.txt"   # <- from grep/LSP over the changed symbols; `: > …` when there is none
+trap - EXIT                                      # inputs complete: the directory and pointer now outlive this block on purpose
 printf 'RUN_DIR=%s\n' "$RUN_DIR"                  # carry THIS literal path into block 2 (it is unique to this fan-out)
 printf 'story file: %s\n' "$RUN_DIR/story.md"   # now Write it: the PR body's acceptance section, the Linear story the branch names, or the user's contract
 ```
