@@ -320,6 +320,18 @@ class ReviewDiffTest(unittest.TestCase):
             result = orchestrate.review("codex", "m", "", "story", "x" * 60_000, {}, char_budget=50_000, repo="/repo")
         self.assertIn("skipped", result)
 
+    def test_manifest_escapes_control_characters_in_branch_supplied_paths(self):
+        # a changed-file name is branch content; ESC/newline printed raw could forge the manifest lines
+        out = io.StringIO()
+        with redirect_stdout(out):
+            orchestrate._print_manifest("S", "story", "diff", {"ok.py": "x", "evil\x1b[2Jname.py": "y"}, ["ok.py"], 1000,
+                                        {"big\n.py": 700}, {"ctx\x07.py": "c"}, ["gone\r.py"])
+        text = out.getvalue()
+        for raw in ("\x1b", "\x07", "\r"):
+            self.assertNotIn(raw, text)
+        self.assertIn("evil\\x1bname.py", text.replace("[2J", ""))   # escaped as the literal \x1b, bracket sequence left inert
+        self.assertIn("big\\x0a.py", text); self.assertIn("ctx\\x07.py", text); self.assertIn("gone\\x0d.py", text)
+
     def test_required_context_guard_measures_the_real_scaffolding_not_the_packing_reserve(self):
         # Copilot on PR #33: counting the 500-char reserve as content rejected inputs that fit.
         # An assembled prompt 300 chars under the budget must pass; 200 over it must fail.

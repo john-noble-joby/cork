@@ -2152,6 +2152,12 @@ def _review_system(instructions: str) -> str:
     return TRUST_BOUNDARY + "\n\n" + review_system + "\n\n" + SPEC_CONFORMANCE_SUFFIX
 
 
+def _safe_name(name: str) -> str:
+    # Changed-file names come from the branch; git allows control characters in them, and an
+    # ESC or newline printed raw can clear or forge the terminal lines around the manifest.
+    return "".join(c if (c.isprintable() or c == " ") else f"\\x{ord(c):02x}" for c in name)
+
+
 def _print_manifest(system: str, story: str, diff: str, files: dict[str, str],
                     included: list[str], budget: int, large: dict[str, int],
                     required: dict[str, str], skipped: list[str], unit: str = "chars",
@@ -2169,19 +2175,19 @@ def _print_manifest(system: str, story: str, diff: str, files: dict[str, str],
     print(f"  → review input: budget {budget:,} {unit} — standards {size(system):,}, story {size(story):,}, "
           f"diff {size(diff):,}, required context {req:,}, file contents {full:,}", flush=True)
     print(f"  → full contents ({len(included)}/{total} changed paths): "
-          + (", ".join(f"{n} ({size(files[n]):,})" for n in sorted(included)) or "none"), flush=True)
+          + (", ".join(f"{_safe_name(n)} ({size(files[n]):,})" for n in sorted(included)) or "none"), flush=True)
     if required:
         print(f"  → required context ({len(required)}, always included): "
-              + ", ".join(f"{n} ({'changed, ' if n in changed_req else ''}{size(c):,})" for n, c in sorted(required.items())), flush=True)
+              + ", ".join(f"{_safe_name(n)} ({'changed, ' if n in changed_req else ''}{size(c):,})" for n, c in sorted(required.items())), flush=True)
     dropped = sorted(n for n in files if n not in included)
     if dropped:
-        print(f"  → diff-only, over budget ({len(dropped)}): " + ", ".join(f"{n} ({size(files[n]):,})" for n in dropped), flush=True)
+        print(f"  → diff-only, over budget ({len(dropped)}): " + ", ".join(f"{_safe_name(n)} ({size(files[n]):,})" for n in dropped), flush=True)
     if large:
         print(f"  → diff-only, over {MAX_FILE_LINES} lines ({len(large)}): "
-              + ", ".join(f"{n} ({c:,} lines)" for n, c in sorted(large.items())), flush=True)
+              + ", ".join(f"{_safe_name(n)} ({c:,} lines)" for n, c in sorted(large.items())), flush=True)
     if skipped:
         print(f"  → diff-only, not readable in the tree — deleted, submodule, renamed-from ({len(skipped)}): "
-              + ", ".join(sorted(skipped)), flush=True)
+              + ", ".join(_safe_name(n) for n in sorted(skipped)), flush=True)
     if not included and files:
         print("  → no changed file fit the budget: this is a diff-only review", flush=True)
 

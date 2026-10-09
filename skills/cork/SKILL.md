@@ -244,7 +244,7 @@ Because no fixes land between passes, **every reviewer sees the identical diff**
 
 Dispatch concurrently, then collect when all return:
 
-- **Inputs first (block 1):** allocate this fan-out's directory and persist everything the reviewers need — the pinned base, the rotation, the standards, the context list — then **Write** the story file at the path block 1 prints. Nothing in a shell variable survives to the next tool call, so block 2 reads all of it back from files.
+- **Inputs first (block 1):** allocate this fan-out's directory and persist everything the reviewers need — the pinned base, the rotation, the standards, the context list — then **Write** the story file at the path block 1 prints, and carry the printed `RUN_DIR` into block 2 and the lens prompts verbatim (not via the pointer: it only records the last fan-out). Nothing in a shell variable survives to the next tool call, so block 2 reads all of it back from files.
 - **Self-review:** dispatch the lenses in `$CORK_HOME/lenses/` (and the repo's `code-review/lenses/`, read from the pinned base with `git show "$BASE_SHA:…"`; cork's own lenses too when the repo under review is cork, detected with absolute common dirs as in Step 2) as parallel read-only subagents over `git diff "$BASE_SHA"...HEAD`, with `{BASE}` = `$BASE_SHA`, `{STORY_FILE}` = the story file and `{STANDARDS}` = the standards file from block 1. Gather findings only — apply nothing.
 - **Each model from the persisted rotation (block 2),** all launched together (background processes, then `wait`).
 
@@ -254,8 +254,8 @@ Block 1 — inputs:
 cd {WORKTREE} || exit 1
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 # Unique per fan-out: never the full-mode run's directory, and two review-only runs on the same
-# branch never share story, context or review-<model>.txt. The pointer records the LAST fan-out so
-# block 2 (and a human afterwards) can find it; block 2 is self-contained apart from that pointer.
+# branch never share story, context or review-<model>.txt. The pointer below records the LAST
+# fan-out for a human to find the report afterwards; block 2 receives this run's path explicitly.
 CACHE_HOME="${XDG_CACHE_HOME:-}"; case "$CACHE_HOME" in /*) ;; *) CACHE_HOME="$HOME/.cache";; esac   # XDG: empty or relative = default
 RUN_ROOT="$CACHE_HOME/cork/run"; mkdir -p "$RUN_ROOT" && chmod 700 "$RUN_ROOT"
 RUN_DIR=$(mktemp -d "$RUN_ROOT/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')-review.XXXXXX")
@@ -268,16 +268,20 @@ python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "$BASE_SHA" > "$
 # tests, restating docs, and any changed file the manifest lists as diff-only. Repo-relative paths,
 # one per line; populate it here (this directory is this fan-out's alone), or the lanes get no context.
 printf '%s\n' path/to/caller.py tests/path/covering_test.py > "$RUN_DIR/context.txt"   # <- from grep/LSP over the changed symbols; `: > …` when there is none
+printf 'RUN_DIR=%s\n' "$RUN_DIR"                  # carry THIS literal path into block 2 (it is unique to this fan-out)
 printf 'story file: %s\n' "$RUN_DIR/story.md"   # now Write it: the PR body's acceptance section, the Linear story the branch names, or the user's contract
 ```
 
-Block 2 — fan-out (a fresh shell; everything comes from the files block 1 wrote):
+Block 2 — fan-out (a fresh shell). Fill `{RUN_DIR}` with the literal path block 1 printed —
+never re-read the `cork-review-run` pointer here: it names the *last* fan-out started in this
+worktree, so two overlapping review-only runs would otherwise read each other's story and
+context and launch reviews into the wrong directory. The pointer exists only so a human can
+find the latest report afterwards.
 
 ```bash
 cd {WORKTREE} || exit 1
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-RUN_PTR="$(git rev-parse --git-dir)/cork-review-run"; [ -s "$RUN_PTR" ] || { echo "no review-only run in this worktree — run block 1 first"; exit 1; }
-RUN_DIR=$(cat "$RUN_PTR")
+RUN_DIR="{RUN_DIR}"; [ -d "$RUN_DIR" ] && [ -s "$RUN_DIR/base-sha" ] || { echo "no fan-out at $RUN_DIR — run block 1 and copy the RUN_DIR it printed"; exit 1; }
 STORY_FILE="$RUN_DIR/story.md"; [ -s "$STORY_FILE" ] || { echo "no story at $STORY_FILE — Write it first (block 1)"; exit 1; }
 BASE_SHA=$(cat "$RUN_DIR/base-sha")
 TICKET="$(git rev-parse --abbrev-ref HEAD | grep -oE '[A-Z]+-[0-9]+' | head -1)"; TICKET="${TICKET:-REVIEW}"   # a label only: --story-file carries the contract
