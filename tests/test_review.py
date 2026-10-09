@@ -306,7 +306,7 @@ class ReviewDiffTest(unittest.TestCase):
         self.assertRegex(text, r"full contents \(2/5 changed paths\): mid\.py \(100\), small\.py \(10\)")
         self.assertIn("diff-only, over budget (1): big.py (5,000)", text)
         self.assertIn(f"diff-only, over {orchestrate.MAX_FILE_LINES} lines (1): huge.cs (1,234 lines)", text)
-        self.assertIn("not sent as text — deleted, submodule, renamed-from, binary (1): gone.py", text)
+        self.assertIn("not sent as text — deleted, submodule, renamed-from, binary, unreadable (1): gone.py", text)
 
     def test_over_budget_diff_without_required_context_still_reviews(self):
         # no --context-file: an over-budget diff is a diff-only review as before (API lane), or the

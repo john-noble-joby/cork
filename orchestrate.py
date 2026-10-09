@@ -1465,7 +1465,7 @@ def read_diff_file(path: str) -> tuple[str, list[str]]:
 def _read_changed(cwd: str, names: list[str]) -> tuple[dict[str, str], dict[str, int], list[str]]:
     # One pass over the changed set, one predicate for every category: (contents of files up
     # to MAX_FILE_LINES, name → line count for larger ones, names not sent as text — deleted
-    # paths, submodule pointers, the old side of a rename, binary files). Each category is named in
+    # paths, submodule pointers, the old side of a rename, binary or unreadable files). Each category is named in
     # the review-input manifest; nothing is dropped silently and nothing is replaced by a
     # remark the model could mistake for a finding.
     contents: dict[str, str] = {}
@@ -1521,6 +1521,7 @@ def _required_contents(cwd: str, paths: list[str]) -> dict[str, str]:
     # names it (root-relative, POSIX), so `./x.py`, `x.py` and an absolute path are one entry
     # and can be matched against the changed set.
     root = Path(cwd).resolve()
+    lexical_root = Path(os.path.normpath(Path(cwd).absolute()))
     out: dict[str, str] = {}
     for rel in paths:
         path = Path(rel) if Path(rel).is_absolute() else Path(cwd) / rel
@@ -1530,12 +1531,17 @@ def _required_contents(cwd: str, paths: list[str]) -> dict[str, str]:
             resolved = path.resolve()
             if not resolved.is_relative_to(root) or any(part.lower() == ".git" for part in resolved.relative_to(root).parts):
                 fail(f"--context-file {rel!r} resolves outside the repository or into git metadata")
+            # Key = the path as git names it: the REQUESTED path normalised against the root, so an
+            # in-tree symlink named as context keeps its own name and matches the changed set; the
+            # resolved path is used only for containment and reading.
+            lexical = Path(os.path.normpath(path.absolute()))
+            key = (lexical.relative_to(lexical_root) if lexical.is_relative_to(lexical_root) else resolved.relative_to(root)).as_posix()
             text = resolved.read_text(errors="replace")
         except OSError as e:
             fail(f"--context-file {rel!r} cannot be read: {e}")
         if "\x00" in text:   # a binary file is not context; on an argv lane the NUL would also turn into a silent skip
             fail(f"--context-file {rel!r} contains NUL bytes — required context must be text")
-        out[resolved.relative_to(root).as_posix()] = text
+        out[key] = text
     return out
 
 
@@ -2211,7 +2217,7 @@ def _print_manifest(system: str, story: str, diff: str, files: dict[str, str],
         print(f"  → diff-only, over {MAX_FILE_LINES} lines ({len(large)}): "
               + ", ".join(f"{_safe_name(n)} ({c:,} lines)" for n, c in sorted(large.items())), flush=True)
     if skipped:
-        print(f"  → diff-only, not sent as text — deleted, submodule, renamed-from, binary ({len(skipped)}): "
+        print(f"  → diff-only, not sent as text — deleted, submodule, renamed-from, binary, unreadable ({len(skipped)}): "
               + ", ".join(_safe_name(n) for n in sorted(skipped)), flush=True)
     if not included and files:
         print("  → no changed file fit the budget: this is a diff-only review", flush=True)
