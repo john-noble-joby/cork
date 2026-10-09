@@ -186,6 +186,14 @@ class ReviewStoryTest(unittest.TestCase):
         self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d), Path("/abs/auth.json"))
         os.environ["CORK_TEST_PATH"] = "~no-such-user-cork/x"
         self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d), d)                       # bad ~user: default, no traceback
+        loop = Path(self.tmp.name) / "loop"; loop.symlink_to(loop)                            # a symlink cycle, absolute and relative
+        os.environ["CORK_TEST_PATH"] = str(loop / "auth.json")
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d), d)
+        os.environ["CORK_TEST_PATH"] = str(loop / "cache")
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d, xdg=True), d)
+        link = Path(self.tmp.name) / "link"; link.symlink_to(Path(self.tmp.name) / "real"); (Path(self.tmp.name) / "real").mkdir()
+        os.environ["CORK_TEST_PATH"] = str(link / "auth.json")
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d), link / "auth.json")       # a healthy absolute symlink keeps its path
         os.environ.pop("CORK_TEST_PATH")
 
     def test_empty_xdg_cache_home_means_the_default_not_the_cwd(self):

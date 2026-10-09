@@ -71,14 +71,13 @@ def _env_path(var: str, default: Path, xdg: bool = False) -> Path:
         return default
     if p is None:
         return default
-    if p.is_absolute():
-        return p
-    if xdg:
+    if not p.is_absolute() and xdg:
         return default
     try:
-        return (Path.cwd() / p).resolve()
+        resolved = (p if p.is_absolute() else Path.cwd() / p).resolve()   # validation only for absolute paths
     except (OSError, RuntimeError):   # symlink cycle or unreadable cwd: an unusable override is unset
         return default
+    return p if p.is_absolute() else resolved
 
 
 CLAUDE         = os.environ.get("CLAUDE_BIN") or str(Path.home() / ".local/bin/claude")   # a bare command name is fine; empty is not
@@ -1487,12 +1486,12 @@ def _read_changed(cwd: str, names: list[str]) -> tuple[dict[str, str], dict[str,
             if not resolved.is_file():  # a changed submodule is listed as a directory; its pointer change is in the diff
                 skipped.append(name)
                 continue
-            text = resolved.read_text(errors="replace")
+            text = resolved.read_bytes().decode("utf-8", errors="replace")   # no universal-newline translation
         except OSError:   # unreadable (permissions, vanished mid-run): named as skipped, like a deleted path
             skipped.append(name)
             continue
         # Count and send on "\n" only: str.splitlines() also breaks on \f, \v, \x1c-\x1e and \x85,
-        # which are ordinary bytes inside a source line — a reviewer would see altered code.
+        # and read_text() would turn a lone "\r" into "\n" — a reviewer would see altered code.
         body = text[:-1] if text.endswith("\n") else text
         line_count = body.count("\n") + 1 if body else 0
         if line_count <= MAX_FILE_LINES:
@@ -2537,8 +2536,9 @@ def cmd_standards_show(repo: str, base_ref: str | None) -> None:
     # can be redirected to a file; the source label goes to stderr.
     # The ref is validated and pinned exactly as review mode does it: a typo or a vanished
     # remote-tracking ref must fail, not print a rubric that silently lacks the project layer.
-    if base_ref is not None:
-        require_base_ref(repo, base_ref)
+    if base_ref is not None:   # pin only: printing a tree needs a commit, not a merge base with HEAD
+        if _git_out(Path(repo), "rev-parse", "--verify", "--quiet", f"{base_ref}^{{commit}}") is None:
+            fail(f"Base ref {base_ref!r} does not resolve")
         base_ref = pin_ref(repo, base_ref)
     with contextlib.redirect_stdout(sys.stderr):   # loader ⚠ diagnostics must not land in the redirected rubric file
         text, label = load_agent_instructions(repo, set() if base_ref else None, base_ref)

@@ -349,17 +349,30 @@ class ReviewDiffSourceTest(unittest.TestCase):
         _, out = self._review(diff_range=f"{self.c3}..HEAD")
         self.assertIn("not readable in the tree — deleted, submodule, renamed-from (1): b.py", out)
 
+    def test_changed_file_contents_keep_lone_carriage_returns_and_count_lf_only(self):
+        (self.repo / "cr.py").write_bytes(b"a\rb\rc\n" + b"\n" * 2)   # one LF-line of content plus two blank lines
+        files, large, _ = orchestrate._read_changed(str(self.repo), ["cr.py"])
+        self.assertEqual(files["cr.py"], "a\rb\rc\n\n")                 # the CRs survive untranslated; trailing LF trimmed once
+        (self.repo / "crs.py").write_bytes(b"x" + b"\r" * 700 + b"\n")   # 700 CRs are one LF-line, not a 700-line "large" file
+        files, large, _ = orchestrate._read_changed(str(self.repo), ["crs.py"])
+        self.assertIn("crs.py", files); self.assertEqual(large, {})
+
     def test_unreadable_changed_file_is_skipped_and_unreadable_required_context_fails(self):
         # Copilot on PR #33: a read error must be a manifest entry (changed) or a clean failure
         # (required), never a traceback — the review must not die on a vanished or locked file.
         (self.repo / "locked.py").write_text("x = 1\n")
-        real = Path.read_text
+        real_text, real_bytes = Path.read_text, Path.read_bytes
 
         def flaky(self_, *a, **k):
             if self_.name == "locked.py":
                 raise OSError(13, "Permission denied")
-            return real(self_, *a, **k)
-        with mock.patch.object(Path, "read_text", flaky):
+            return real_text(self_, *a, **k)
+
+        def flaky_bytes(self_, *a, **k):
+            if self_.name == "locked.py":
+                raise OSError(13, "Permission denied")
+            return real_bytes(self_, *a, **k)
+        with mock.patch.object(Path, "read_text", flaky), mock.patch.object(Path, "read_bytes", flaky_bytes):
             files, large, skipped = orchestrate._read_changed(str(self.repo), ["locked.py", "a.py"])
             self.assertEqual(skipped, ["locked.py"]); self.assertIn("a.py", files); self.assertEqual(large, {})
             err = io.StringIO()
@@ -393,6 +406,12 @@ class ReviewDiffSourceTest(unittest.TestCase):
         self.assertIn("BASE RULES", out)
         out, _ = show(str(self.repo))                                              # no ref: the checkout, as `status` reads it
         self.assertIn("BRANCH RULES", out)
+        # an orphan commit (no merge base with HEAD) is still a readable tree: printing it needs no shared history
+        _git(self.repo, "checkout", "-q", "--orphan", "orphan"); _git(self.repo, "rm", "-rfq", "."); (self.repo / "code-review").mkdir()
+        (self.repo / "code-review" / "AGENTS.md").write_text("ORPHAN RULES\n"); _git(self.repo, "add", "-A"); _git(self.repo, "commit", "-qm", "orphan rubric")
+        _git(self.repo, "checkout", "-q", "main")
+        out, _ = show(str(self.repo), "--base-ref", "orphan")
+        self.assertIn("ORPHAN RULES", out)
         # a ref with no project file while the checkout has one: the loader's ⚠ goes to stderr, not into the rubric
         out, err = show(str(self.repo), "--base-ref", self.c1)
         self.assertNotIn("⚠", out); self.assertNotIn("RULES", out); self.assertIn("no regular-file copy", err)
