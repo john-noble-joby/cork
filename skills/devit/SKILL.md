@@ -266,7 +266,11 @@ test that would catch it; a lens that found nothing must say what it tried.
 
 Fix the findings as a batch (defect-class rule below applies), commit, and record the gate
 summary — lenses run, lenses skipped and why, findings fixed, findings pushed back — for the
-PR body and Phase 7.
+PR body and Phase 7. Then **refresh the Phase 3.5 artifacts the fixes touched** (input-domain
+rows for a new validation, siblings and restatements for a new or changed message, a probe for
+a new tool call) and `context.txt` for any newly involved caller, wiring or test — the same rule
+Phase 4 applies between models — so the model rotation reviews the post-fix code against
+post-fix evidence, not the pre-fix inventory.
 
 ## Phase 4 — cork review + fix
 
@@ -449,7 +453,8 @@ CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--contex
 ```
 
 Fix findings as one batch with the
-defect-class rule, commit, and — if the batch exceeded ~100 lines **or touched a file no cork
+defect-class rule, commit, refresh the sweep artifacts and `context.txt` the batch touched (as
+after every other fix batch), and — if the batch exceeded ~100 lines **or touched a file no cork
 lane saw** (the same two triggers as Phase 6) — run the fan-out once more
 over that delta. Only then proceed to Phase 7. On the hangar run three models reviewed a
 700-line branch once; the merged branch was 1,800 lines and nothing had re-read it.

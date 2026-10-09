@@ -94,8 +94,8 @@ RUN_PTR="$(git rev-parse --git-dir)/cork-run"
 # full mode commits to this checkout's branch, so a second run here would race those commits.
 [ -e "$RUN_PTR" ] && { echo "a cork run is already in progress in this worktree ($(cat "$RUN_PTR")) — finish it (Step 6 clears the pointer) or remove $RUN_PTR"; exit 1; }
 CACHE_HOME="${XDG_CACHE_HOME:-}"; case "$CACHE_HOME" in /*) ;; *) CACHE_HOME="$HOME/.cache";; esac   # XDG: empty or relative = default, never a path inside this worktree
-RUN_ROOT="$CACHE_HOME/cork/run"; mkdir -p "$RUN_ROOT" && chmod 700 "$RUN_ROOT"   # mktemp does not create parents; -m would not fix an existing dir
-RUN_DIR=$(mktemp -d "$RUN_ROOT/$(git rev-parse --abbrev-ref HEAD | tr '/' '-').XXXXXX")
+RUN_ROOT="$CACHE_HOME/cork/run"; { mkdir -p "$RUN_ROOT" && chmod 700 "$RUN_ROOT"; } || { echo "cannot prepare $RUN_ROOT"; exit 1; }   # mktemp does not create parents; -m would not fix an existing dir
+RUN_DIR=$(mktemp -d "$RUN_ROOT/$(git rev-parse --abbrev-ref HEAD | tr '/' '-').XXXXXX") || { echo "mktemp failed under $RUN_ROOT"; exit 1; }   # fail here, not with an empty RUN_DIR later
 # Atomic claim: noclobber makes the pointer write fail if another session created it between the
 # check above and here; the loser removes the directory it just made and stops.
 ( set -o noclobber; printf '%s\n' "$RUN_DIR" > "$RUN_PTR" ) 2>/dev/null \
@@ -248,7 +248,7 @@ Read the findings from stdout. For each: apply the fix in the worktree (run test
 ### Step 6 — Push + PR
 
 Push the branch and open a PR with `gh`, summarizing what each pass caught. Then clear the run
-pointer so the next run in this worktree can start: `rm -f "$(git rev-parse --git-dir)/cork-run"`
+pointer so the next run in this worktree can start: `cd {WORKTREE} && rm -f "$(git rev-parse --git-dir)/cork-run"` (a fresh shell may be in another checkout; never resolve the pointer from wherever the session happens to be)
 (the run directory itself stays for the record). If a run was abandoned, the same `rm` unblocks Step 1.
 
 ## Review-only mode — parallel reviews → consolidated report
@@ -278,8 +278,8 @@ CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
 # branch never share story, context or review-<model>.txt. The pointer below records the LAST
 # fan-out for a human to find the report afterwards; block 2 receives this run's path explicitly.
 CACHE_HOME="${XDG_CACHE_HOME:-}"; case "$CACHE_HOME" in /*) ;; *) CACHE_HOME="$HOME/.cache";; esac   # XDG: empty or relative = default
-RUN_ROOT="$CACHE_HOME/cork/run"; mkdir -p "$RUN_ROOT" && chmod 700 "$RUN_ROOT"
-RUN_DIR=$(mktemp -d "$RUN_ROOT/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')-review.XXXXXX")
+RUN_ROOT="$CACHE_HOME/cork/run"; { mkdir -p "$RUN_ROOT" && chmod 700 "$RUN_ROOT"; } || { echo "cannot prepare $RUN_ROOT"; exit 1; }
+RUN_DIR=$(mktemp -d "$RUN_ROOT/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')-review.XXXXXX") || { echo "mktemp failed under $RUN_ROOT"; exit 1; }   # fail here, not with an empty RUN_DIR later
 printf '%s\n' "$RUN_DIR" > "$(git rev-parse --git-dir)/cork-review-run"
 BASE_SHA=$(git rev-parse --verify "{BASE}^{commit}"); printf '%s\n' "$BASE_SHA" > "$RUN_DIR/base-sha"   # pinned: standards, lenses and diffs all use it
 grep -E '^[a-z]+/' "$(git rev-parse --git-dir)/cork-preflight" > "$RUN_DIR/models.txt"               # the rotation Step 0 selected
