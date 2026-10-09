@@ -126,11 +126,15 @@ either way.
 cd {WORKTREE} || exit 1
 RUN_PTR="$(git rev-parse --git-dir)/cork-run"; [ -s "$RUN_PTR" ] || { echo "no cork run in this worktree — run Step 1 first"; exit 1; }
 RUN_DIR=$(cat "$RUN_PTR"); BASE_SHA=$(cat "$RUN_DIR/base-sha")
-[ -n "$(git diff "$BASE_SHA"...HEAD)" ] || { echo "empty diff vs $BASE_SHA — nothing was implemented"; exit 1; }
+# An empty diff ends the run here, never reaching Step 6 — so release the lock this run holds
+# (only while the pointer still names this run's directory), or every later run is blocked.
+[ -n "$(git diff "$BASE_SHA"...HEAD)" ] || { [ "$(cat "$RUN_PTR" 2>/dev/null)" = "$RUN_DIR" ] && rm -f "$RUN_PTR"; echo "empty diff vs $BASE_SHA — nothing was implemented; run released"; exit 1; }
 ```
 
 After the implementation commit, stop here if the diff is still empty; do not fan out
-reviewers for a branch that implemented nothing.
+reviewers for a branch that implemented nothing. The other `exit 1`s in Steps 2–5 (no story
+yet, a model outside the roster) are "fix the input and re-run this block" stops, so they keep
+the lock on purpose; only this one and Step 6 end the run.
 
 **Persist the reviewer inputs** — every lens and every model pass reads the same two files,
 written once, outside the repository, under the run directory Step 1 locked:
