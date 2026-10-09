@@ -86,7 +86,9 @@ Offer effort configuration: `responses_effort` in `config.json` accepts `low`, `
 (default), or `high` for Responses API lanes. Claude Code uses its own
 `providers.claude.extra_args`, e.g. `["--effort", "high"]`. Edit these JSON fields directly;
 `config set` accepts only boolean preferences. For Pi, use `providers.pi.extra_args`:
-`["--thinking", "high"]`. Preserve unrelated settings and extra args.
+`["--thinking", "high"]`. Preserve unrelated settings and extra args. On a seat whose models
+have 200k+ token windows, also offer `review_budget_chars` (default 192000): the size of the
+prompt an API review may carry; every review prints a manifest of what the current value drops.
 
 ## 4. Status line (optional)
 If `~/.claude/settings.json` has no `statusLine`, offer to add it (so a session shows its
