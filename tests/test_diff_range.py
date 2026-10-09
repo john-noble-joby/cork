@@ -349,6 +349,12 @@ class ReviewDiffSourceTest(unittest.TestCase):
         _, out = self._review(diff_range=f"{self.c3}..HEAD")
         self.assertIn("not sent as text — deleted, submodule, renamed-from, binary, unreadable (1): b.py", out)
 
+    def test_required_context_is_sent_byte_for_byte_without_newline_translation(self):
+        # Copilot on PR #44: read_text() rewrote CRLF and lone CR before the reviewer saw them
+        (self.repo / "crlf.py").write_bytes(b"a = 1\r\nb = 2\rc = 3\n")
+        req = orchestrate._required_contents(str(self.repo), ["crlf.py"])
+        self.assertEqual(req["crlf.py"], "a = 1\r\nb = 2\rc = 3\n")
+
     def test_required_context_symlink_keeps_its_requested_path_as_key(self):
         (self.repo / "link.py").symlink_to("a.py"); _git(self.repo, "add", "link.py"); _git(self.repo, "commit", "-qm", "add link")
         req = orchestrate._required_contents(str(self.repo), ["link.py", "./b.py"])
@@ -415,6 +421,13 @@ class ReviewDiffSourceTest(unittest.TestCase):
         out, err = show(str(self.repo), "--base-ref", "trusted")
         self.assertIn("BASE RULES", out); self.assertNotIn("BRANCH RULES", out); self.assertNotIn("standards:", out)
         self.assertIn(f"code-review/AGENTS.md@{_git(self.repo, 'rev-parse', 'trusted')}", err)   # pinned, on stderr
+        # Copilot on PR #44: a subdirectory as the repo argument must still find the root project
+        # layer, with and without --base-ref (review mode normalises the same input)
+        (self.repo / "sub").mkdir(exist_ok=True)
+        out, err = show(str(self.repo / "sub"), "--base-ref", "trusted")
+        self.assertIn("BASE RULES", out)
+        out, err = show(str(self.repo / "sub"))
+        self.assertIn("BRANCH RULES", out); self.assertIn("code-review/AGENTS.md", err)
         err = io.StringIO(); orig = sys.argv; sys.argv = ["orchestrate.py", "standards", "show", str(self.repo), "--base-ref", "origin/nope"]
         try:
             with redirect_stdout(io.StringIO()), redirect_stderr(err), self.assertRaises(SystemExit): orchestrate.main()

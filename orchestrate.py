@@ -1536,7 +1536,7 @@ def _required_contents(cwd: str, paths: list[str]) -> dict[str, str]:
             # resolved path is used only for containment and reading.
             lexical = Path(os.path.normpath(path.absolute()))
             key = (lexical.relative_to(lexical_root) if lexical.is_relative_to(lexical_root) else resolved.relative_to(root)).as_posix()
-            text = resolved.read_text(errors="replace")
+            text = resolved.read_bytes().decode("utf-8", errors="replace")   # whole means whole: no newline translation (as _read_changed)
         except OSError as e:
             fail(f"--context-file {rel!r} cannot be read: {e}")
         if "\x00" in text:   # a binary file is not context; on an argv lane the NUL would also turn into a silent skip
@@ -3226,7 +3226,9 @@ def main() -> None:
         opt = "--opt-out" in rest
         base_ref = rest[rest.index("--base-ref") + 1] if "--base-ref" in rest and rest.index("--base-ref") + 1 < len(rest) else None
         positional = [a for i, a in enumerate(rest) if not a.startswith("--") and (i == 0 or rest[i - 1] != "--base-ref")]
-        repo = str(Path(positional[0] if positional else ".").expanduser().resolve())
+        # Normalised to the work tree root like review mode: given a subdirectory, the project
+        # layer lives at <root>/code-review/, so status, init and show would otherwise miss it.
+        repo = git_toplevel(str(Path(positional[0] if positional else ".").expanduser().resolve()))
         if sub in ("status", "init") and "--base-ref" in rest:
             fail(f"--base-ref applies to `standards show` only; `standards {sub}` reads the checkout")
         if sub == "status":
