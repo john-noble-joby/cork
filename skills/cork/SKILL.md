@@ -151,7 +151,7 @@ python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "$BASE_SHA" > "$
 # covering tests, docs that restate the behaviour — plus any changed file the manifest later lists
 # as diff-only (over budget or over 500 lines) that the story depends on. Repo-relative paths, one
 # per line, persisted so every later block (and a re-run) rebuilds the same list.
-printf '%s\n' path/to/caller.py tests/path/covering_test.py > "$RUN_DIR/context.txt"   # <- from grep/LSP over the changed symbols; `: > "$RUN_DIR/context.txt"` when there is genuinely none
+printf '%s\n' path/to/caller.py tests/path/covering_test.py > "$RUN_DIR/context.txt" || { echo "cannot write $RUN_DIR/context.txt"; exit 1; }   # <- from grep/LSP over the changed symbols; `: > "$RUN_DIR/context.txt"` when there is genuinely none
 ```
 
 Every later command block starts by reading the persisted run path and rebuilding the array —
@@ -164,6 +164,7 @@ RUN_PTR="$(git rev-parse --git-dir)/cork-run"; [ -s "$RUN_PTR" ] || { echo "no c
 RUN_DIR=$(cat "$RUN_PTR")   # the run Step 1 locked in this worktree
 STORY_FILE="$RUN_DIR/story.md"; STANDARDS_FILE="$RUN_DIR/standards.md"; BASE_SHA=$(cat "$RUN_DIR/base-sha")
 [ -s "$STORY_FILE" ] || { echo "no story at $STORY_FILE — write it first"; exit 1; }
+[ -f "$RUN_DIR/context.txt" ] || { echo "no persisted context list at $RUN_DIR/context.txt — a failed redirection would NOT stop this shell, and the lanes would silently get no context"; exit 1; }
 CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done < "$RUN_DIR/context.txt"   # bash 3.2-safe; an empty file means no context
 ```
 
@@ -217,9 +218,10 @@ RUN_PTR="$(git rev-parse --git-dir)/cork-run"; [ -s "$RUN_PTR" ] || { echo "no c
 RUN_DIR=$(cat "$RUN_PTR")   # Step 1's lock: the persisted per-run path
 STORY_FILE="$RUN_DIR/story.md"; [ -s "$STORY_FILE" ] || { echo "no story at $STORY_FILE — write it first"; exit 1; }
 BASE_SHA=$(cat "$RUN_DIR/base-sha")                     # the pinned base, not the movable {BASE}
+[ -f "$RUN_DIR/context.txt" ] || { echo "no persisted context list at $RUN_DIR/context.txt — a failed redirection would NOT stop this shell, and the lanes would silently get no context"; exit 1; }
 CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done < "$RUN_DIR/context.txt"   # bash 3.2-safe; an empty file means no context
 grep -qxF "{MODEL}" "$RUN_DIR/models.txt" || { echo "{MODEL} is not in this run's roster:"; cat "$RUN_DIR/models.txt"; exit 1; }   # the persisted rotation, not Step 0's output
-python3 "$CORK_HOME/orchestrate.py" {TICKET} {WORKTREE} --review-model {MODEL} --base-branch "$BASE_SHA" --story-file "$STORY_FILE" "${CONTEXT_ARGS[@]}"
+python3 "$CORK_HOME/orchestrate.py" {TICKET} "{WORKTREE}" --review-model {MODEL} --base-branch "$BASE_SHA" --story-file "$STORY_FILE" "${CONTEXT_ARGS[@]}"
 ```
 
 The preamble is not decoration: this command runs in a fresh shell, so without it `--story-file`
@@ -261,8 +263,17 @@ Read the findings from stdout. For each: apply the fix in the worktree (run test
 ### Step 6 — Push + PR
 
 Push the branch and open a PR with `gh`, summarizing what each pass caught. Then clear the run
-pointer so the next run in this worktree can start: `cd {WORKTREE} && rm -f "$(git rev-parse --git-dir)/cork-run"` (a fresh shell may be in another checkout; never resolve the pointer from wherever the session happens to be)
-(the run directory itself stays for the record). If a run was abandoned, the same `rm` unblocks Step 1.
+pointer so the next run in this worktree can start — only while it still names this run's directory, as the
+Step 1 trap and the Step 2 empty-diff stop do (an abandoned pointer may have been removed by hand and the
+worktree claimed by a newer run since; an unconditional `rm` would delete that run's lock):
+
+```bash
+cd {WORKTREE} || exit 1                          # a fresh shell may be in another checkout; never resolve the pointer from wherever the session is
+RUN_PTR="$(git rev-parse --git-dir)/cork-run"
+[ "$(cat "$RUN_PTR" 2>/dev/null)" = "{RUN_DIR}" ] && rm -f "$RUN_PTR" || echo "pointer no longer names this run ({RUN_DIR}) — left alone"   # {RUN_DIR}: the literal path Step 1 printed
+```
+
+The run directory itself stays for the record. If a run was abandoned, removing the pointer by hand unblocks Step 1.
 
 ## Review-only mode — parallel reviews → consolidated report
 
@@ -306,7 +317,7 @@ python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "$BASE_SHA" > "$
 # Blast radius the diff does not show — callers of changed symbols, DI/registration wiring, covering
 # tests, restating docs, and any changed file the manifest lists as diff-only. Repo-relative paths,
 # one per line; populate it here (this directory is this fan-out's alone), or the lanes get no context.
-printf '%s\n' path/to/caller.py tests/path/covering_test.py > "$RUN_DIR/context.txt"   # <- from grep/LSP over the changed symbols; `: > …` when there is none
+printf '%s\n' path/to/caller.py tests/path/covering_test.py > "$RUN_DIR/context.txt" || { echo "cannot write $RUN_DIR/context.txt"; exit 1; }   # <- from grep/LSP over the changed symbols; `: > …` when there is none
 trap - EXIT                                      # inputs complete: the directory and pointer now outlive this block on purpose
 printf 'RUN_DIR=%s\n' "$RUN_DIR"                  # carry THIS literal path into block 2 (it is unique to this fan-out)
 printf 'story file: %s\n' "$RUN_DIR/story.md"   # now Write it: the PR body's acceptance section, the Linear story the branch names, or the user's contract
@@ -325,7 +336,9 @@ RUN_DIR="{RUN_DIR}"; [ -d "$RUN_DIR" ] && [ -s "$RUN_DIR/base-sha" ] || { echo "
 STORY_FILE="$RUN_DIR/story.md"; [ -s "$STORY_FILE" ] || { echo "no story at $STORY_FILE — Write it first (block 1)"; exit 1; }
 BASE_SHA=$(cat "$RUN_DIR/base-sha")
 TICKET="$(git rev-parse --abbrev-ref HEAD | grep -oE '[A-Z]+-[0-9]+' | head -1)"; TICKET="${TICKET:-REVIEW}"   # a label only: --story-file carries the contract
+[ -f "$RUN_DIR/context.txt" ] || { echo "no persisted context list at $RUN_DIR/context.txt — a failed redirection would NOT stop this shell, and the lanes would silently get no context"; exit 1; }
 CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done < "$RUN_DIR/context.txt"   # bash 3.2-safe; an empty file means no context
+[ -s "$RUN_DIR/models.txt" ] || { echo "no persisted roster at $RUN_DIR/models.txt — block 1 did not complete"; exit 1; }
 while read -r M; do
   [ -n "$M" ] || continue
   safe="${M//%/%25}"; safe="${safe//\//%2F}"   # injective: opencode/a-b/c and opencode/a/b-c must not share a file
@@ -368,5 +381,5 @@ Print the report and stop. If the user then wants fixes applied, that's a separa
 - **Review-only mode** is side-effect-free: parallel reviews → one consolidated report, nothing applied. Reach for it to review someone else's branch.
 - **Copilot token**: `--review-model` resolves a token in priority order — `CORK_COPILOT_TOKEN` env var → cork's own `~/.config/cork/auth.json` (`CORK_AUTH_FILE`) → opencode (`~/.local/share/opencode/auth.json`). Run `python3 "$CORK_HOME/orchestrate.py" auth status` to see the source, expiry, refreshability, and probe result. Preflight warns when it is using the non-refreshable opencode fallback or a token-only credential. To give cork its own refreshable token, run `python3 "$CORK_HOME/orchestrate.py" login` (GitHub device flow, writes the auth file automatically). Re-run `login` only if the refresh token itself expires (~6 months), is revoked, or status reports a non-refreshable source.
 - **Worktree**: all edits go in the PR's worktree, not the main checkout.
-- **Headless mode** still exists: `$CORK_HOME/orchestrate.py {TICKET} {WORKTREE}` runs the full `3 + 2×N` pipeline with `claude --print` subprocesses (N = preflight-selected count from config). Use that only for unattended/background runs; it resumes automatically from the checkpoint on re-run.
+- **Headless mode** still exists: `$CORK_HOME/orchestrate.py {TICKET} "{WORKTREE}"` runs the full `3 + 2×N` pipeline with `claude --print` subprocesses (N = preflight-selected count from config). Use that only for unattended/background runs; it resumes automatically from the checkpoint on re-run.
 - **Path config:** the orchestrator location comes from `$CORK_HOME` (default `~/dev/cork`). Set it in your shell profile or `~/.claude/settings.json` `env` block if your clone lives elsewhere.

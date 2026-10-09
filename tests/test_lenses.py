@@ -27,6 +27,15 @@ class LensFilesTest(unittest.TestCase):
                 self.assertIn("diff {BASE}...HEAD", p.read_text())
                 self.assertIsNone(re.search(r"\{BASE\}\.\.HEAD", p.read_text()))
 
+    def test_lens_diff_commands_quote_the_worktree_path(self):
+        # Copilot on PR #45: an unquoted {WORKTREE} splits a checkout path with spaces, so the lens
+        # could not inspect the diff it was asked to review
+        for p in LENSES:
+            with self.subTest(lens=p.name):
+                text = p.read_text()
+                self.assertIn('git -C "{WORKTREE}" diff', text)
+                self.assertIsNone(re.search(r"git -C \{WORKTREE\}", text))
+
     def test_readme_lists_every_lens(self):
         readme = (ROOT / "lenses" / "README.md").read_text()
         for p in LENSES:

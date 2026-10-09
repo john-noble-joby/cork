@@ -304,10 +304,11 @@ BASE_SHA=$(cat "$SWEEP_DIR/base-sha")   # pinned in Phase 2; never rely on a var
 [ -s "$SWEEP_DIR/story.txt" ] && [ -s "$SWEEP" ] && [ -n "$BASE_SHA" ] || { echo "missing story.txt, sweep or pinned base in $SWEEP_DIR"; exit 1; }
 # one cat (fails on a missing file); stdin supplies a blank line so a story.txt without a trailing
 # newline cannot fuse its last line onto the "## Pre-review sweep" heading
-printf '\n' | cat "$SWEEP_DIR/story.txt" - "$SWEEP" > "$SWEEP_DIR/story.md"
+printf '\n' | cat "$SWEEP_DIR/story.txt" - "$SWEEP" > "$SWEEP_DIR/story.md" || { echo "cannot build $SWEEP_DIR/story.md"; exit 1; }
 # Context list from the surface inventory, persisted (one path per line) so Phases 6 and 6.5
 # rebuild the same arguments — shell arrays do not survive to those tool calls either.
-printf '%s\n' path/to/caller.py path/to/di.cs tests/path/covering_test.py docs/guide.md > "$SWEEP_DIR/context.txt"
+printf '%s\n' path/to/caller.py path/to/di.cs tests/path/covering_test.py docs/guide.md > "$SWEEP_DIR/context.txt" || { echo "cannot write $SWEEP_DIR/context.txt"; exit 1; }
+[ -f "$SWEEP_DIR/context.txt" ] || { echo "no persisted context list at $SWEEP_DIR/context.txt — a failed redirection would NOT stop this shell, and the lanes would silently get no context"; exit 1; }
 CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done < "$SWEEP_DIR/context.txt"   # bash 3.2-safe; an empty file means no context
 # The roster for this devit run, probed once here and persisted: Phases 6 and 6.5 read it back.
 python3 "$CORK_HOME/orchestrate.py" preflight > "$SWEEP_DIR/preflight.txt" || { cat "$SWEEP_DIR/preflight.txt"; echo "preflight failed — fix auth/config"; exit 1; }
@@ -432,7 +433,8 @@ SWEEP_DIR="$( d="${XDG_CACHE_HOME:-}"; case "$d" in /*) printf %s "$d";; *) prin
 cd "$(cat "$SWEEP_DIR/worktree")" || { echo "no persisted worktree in $SWEEP_DIR (Phase 2)"; exit 1; }   # fresh shell: re-enter the feature worktree
 BASE_SHA=$(cat "$SWEEP_DIR/base-sha"); LAST=$(cat "$SWEEP_DIR/cork-head")   # cork-head: written after the last cork pass
 [ -n "$BASE_SHA" ] && [ -n "$LAST" ] && [ -s "$SWEEP_DIR/story.txt" ] && [ -s "$SWEEP" ] || { echo "missing pinned base, cork-head, story or sweep in $SWEEP_DIR"; exit 1; }
-printf '\n' | cat "$SWEEP_DIR/story.txt" - "$SWEEP" > "$SWEEP_DIR/story.md"
+printf '\n' | cat "$SWEEP_DIR/story.txt" - "$SWEEP" > "$SWEEP_DIR/story.md" || { echo "cannot build $SWEEP_DIR/story.md"; exit 1; }
+[ -f "$SWEEP_DIR/context.txt" ] || { echo "no persisted context list at $SWEEP_DIR/context.txt — a failed redirection would NOT stop this shell, and the lanes would silently get no context"; exit 1; }
 CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done < "$SWEEP_DIR/context.txt"
 # per model (each line of "$SWEEP_DIR/models.txt", the roster Phase 4 persisted): python3 "$CORK_HOME/orchestrate.py" <TICKET> . --review-model <MODEL> --diff-range "$LAST..HEAD" --base-branch "$BASE_SHA" --story-file "$SWEEP_DIR/story.md" "${CONTEXT_ARGS[@]}" --skip-validation
 # afterwards, once the batch is committed: git rev-parse HEAD > "$SWEEP_DIR/cork-head"
@@ -458,8 +460,9 @@ SWEEP_DIR="$( d="${XDG_CACHE_HOME:-}"; case "$d" in /*) printf %s "$d";; *) prin
 cd "$(cat "$SWEEP_DIR/worktree")" || { echo "no persisted worktree in $SWEEP_DIR (Phase 2)"; exit 1; }   # fresh shell: re-enter the feature worktree
 BASE_SHA=$(cat "$SWEEP_DIR/base-sha"); [ -n "$BASE_SHA" ] || { echo "no pinned base in $SWEEP_DIR"; exit 1; }
 [ -s "$SWEEP_DIR/story.txt" ] && [ -s "$SWEEP" ] || { echo "missing story.txt or sweep in $SWEEP_DIR"; exit 1; }   # same guard as Phase 4
-printf '\n' | cat "$SWEEP_DIR/story.txt" - "$SWEEP" > "$SWEEP_DIR/story.md"              # story + current sweep, as in Phase 4
+printf '\n' | cat "$SWEEP_DIR/story.txt" - "$SWEEP" > "$SWEEP_DIR/story.md" || { echo "cannot build $SWEEP_DIR/story.md"; exit 1; }              # story + current sweep, as in Phase 4
 python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "$BASE_SHA" > "$SWEEP_DIR/standards.md" || { echo "standards show failed — no rubric, refusing to dispatch"; exit 1; }   # for the lenses, from the pinned base
+[ -f "$SWEEP_DIR/context.txt" ] || { echo "no persisted context list at $SWEEP_DIR/context.txt — a failed redirection would NOT stop this shell, and the lanes would silently get no context"; exit 1; }
 CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done < "$SWEEP_DIR/context.txt"   # bash 3.2-safe; an empty file means no context
 # then, per model (each line of "$SWEEP_DIR/models.txt"): python3 "$CORK_HOME/orchestrate.py" <TICKET> . --review-model <MODEL> --base-branch "$BASE_SHA" --story-file "$SWEEP_DIR/story.md" "${CONTEXT_ARGS[@]}" --skip-validation
 ```
