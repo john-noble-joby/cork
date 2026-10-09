@@ -122,8 +122,9 @@ class ReviewStoryTest(unittest.TestCase):
         self.assertTrue(seen["preflight"])
 
     def test_headless_fresh_run_without_contract_warns_before_preflight(self):
-        # Copilot on PR #33: a fresh run has no contract and the fallback must be reported, so
-        # the implementer summary — so the warning must fire before preflight or never.
+        # Copilot on PR #33: a fresh run has no contract, so the reviewers get the generic fallback
+        # story rather than the implementer's summary. That has to be reported before preflight
+        # exits the process, or the warning is never seen.
         orchestrate.CONFIG_PATH.write_text(json.dumps(orchestrate.DEFAULT_CONFIG))
         orchestrate._state_path = lambda tid: Path(self.tmp.name) / "no-checkpoint.json"
         self.addCleanup(setattr, orchestrate, "_state_path", self._originals["_state_path"])
