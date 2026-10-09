@@ -2292,10 +2292,15 @@ def review(provider: str, model: str, instructions: str, story: str,
         # miss by the joins/headings the 500 slack estimates — binary-search the largest
         # byte budget that fits (≈17 rebuilds) rather than shrinking proportionally, which
         # can spin thousands of times near the boundary.
+        # The byte cap is a second limit, not a replacement: a byte-sized pack may swap a
+        # multibyte file out for an ASCII one that is larger in characters, so the repacked
+        # prompt is also held to the character length the configured budget produced.
+        char_ceiling = len(user_msg)
+
         def fits(msg: str) -> bool:
             element = msg if spec["system_flag"] else system + _STANDARDS_SEPARATOR + msg
-            return _utf8_len(element) < _MAX_ARG_BYTES
-        if not fits(user_msg):
+            return _utf8_len(element) < _MAX_ARG_BYTES and len(msg) <= char_ceiling
+        if _utf8_len(user_msg if spec["system_flag"] else system + _STANDARDS_SEPARATOR + user_msg) >= _MAX_ARG_BYTES:
             lo, hi = 0, _MAX_ARG_BYTES  # build(lo) has no files; build(hi) cannot fit with its headings
             while hi - lo > 1:
                 mid = (lo + hi) // 2

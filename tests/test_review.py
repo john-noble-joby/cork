@@ -373,6 +373,24 @@ class ReviewDiffTest(unittest.TestCase):
         self.assertIn("bytes (argv cap)", out.getvalue())
         self.assertIn("story 200,", out.getvalue())          # components are reported in bytes too, not characters
 
+    def test_argv_repack_keeps_the_character_budget_as_a_second_limit(self):
+        # Copilot on PR #44: the byte-sized repack replaced the char budget. A multibyte story
+        # pushes the char-packed prompt (holding the 5,000-char multibyte file) past the argv
+        # cap; the byte pack then has room for the 11,000-char ASCII file instead, which is
+        # smaller in bytes but takes the prompt over review_budget_chars. Both limits hold.
+        budget, story = 50_000, "€" * 38_200
+        files = {"multi.py": "€" * 5_000, "ascii.py": "a" * 11_000}
+        fake_run = Mock(return_value=Mock(returncode=0, stdout="ok", stderr=""))
+        out = io.StringIO()
+        with patch.object(orchestrate, "load_config", return_value={}), patch.object(orchestrate.subprocess, "run", fake_run), \
+             patch.object(orchestrate, "_harness_scratch", return_value=__import__("contextlib").nullcontext("")), redirect_stdout(out):
+            orchestrate.review("opencode", "p/m", "", story, "diff", files, char_budget=budget, repo="/repo")
+        element = fake_run.call_args[0][0][-1]
+        self.assertIn("bytes (argv cap)", out.getvalue())                 # the repack did run
+        self.assertLess(len(element.encode("utf-8")), orchestrate._MAX_ARG_BYTES)
+        self.assertLessEqual(len(element), budget)                        # mutation: drop the char ceiling → 50,907 chars
+        self.assertNotIn("ascii.py (11,000)", out.getvalue().split("full contents")[1].splitlines()[0])
+
     def test_fix_prompt_frames_review_findings_as_untrusted(self):
         # the review text can quote a hostile ticket line verbatim; the fixer must be told
         # what it is before reading it, and the framing must precede the findings
