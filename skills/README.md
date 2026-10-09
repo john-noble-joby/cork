@@ -39,7 +39,7 @@ Session-driven multi-model review pipeline. The active Claude session implements
 applies fixes; `orchestrate.py --review-model MODEL` is called once per model
 (rotation: gpt-5.5, gpt-4.1, claude-sonnet-4.5, claude-opus-4.7) to fetch blind review
 findings between fix passes. Each review call is stateless — the prompt carries the story
-(the acceptance contract from `--story-file`/`--story`, else the checkpoint summary, else the
+(the acceptance contract from `--story-file`/`--story`, else devit's persisted story for the ticket, else the
 built-in "Review the branch changes for <ticket>." fallback), the diff,
 changed files and the repo's standards file, never prior review text; API and prompt-only lanes
 (`codex`, `pi`) see nothing else, while tree-capable harnesses (`claude`, `opencode`) can also
@@ -63,10 +63,12 @@ back to inline if the `superpowers` plugin isn't installed), sweeps the long-tai
 classes before any reviewer runs (Phase 3.5: surface inventory, input-domain table, contract
 probes, upstream-drift check, platform matrix, and a docs & wording sweep from
 `references/docs-sweep.md` — one agent by default, up to two split by audience over a shared
-claim inventory the session reconciles — each pasted into the PR body), runs cork review+fix, opens a
-PR (`<TICKET>:` title + "In plain terms" body + the sweep artifacts), runs the
-`copilot-review-loop` with a ~4-pass budget, and surfaces all pushbacks. Orchestrates the
-other skills; does not auto-merge.
+claim inventory the session reconciles — each pasted into the PR body), runs the lens gate
+(`$CORK_HOME/lenses/`, Phase 3.75), runs cork review+fix with `--story-file` and `--context-file`
+for the blast radius, opens a PR (`<TICKET>:` title + "In plain terms" body + the sweep
+artifacts), runs the `copilot-review-loop` with a ~4-pass budget, re-reviews the final diff
+with cork (Phase 6.5), and surfaces all pushbacks. Orchestrates the other skills; does not
+auto-merge.
 
 ### cork-setup
 Guided, interactive first-time setup. Say "set up cork" and it walks through the Copilot

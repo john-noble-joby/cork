@@ -1,6 +1,6 @@
 ---
 name: copilot-review-loop
-description: "Use when the user says to run the Copilot review loop on a branch or PR — iterative Copilot code review with automated comment resolution, re-requesting after each clean pass, stopping when Copilot has no comments or after a maximum number of passes."
+description: "Use when the user says to run the Copilot review loop on a branch or PR — iterative Copilot code review with automated comment resolution, re-requesting after each processed pass, stopping when Copilot approves with no inline or body-level findings, or after `max` non-approving passes (a budget stop)."
 ---
 
 # Copilot Review Loop
@@ -9,7 +9,7 @@ description: "Use when the user says to run the Copilot review loop on a branch 
 
 ## Overview
 
-Runs an iterative Copilot PR review cycle: request review → wait → process every comment (fix or push back) → re-request → repeat up to N times. Stops early if Copilot submits a pass with no comments.
+Runs an iterative Copilot PR review cycle: request review → wait → process every finding (fix or push back) → re-request → repeat up to N times. Stops early when Copilot approves with no inline or body-level findings; reaching N without an approval is a budget stop, reported as such.
 
 ## When invoked, do this immediately
 
@@ -98,6 +98,7 @@ one call. Two things gate a clean pass, and `totalCount == 0` alone is **not** o
   comments AND zero previously-missed findings.**
 
 ```bash
+CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"   # every block runs in a fresh shell
 gh api graphql -f query='
 { repository(owner: "{owner}", name: "{repo}") {
     pullRequest(number: {pr}) {
@@ -127,9 +128,10 @@ Route on `state tc verdict suppressed missed`:
   - if `tc > 0` → **2b** (settle the thread index) → step 3 → step 4 (inline threads);
   - if `suppressed > 0` or `missed > 0` → **2c** (body findings);
   - do **both** when both are non-zero, then continue to step 5/6.
-- `verdict=none` with every count at zero (a bare `Needs a closer look`) is not clean: there is
-  nothing to fix, so treat it like a processed pass — re-request if `iteration < max`, else stop
-  and tell the user the pass carried no findings but no approval either.
+- `verdict=none` with every count at zero (a bare `Needs a closer look`) is not clean and is a
+  **non-approving pass**: it consumes an iteration exactly like a pass with findings. There is
+  nothing to fix, so go straight to step 6 — re-request and increment if `iteration < max`,
+  else stop and tell the user the pass carried no findings but no approval either.
 
 Never treat inline and body-level findings as either/or — "all processed" in step 6 means inline
 threads **and** body findings (suppressed and previously missed) from this pass are all handled.
@@ -247,7 +249,7 @@ for t in unresolved:
 
 Read the preference once at loop start:
 
-Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it prints `true` (the default), pause as below; if `false`, behave autonomously.
+Run `CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"; python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it prints `true` (the default), pause as below; if `false`, behave autonomously.
 
 - **`true` (default):** after fetching this pass's unresolved comments (step 3), apply
   NOTHING yet. (1) **Pre-pass:** form your recommendation per comment (fix / push back +
@@ -262,7 +264,11 @@ Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it p
 
 Read the comment body and the file + line it references.
 
-**Fix** — if correct: implement the change in the worktree, run tests, commit, push. Then:
+**Fix** — if correct: implement the change in the worktree, run tests, commit, push. The commit
+message names the **defect class** the finding belongs to and why the fix closes the class, and
+records the **mutation check** for each new conditional (guard reverted or inverted → filtered
+test fails → restored). If this is the second fix to the same area in this PR, stop and propose
+a design change instead of a third patch. Then:
 
 ```bash
 # Reply — the endpoint is PR-scoped; the {pr} number is REQUIRED in the path.
@@ -287,15 +293,17 @@ Push any commits, then evaluate stop conditions.
 | Condition | Action |
 |---|---|
 | `verdict=approve` AND `tc=0` AND `suppressed=0` AND `missed=0` this pass | **STOP** — satisfied, clean pass |
-| Comments (inline + body-level) all processed/resolved, `iteration == max` | **STOP** |
-| Comments (inline + body-level) all processed/resolved, `iteration < max` | Re-request, increment, reschedule |
+| Non-approving pass (findings all processed/resolved, or a bare `verdict=none`), `iteration == max` | **STOP — budget stop**: `max` exhausted without approval; the summary names the cause — *findings still arriving* or *persistent non-approving verdict with nothing to fix* |
+| Non-approving pass (findings all processed/resolved, or a bare `verdict=none`), `iteration < max` | Re-request, increment, reschedule |
 
 Judge "clean pass" from step 2's **verdict + `tc` + `suppressed` + `missed`** together — **never**
 from an empty `reviewThreads` fetch (the index lags a fresh `COMMENTED`), **never** from `tc == 0`
 alone (Lite-mode reviews suppress findings into the body with `tc=0` but a `block` verdict), and
 **never** from a `Needs a closer look` verdict (it is not an approval).
 
-Print final summary on stop: iterations run, commits made, PR URL.
+Print final summary on stop: iterations run, commits made, PR URL, and whether the stop was a
+**clean pass** or a **budget stop** — and for a budget stop, its cause: which findings were still
+arriving on the last pass, or that the last pass was a bare non-approving verdict with nothing to fix.
 
 ### 7. Re-request and continue
 
@@ -329,7 +337,21 @@ Update loop prompt with `iteration={N+1}` and reschedule.
 - **Run tests** after every fix commit before pushing. Don't push broken builds.
 - **Worktree:** all edits go in the PR's worktree, not the main checkout.
 - **Re-request works** once Copilot has completed a review — same POST endpoint.
-- **Default max:** 3 passes unless the user specifies otherwise.
+- **Default max:** 3 passes unless the user specifies otherwise. `max` caps **non-approving**
+  passes — ones with findings, or a bare `Needs a closer look` — and every such pass consumes an
+  iteration; a clean pass always ends the loop early, and exhausting `max` without an approval
+  is a **budget stop** (step 6), reported as such in the final summary — never as "done" — with
+  its cause: findings still arriving, or a persistent non-approving verdict with nothing left to
+  fix. devit passes `max=4` and treats a findings-driven budget stop as a missed defect class to
+  sweep in one commit; a verdict-only budget stop is handed to the user as is.
+- **Auto-review on push does not replace the request.** Repos with Copilot auto-review still
+  post a review per push, but a new pass is only guaranteed by an explicit request after each
+  push; verify the assignment each tick (Step 2's GraphQL check), since a request can also lapse
+  silently with no review posted.
+- **The overview is a per-review snapshot.** Copilot's "Open (N)" list belongs to the review it
+  was written in and does not change when you resolve the threads; it reads clean only in the
+  next review. Judge state from `review-classify`'s line and the unresolved-thread count, not
+  from the overview of an older review.
 - **Copilot's login is `copilot-pull-request-reviewer[bot]`** (display login `Copilot`, type `Bot`). Request it with that exact login, and match submitted reviews / threads with `.startswith('copilot-pull-request-reviewer')` so the `[bot]` suffix (or any future change to it) doesn't break detection. **Do not request with the display name `Copilot`** — it returns `200 OK` but silently assigns nobody (confirmed on joby/edge-fmt, 2026-05); only the `[bot]` login returns `201 Created` and actually assigns. Always verify the assignment stuck (Step 2, via GraphQL — REST `requested_reviewers` never lists bots) rather than trusting the POST not to error.
 - **Reply endpoint is PR-scoped:** use `repos/{owner}/{repo}/pulls/{pr}/comments/{comment_id}/replies` — the `{pr}` number is required. The shorter `repos/{repo}/pulls/comments/{id}/replies` form returns `404 Not Found` (confirmed on joby/edge-fmt, 2026-05).
 - **Reply-POST parsing:** the replies response can carry extra data or omit keys like `in_reply_to_id` — parse it defensively (`.get(...)`), and treat the `resolveReviewThread` GraphQL mutation as the reliable success signal, not the reply parse.

@@ -164,6 +164,17 @@ the **effective standards** — cork's universal default plus the repo's own
 `code-review/AGENTS.md` (or root `AGENTS.md` / `.github/AGENTS.md`) if present — unless
 opted out (see below).
 
+### Lenses (narrow-concern self-review)
+
+`lenses/` holds four reviewer prompts that each look at a diff through one concern — state &
+concurrency, HTTP contract & store, spec & test coverage, standards & docs. devit dispatches
+them as parallel read-only subagents before the model rotation (Phase 3.75, a gate) and the
+cork skill uses them for its self-review; a repo adds its own under `code-review/lenses/`,
+read from the trusted base ref, never the checkout. The shipped lenses are read from
+`$CORK_HOME` directly — nothing to install — except when the repository under review is cork
+itself: then they are branch material like `standards/AGENTS.md` and the skills read them from
+the pinned base (`git -C "$CORK_HOME" show <base>:lenses/<name>.md`). See `lenses/README.md`.
+
 ### Coding & review standards (layering)
 
 cork's fuller **coding & review rubric** lives at `skills/coding-standards/` and is

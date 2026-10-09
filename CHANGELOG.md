@@ -44,8 +44,23 @@ procedure in the README's *Versioning* section.
   warns loudly on the fallback story, on a local base that is behind, ahead of or diverged from
   `origin/<base>` (review-only and headless), and on a diff over the 1,500-line soft limit.
   Closes the context items of #32 (hangar #36, FAST #540).
-- Refs #32 — the skills and lenses half of that issue is a separate PR; the remaining item, probing
-  harness model availability in preflight, is tracked in #34.
+- **Lenses.** `lenses/` ships four narrow-concern reviewer prompts (state & concurrency; HTTP
+  contract & store; spec & test coverage; standards & docs) run as parallel read-only subagents.
+  devit gains *Phase 3.75 — Lens gate* before the model rotation and *Phase 6.5 — Final cork
+  re-review* after the Copilot loop (plus a cork re-run during the loop when fixes exceed ~100
+  lines or touch files cork never saw); fix steps everywhere record the defect class and the
+  mutation check in the commit message and stop at a second fix of the same area to propose a
+  design change. The cork skill passes `--story-file` and `--context-file` on every call and
+  reports the rotation that actually completed; the Copilot loop skill defines `max` as a cap
+  on non-approving passes (findings, or a bare "needs a closer look"), distinguishes a budget
+  stop caused by findings still arriving from one caused by a persistent non-approving verdict,
+  notes that auto-review on push still needs a request, and
+  that the overview is a per-review snapshot. Standards gain an *Evidence discipline* section
+  (independent Boolean clauses, one failure per fixture, failed state before absence
+  assertions, both credential modes and malformed successful responses, contracts traced
+  through unchanged consumers, inspected vs executed, size is not a finding, advice is a
+  claim). Refs #32 — the remaining item, probing harness model availability in preflight, is
+  tracked in #34.
 - **Reviewers grade against the ticket in every mode.** `--story-file`/`--story` now apply to
   headless runs too: the blind reviewers and the isolated self-review receive the story, while
   the implementer's summary stays the fix prompts' context. Without a flag cork looks for the
