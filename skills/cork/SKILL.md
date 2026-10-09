@@ -74,21 +74,12 @@ Confirm with the user before running (lead with the captured `{VERSION}` and the
 
 ## Full mode — implement → fix → PR
 
-### Step 1 — Implement (only if not already done)
+### Step 1 — Lock the worktree, pin the base, then implement
 
-If the branch has no commits vs develop, implement the story now (in-session), then commit. If implementation is already committed, skip to Step 2.
-
-### Step 2 — Self-review
-
-```bash
-[ -n "$(git diff {BASE}...HEAD)" ] || { echo "empty diff vs {BASE} — nothing was implemented"; exit 1; }
-```
-
-After the implementation commit, stop here if the diff is still empty; do not fan out
-reviewers for a branch that implemented nothing.
-
-**Persist the reviewer inputs first** — every lens and every model pass reads the same two
-files, written once, outside the repository:
+Before any write-capable work — including the implementation itself — take this worktree's run
+lock and pin the trusted base. Implementation is a tool-capable step: it (or a concurrent fetch)
+could move `{BASE}` after Step 0 validated it, and a second full-mode session in the same
+worktree would race the implementation commit. Both are closed here, not in Step 2.
 
 ```bash
 # Shell variables do not survive between tool calls: everything later blocks need is a FILE under a
@@ -99,18 +90,45 @@ files, written once, outside the repository:
 cd {WORKTREE} || exit 1                          # every git/pointer/standards command below is about THIS checkout
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"       # Step 0's assignment did not survive to this block
 RUN_PTR="$(git rev-parse --git-dir)/cork-run"
-# One full-mode run per worktree at a time: full mode commits fixes to this checkout's branch, so a
-# second concurrent run here would race the commits as well as this pointer. Refuse instead.
+# One full-mode run per worktree at a time, held from before implementation until Step 6 clears it:
+# full mode commits to this checkout's branch, so a second run here would race those commits.
 [ -e "$RUN_PTR" ] && { echo "a cork run is already in progress in this worktree ($(cat "$RUN_PTR")) — finish it (Step 6 clears the pointer) or remove $RUN_PTR"; exit 1; }
 CACHE_HOME="${XDG_CACHE_HOME:-}"; case "$CACHE_HOME" in /*) ;; *) CACHE_HOME="$HOME/.cache";; esac   # XDG: empty or relative = default, never a path inside this worktree
 RUN_ROOT="$CACHE_HOME/cork/run"; mkdir -p "$RUN_ROOT" && chmod 700 "$RUN_ROOT"   # mktemp does not create parents; -m would not fix an existing dir
 RUN_DIR=$(mktemp -d "$RUN_ROOT/$(git rev-parse --abbrev-ref HEAD | tr '/' '-').XXXXXX")
-printf '%s\n' "$RUN_DIR" > "$RUN_PTR"            # outside the worktree
-# Pin the trusted base to a commit id now: fix steps are tool-capable and could move {BASE}; the
-# standards, the lenses and every review diff use this id, and {BASE} survives only as the PR target.
+printf '%s\n' "$RUN_DIR" > "$RUN_PTR"            # outside the worktree; this IS the lock
+# Pin the trusted base to a commit id before anything can move {BASE}: the standards, the lenses
+# and every review diff use this id, and {BASE} survives only as the PR target.
 BASE_SHA=$(git rev-parse --verify "{BASE}^{commit}"); printf '%s\n' "$BASE_SHA" > "$RUN_DIR/base-sha"
 grep -E '^[a-z]+/' "$(git rev-parse --git-dir)/cork-preflight" > "$RUN_DIR/models.txt"   # the rotation Step 0 selected, one provider/model per line
 [ -s "$RUN_DIR/models.txt" ] || { echo "no models from preflight — re-run Step 0"; exit 1; }
+printf 'RUN_DIR=%s  BASE_SHA=%s\n' "$RUN_DIR" "$BASE_SHA"
+```
+
+Then, if the branch has no commits vs `$BASE_SHA`, implement the story now (in-session) and
+commit. If implementation is already committed, go straight on to Step 2. The lock stays held
+either way.
+
+### Step 2 — Self-review
+
+```bash
+cd {WORKTREE} || exit 1
+RUN_PTR="$(git rev-parse --git-dir)/cork-run"; [ -s "$RUN_PTR" ] || { echo "no cork run in this worktree — run Step 1 first"; exit 1; }
+RUN_DIR=$(cat "$RUN_PTR"); BASE_SHA=$(cat "$RUN_DIR/base-sha")
+[ -n "$(git diff "$BASE_SHA"...HEAD)" ] || { echo "empty diff vs $BASE_SHA — nothing was implemented"; exit 1; }
+```
+
+After the implementation commit, stop here if the diff is still empty; do not fan out
+reviewers for a branch that implemented nothing.
+
+**Persist the reviewer inputs** — every lens and every model pass reads the same two files,
+written once, outside the repository, under the run directory Step 1 locked:
+
+```bash
+cd {WORKTREE} || exit 1
+CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
+RUN_PTR="$(git rev-parse --git-dir)/cork-run"; [ -s "$RUN_PTR" ] || { echo "no cork run in this worktree — run Step 1 first"; exit 1; }
+RUN_DIR=$(cat "$RUN_PTR"); BASE_SHA=$(cat "$RUN_DIR/base-sha")
 STORY_FILE="$RUN_DIR/story.md"; printf 'story file: %s\n' "$STORY_FILE"   # Write the ticket (Linear MCP) or the user's stated contract to this literal path next
 STANDARDS_FILE="$RUN_DIR/standards.md"
 python3 "$CORK_HOME/orchestrate.py" standards show . --base-ref "$BASE_SHA" > "$STANDARDS_FILE"
@@ -127,8 +145,8 @@ copy this preamble verbatim rather than trusting a variable from an earlier call
 ```bash
 cd {WORKTREE} || exit 1
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-RUN_PTR="$(git rev-parse --git-dir)/cork-run"; [ -s "$RUN_PTR" ] || { echo "no cork run in this worktree — run Step 2 first"; exit 1; }
-RUN_DIR=$(cat "$RUN_PTR")   # the run Step 2 started in this worktree
+RUN_PTR="$(git rev-parse --git-dir)/cork-run"; [ -s "$RUN_PTR" ] || { echo "no cork run in this worktree — run Step 1 first"; exit 1; }
+RUN_DIR=$(cat "$RUN_PTR")   # the run Step 1 locked in this worktree
 STORY_FILE="$RUN_DIR/story.md"; STANDARDS_FILE="$RUN_DIR/standards.md"; BASE_SHA=$(cat "$RUN_DIR/base-sha")
 [ -s "$STORY_FILE" ] || { echo "no story at $STORY_FILE — write it first"; exit 1; }
 CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done < "$RUN_DIR/context.txt"   # bash 3.2-safe; an empty file means no context
@@ -180,8 +198,8 @@ Run `python3 "$CORK_HOME/orchestrate.py" config get interactive_review`. If it p
 ```bash
 cd {WORKTREE} || exit 1
 CORK_HOME="${CORK_HOME:-$HOME/dev/cork}"
-RUN_PTR="$(git rev-parse --git-dir)/cork-run"; [ -s "$RUN_PTR" ] || { echo "no cork run in this worktree — run Step 2 first"; exit 1; }
-RUN_DIR=$(cat "$RUN_PTR")   # Step 2 preamble: the persisted per-run path
+RUN_PTR="$(git rev-parse --git-dir)/cork-run"; [ -s "$RUN_PTR" ] || { echo "no cork run in this worktree — run Step 1 first"; exit 1; }
+RUN_DIR=$(cat "$RUN_PTR")   # Step 1's lock: the persisted per-run path
 STORY_FILE="$RUN_DIR/story.md"; [ -s "$STORY_FILE" ] || { echo "no story at $STORY_FILE — write it first"; exit 1; }
 BASE_SHA=$(cat "$RUN_DIR/base-sha")                     # the pinned base, not the movable {BASE}
 CONTEXT_ARGS=(); while IFS= read -r f; do [ -n "$f" ] && CONTEXT_ARGS+=(--context-file "$f"); done < "$RUN_DIR/context.txt"   # bash 3.2-safe; an empty file means no context
@@ -228,7 +246,7 @@ Read the findings from stdout. For each: apply the fix in the worktree (run test
 
 Push the branch and open a PR with `gh`, summarizing what each pass caught. Then clear the run
 pointer so the next run in this worktree can start: `rm -f "$(git rev-parse --git-dir)/cork-run"`
-(the run directory itself stays for the record). If a run was abandoned, the same `rm` unblocks Step 2.
+(the run directory itself stays for the record). If a run was abandoned, the same `rm` unblocks Step 1.
 
 ## Review-only mode — parallel reviews → consolidated report
 

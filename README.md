@@ -237,7 +237,7 @@ python3 orchestrate.py <TICKET> <repo-path> --review-model <provider/model> \
 ```
 
 Story precedence is `--story-file` → `--story` → devit's persisted story for the ticket
-(`$XDG_CACHE_HOME/cork/devit/<TICKET>/story.md`, then `story.txt`; an empty or relative
+(`$XDG_CACHE_HOME/cork/devit/<TICKET>/story.md` or `story.txt`, whichever is newer (`story.md` on a tie); an empty or relative
 `XDG_CACHE_HOME` means `~/.cache`, and a candidate that resolves inside the repository under review
 is ignored) → the built-in fallback. The implementer's checkpoint summary is never the story:
 grading against the author's own description of the work has no spec axis, so reviewers get the

@@ -57,17 +57,23 @@ from typing import NoReturn
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-def _env_path(var: str, default: Path) -> Path:
-    # Path-valued settings read from the environment follow one rule: an empty value means the
-    # default (as the shell's ${VAR:-default} does) and so does a relative one (the XDG rule) —
-    # otherwise `Path("")` or `Path("cache")` is the current directory, which during a review is
-    # the worktree under review, and a branch could supply the story, the token store or the config.
+def _env_path(var: str, default: Path, xdg: bool = False) -> Path:
+    # Path-valued settings read from the environment: an empty value means the default (as the
+    # shell's ${VAR:-default} does) — `Path("")` would be the current directory, which during a
+    # review is the worktree under review. For XDG variables a relative value is ignored too (the
+    # XDG rule: relative = invalid). For cork's own explicit overrides (CORK_CONFIG_FILE,
+    # CORK_AUTH_FILE) a relative path keeps meaning what it always did — relative to the caller's
+    # cwd at startup — so a configured seat is never silently swapped for the default one.
     raw = os.environ.get(var, "")
     try:
         p = Path(raw).expanduser() if raw else None   # RuntimeError for an unknown ~user: treat as unset
     except RuntimeError:
         return default
-    return p if p is not None and p.is_absolute() else default
+    if p is None:
+        return default
+    if p.is_absolute():
+        return p
+    return default if xdg else (Path.cwd() / p).resolve()
 
 
 CLAUDE         = os.environ.get("CLAUDE_BIN") or str(Path.home() / ".local/bin/claude")   # a bare command name is fine; empty is not
@@ -125,7 +131,7 @@ def _auth_json(result: subprocess.CompletedProcess) -> dict:
 
 # opencode caches models.dev here: {provider_id: {"name": <display name>, "env": [..], ...}}.
 # It is the authoritative map from what `auth list` prints back to provider ids.
-_OPENCODE_MODELS_CACHE = _env_path("XDG_CACHE_HOME", Path.home() / ".cache") / "opencode" / "models.json"
+_OPENCODE_MODELS_CACHE = _env_path("XDG_CACHE_HOME", Path.home() / ".cache", xdg=True) / "opencode" / "models.json"
 
 
 def _opencode_provider_index() -> tuple[dict[str, str], dict[str, str]]:
@@ -2728,7 +2734,7 @@ def _devit_scratch_dir(tid: str) -> Path:
     # repository, so nothing on the branch under review can author it.
     # Empty or relative XDG_CACHE_HOME means the default (_env_path): Path("") or Path("cache") is
     # the current directory — the reviewed worktree — and a branch must never supply the story.
-    return _env_path("XDG_CACHE_HOME", Path.home() / ".cache") / "cork" / "devit" / tid
+    return _env_path("XDG_CACHE_HOME", Path.home() / ".cache", xdg=True) / "cork" / "devit" / tid
 
 
 def _devit_scratch_story(tid: str, repo: str | None = None) -> tuple[str, str] | None:

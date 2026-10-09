@@ -174,6 +174,20 @@ class ReviewStoryTest(unittest.TestCase):
         self._scratch("story.md", " \n"); self._scratch("story.txt", " \n")
         self.assertIsNone(orchestrate._devit_scratch_story("TASK-1"))      # blank files are not a story
 
+    def test_env_path_rules_differ_for_xdg_and_explicit_cork_overrides(self):
+        d = Path("/default/x")
+        os.environ["CORK_TEST_PATH"] = ""
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d), d)                       # empty = default
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d, xdg=True), d)
+        os.environ["CORK_TEST_PATH"] = "rel/auth.json"
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d, xdg=True), d)             # XDG: relative is invalid
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d), (Path.cwd() / "rel/auth.json").resolve())   # cork override: as before
+        os.environ["CORK_TEST_PATH"] = "/abs/auth.json"
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d), Path("/abs/auth.json"))
+        os.environ["CORK_TEST_PATH"] = "~no-such-user-cork/x"
+        self.assertEqual(orchestrate._env_path("CORK_TEST_PATH", d), d)                       # bad ~user: default, no traceback
+        os.environ.pop("CORK_TEST_PATH")
+
     def test_empty_xdg_cache_home_means_the_default_not_the_cwd(self):
         # Path("") is the current directory — the reviewed worktree — so a branch could supply the story
         os.environ["XDG_CACHE_HOME"] = ""
