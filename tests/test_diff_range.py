@@ -349,6 +349,10 @@ class ReviewDiffSourceTest(unittest.TestCase):
         _, out = self._review(diff_range=f"{self.c3}..HEAD")
         self.assertIn("not readable in the tree — deleted, submodule, renamed-from (1): b.py", out)
 
+    def test_required_context_with_nul_bytes_is_refused_not_silently_skipped(self):
+        (self.repo / "blob.bin").write_bytes(b"ctx\x00more")
+        self._fails("contains NUL bytes", context_files=["blob.bin"])
+
     def test_changed_file_contents_keep_lone_carriage_returns_and_count_lf_only(self):
         (self.repo / "cr.py").write_bytes(b"a\rb\rc\n" + b"\n" * 2)   # one LF-line of content plus two blank lines
         files, large, _ = orchestrate._read_changed(str(self.repo), ["cr.py"])

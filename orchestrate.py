@@ -1527,9 +1527,12 @@ def _required_contents(cwd: str, paths: list[str]) -> dict[str, str]:
             resolved = path.resolve()
             if not resolved.is_relative_to(root) or any(part.lower() == ".git" for part in resolved.relative_to(root).parts):
                 fail(f"--context-file {rel!r} resolves outside the repository or into git metadata")
-            out[resolved.relative_to(root).as_posix()] = resolved.read_text(errors="replace")
+            text = resolved.read_text(errors="replace")
         except OSError as e:
             fail(f"--context-file {rel!r} cannot be read: {e}")
+        if "\x00" in text:   # a binary file is not context; on an argv lane the NUL would also turn into a silent skip
+            fail(f"--context-file {rel!r} contains NUL bytes — required context must be text")
+        out[resolved.relative_to(root).as_posix()] = text
     return out
 
 
